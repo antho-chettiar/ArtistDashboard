@@ -35,7 +35,7 @@ const CITIES = [
 ]
 
 // Predict revenue for an artist at a city based on historical concert data
-function predictRevenue(artist, city, artistConcerts = []) {
+function predictRevenue(artist, city, artistConcerts = [], venueCapacity = 0) {
   if (!artist || !city) return null
 
   let avgTicketsSold = 15000
@@ -49,9 +49,12 @@ function predictRevenue(artist, city, artistConcerts = []) {
     avgAtp = (totalAtp / artistConcerts.length) || (totalRev / totalTix) || 2000
   }
 
-  const adjustedCap = Math.floor(avgTicketsSold * 1.2 * city.multiplier)
-  const ticketsSold = Math.floor(avgTicketsSold * city.multiplier)
-  const sellThrough = adjustedCap > 0 ? Math.min(ticketsSold / adjustedCap, 0.99) : 0
+  const defaultCapacity = Math.floor(avgTicketsSold * 1.2 * city.multiplier)
+  const capacity = venueCapacity > 0 ? venueCapacity : defaultCapacity
+  const ticketsSold = capacity > 0
+    ? Math.min(capacity, Math.floor(avgTicketsSold * city.multiplier))
+    : Math.floor(avgTicketsSold * city.multiplier)
+  const sellThrough = capacity > 0 ? Math.min(ticketsSold / capacity, 0.99) : 0
 
   const atp = avgAtp * city.multiplier
   const ticketRevenue = ticketsSold * atp
@@ -62,7 +65,8 @@ function predictRevenue(artist, city, artistConcerts = []) {
   const popularityScore = Math.min(Math.round(city.demand * 0.6 + (ticketsSold / 50000) * 40), 99)
 
   return {
-    adjustedCap, ticketsSold, atp,
+    adjustedCap: capacity,
+    ticketsSold, atp,
     ticketRevenue, sponsorRevenue, totalRevenue,
     sellThrough: sellThrough * 100, roi, popularityScore,
     demandScore: city.demand,
@@ -143,30 +147,46 @@ function StatBox({ label, value, sub, color, delay = 0 }) {
 function ProfitabilityPredictor({ artists, concerts }) {
   const [selectedArtist, setArtist] = useState('')
   const [selectedCity, setCity] = useState('')
+  const [selectedVenue, setVenue] = useState('')
 
   const artist = artists.find(a => a.id === selectedArtist)
   const city = CITIES.find(c => c.name === selectedCity)
 
+  const venueOptions = selectedCity
+    ? Array.from(new Set(concerts
+      .filter(c => c.city === selectedCity && c.venue)
+      .map(c => c.venue))).sort()
+    : []
+
+  const selectedVenueData = selectedVenue
+    ? concerts.find(c => c.city === selectedCity && c.venue === selectedVenue)
+    : null
+
   const artistConcerts = concerts.filter(c => c.artistId === selectedArtist)
-  const fallbackPred = predictRevenue(artist, city, artistConcerts)
-  const modelPrediction = useAutoPredict(selectedArtist, selectedCity, fallbackPred?.adjustedCap, Boolean(selectedArtist && selectedCity), {
+  const fallbackPred = predictRevenue(artist, city, artistConcerts, selectedVenueData?.capacity)
+  const venueName = selectedVenue || (city ? `${city.name} Arena` : '')
+  const venueCapacityValue = selectedVenueData?.capacity || fallbackPred?.adjustedCap
+
+  const modelPrediction = useAutoPredict(selectedArtist, selectedCity, venueCapacityValue, Boolean(selectedArtist && selectedCity), {
     artistName: artist?.name,
     country: 'India',
     avgTicketPrice: fallbackPred?.atp,
     eventDate: predictionDate(),
+    venueName,
+    venueType: 'arena',
   })
   const pred = applyModelPrediction(fallbackPred, modelPrediction.data)
   const growth = useMadGrowth(selectedArtist, Boolean(selectedArtist))
   const demand = useMadDemand(selectedArtist, selectedCity, Boolean(selectedArtist && selectedCity), { country: 'India', targetDate: predictionDate() })
   const popularity = useMadPopularity(selectedArtist, Boolean(selectedArtist))
-  const llmPrediction = useMadLlmPrediction(selectedArtist, selectedCity, fallbackPred?.adjustedCap, Boolean(selectedArtist && selectedCity), {
+  const llmPrediction = useMadLlmPrediction(selectedArtist, selectedCity, venueCapacityValue, Boolean(selectedArtist && selectedCity), {
     artistName: artist?.name,
-    venueName: city ? `${city.name} Arena` : 'Arena',
+    venueName,
     venueType: 'arena',
   })
-  const venueCapacity = useMadVenueCapacity(city ? `${city.name} Arena` : '', selectedCity, Boolean(selectedCity), {
+  const venueCapacity = useMadVenueCapacity(venueName, selectedCity, Boolean(selectedCity), {
     venueType: 'arena',
-    suppliedCapacity: fallbackPred?.adjustedCap,
+    suppliedCapacity: venueCapacityValue,
   })
 
   // City comparison for selected artist
@@ -184,7 +204,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
         <h3 className="font-display font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
           Configure Prediction
         </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label className="text-xs font-semibold uppercase tracking-widest block mb-2"
               style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
@@ -212,7 +232,10 @@ function ProfitabilityPredictor({ artists, concerts }) {
             </label>
             <select
               value={selectedCity}
-              onChange={e => setCity(e.target.value)}
+              onChange={e => {
+                setCity(e.target.value)
+                setVenue('')
+              }}
               className="w-full rounded-xl px-4 py-3 text-sm outline-none transition-all duration-200"
               style={{
                 background: 'var(--bg-secondary)', border: '1px solid var(--border)',
@@ -222,6 +245,28 @@ function ProfitabilityPredictor({ artists, concerts }) {
               <option value="">Choose a city...</option>
               {CITIES.map(c => (
                 <option key={c.name} value={c.name}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-widest block mb-2"
+              style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
+              Select Venue
+            </label>
+            <select
+              value={selectedVenue}
+              onChange={e => setVenue(e.target.value)}
+              disabled={!selectedCity}
+              className="w-full rounded-xl px-4 py-3 text-sm outline-none transition-all duration-200"
+              style={{
+                background: selectedCity ? 'var(--bg-secondary)' : 'rgba(148,163,184,0.08)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-primary)', fontFamily: 'Satoshi'
+              }}
+            >
+              <option value="">{selectedCity ? 'Choose a venue...' : 'Select city first'}</option>
+              {venueOptions.map(venue => (
+                <option key={venue} value={venue}>{venue}</option>
               ))}
             </select>
           </div>
@@ -254,7 +299,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
               style={{ border: '2px solid var(--border-strong)' }} />
             <div>
               <p className="font-display font-bold" style={{ color: 'var(--text-primary)' }}>
-                {artist.name} <span style={{ color: 'var(--text-muted)' }}>in</span> {city.name}
+                {artist.name} <span style={{ color: 'var(--text-muted)' }}>in</span> {city.name}{selectedVenue ? ` · ${selectedVenue}` : ''}
               </p>
               <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 Predicted performance analysis
@@ -414,15 +459,25 @@ function ArtistComparison({ artists, concerts }) {
   const [artistA, setArtistA] = useState('')
   const [artistB, setArtistB] = useState('')
   const [selectedCity, setSelCity] = useState('All Cities')
+  const [selectedVenue, setSelVenue] = useState('All Venues')
+
+  const cityVenues = selectedCity === 'All Cities'
+    ? Array.from(new Set(concerts.map(c => c.venue).filter(Boolean))).sort()
+    : Array.from(new Set(concerts.filter(c => c.city === selectedCity && c.venue).map(c => c.venue))).sort()
+  const venueOptions = ['All Venues', ...cityVenues]
 
   const a = artists.find(x => x.id === artistA)
   const b = artists.find(x => x.id === artistB)
 
   const concertsA = concerts.filter(c =>
-    c.artistId === artistA && (selectedCity === 'All Cities' || c.city === selectedCity)
+    c.artistId === artistA &&
+    (selectedCity === 'All Cities' || c.city === selectedCity) &&
+    (selectedVenue === 'All Venues' || c.venue === selectedVenue)
   )
   const concertsB = concerts.filter(c =>
-    c.artistId === artistB && (selectedCity === 'All Cities' || c.city === selectedCity)
+    c.artistId === artistB &&
+    (selectedCity === 'All Cities' || c.city === selectedCity) &&
+    (selectedVenue === 'All Venues' || c.venue === selectedVenue)
   )
 
   const getStats = (artist, artistConcerts) => {
@@ -540,29 +595,47 @@ function ArtistComparison({ artists, concerts }) {
 
       {/* City filter */}
       <div className="glass-card p-4 mb-6 animate-fade-up" style={{ animationDelay: '80ms', animationFillMode: 'both', opacity: 0 }}>
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
           <div className="flex items-center gap-2">
             <MapPin size={14} style={{ color: 'var(--accent-gold)' }} />
             <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
-              Comparison by City
+              City & Venue Filters
             </span>
           </div>
-          <select
-            value={selectedCity}
-            onChange={e => setSelCity(e.target.value)}
-            className="flex-1 rounded-xl px-4 py-2.5 text-sm outline-none transition-all duration-200"
-            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-primary)', fontFamily: 'Satoshi', maxWidth: '260px' }}
-          >
-            {CONCERT_CITIES.map(city => (
-              <option key={city} value={city} style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
-                {city}
-              </option>
-            ))}
-          </select>
-          {selectedCity !== 'All Cities' && (
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-1">
+            <select
+              value={selectedCity}
+              onChange={e => {
+                setSelCity(e.target.value)
+                setSelVenue('All Venues')
+              }}
+              className="flex-1 rounded-xl px-4 py-2.5 text-sm outline-none transition-all duration-200"
+              style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-primary)', fontFamily: 'Satoshi', maxWidth: '260px' }}
+            >
+              {CONCERT_CITIES.map(city => (
+                <option key={city} value={city} style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
+                  {city}
+                </option>
+              ))}
+            </select>
+            <select
+              value={selectedVenue}
+              onChange={e => setSelVenue(e.target.value)}
+              className="flex-1 rounded-xl px-4 py-2.5 text-sm outline-none transition-all duration-200"
+              style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-primary)', fontFamily: 'Satoshi', maxWidth: '260px' }}
+              disabled={cityVenues.length === 0}
+            >
+              {venueOptions.map(venue => (
+                <option key={venue} value={venue} style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
+                  {venue}
+                </option>
+              ))}
+            </select>
+          </div>
+          {(selectedCity !== 'All Cities' || selectedVenue !== 'All Venues') && (
             <span className="text-xs px-2.5 py-1 rounded-full font-semibold"
               style={{ background: 'rgba(245,158,11,0.12)', color: 'var(--accent-gold)', border: '1px solid rgba(245,158,11,0.2)' }}>
-              Filtered: {selectedCity}
+              {selectedCity !== 'All Cities' ? `City: ${selectedCity}` : 'All Cities'}{selectedVenue !== 'All Venues' ? ` · Venue: ${selectedVenue}` : ''}
             </span>
           )}
         </div>
