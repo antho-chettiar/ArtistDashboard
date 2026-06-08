@@ -107,8 +107,11 @@ function SellThroughBar({ value, capacity }) {
   const status = getSellThroughStatus(value, capacity)
 
   return (
-    <div className="flex items-center gap-3 min-w-36">
-      <div className="h-2 w-20 rounded-full overflow-hidden flex-shrink-0" style={{ background: 'var(--bg-secondary)' }}>
+    <div className="flex flex-col gap-1 items-center">
+      <p className="text-xs font-bold leading-tight" style={{ color: status.color }}>
+        {capacity ? `${value.toFixed(1)}%` : 'N/A'}
+      </p>
+      <div className="h-2 w-20 rounded-full overflow-hidden" style={{ background: 'var(--bg-secondary)' }}>
         <div
           className="h-full rounded-full transition-all duration-500"
           style={{
@@ -116,14 +119,6 @@ function SellThroughBar({ value, capacity }) {
             backgroundColor: status.color,
           }}
         />
-      </div>
-      <div className="min-w-0">
-        <p className="text-xs font-bold leading-tight" style={{ color: status.color }}>
-          {capacity ? `${value.toFixed(1)}%` : 'N/A'}
-        </p>
-        <p className="text-xs leading-tight truncate" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
-          {status.label}
-        </p>
       </div>
     </div>
   )
@@ -529,10 +524,10 @@ function Concerts() {
 
           <div className="glass-card overflow-hidden animate-fade-up hidden lg:block">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[980px]">
+              <table className="w-full text-sm">
                 <thead style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
                   <tr>
-                    {['Artist / Concert', 'Date', 'Location', 'Tickets', 'Sell-Through', 'ATP', 'Revenue', ''].map(header => (
+                    {['Artist / Concert', 'Date', 'Location', 'Venue', 'Tickets', 'Sell-Through', 'ATP', 'Revenue', ''].map(header => (
                       <th
                         key={header || 'open'}
                         className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-widest"
@@ -563,10 +558,10 @@ function Concerts() {
                       >
                         <td className="px-4 py-4">
                           <div className="min-w-0">
-                            <p className="font-display font-bold text-sm truncate" style={{ color: 'var(--text-primary)' }}>
+                            <p className="font-display font-bold text-sm truncate max-w-32" style={{ color: 'var(--text-primary)' }}>
                               {concert.artist || 'Unknown Artist'}
                             </p>
-                            <p className="text-xs mt-1 truncate max-w-64" style={{ color: 'var(--text-muted)' }}>
+                            <p className="text-xs mt-1 truncate max-w-32" style={{ color: 'var(--text-muted)' }}>
                               {concert.name || 'Live Event'}
                             </p>
                           </div>
@@ -584,6 +579,13 @@ function Concerts() {
                             </p>
                             <p className="text-xs mt-1 flex items-center gap-1 truncate max-w-48" style={{ color: 'var(--text-muted)' }}>
                               <MapPin size={11} className="flex-shrink-0" />
+                              {concert.state && concert.country ? `${concert.state}, ${concert.country}` : concert.country || concert.state || 'Location TBA'}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold truncate max-w-28" style={{ color: 'var(--text-primary)' }}>
                               {concert.venue || 'Venue TBA'}
                             </p>
                           </div>
