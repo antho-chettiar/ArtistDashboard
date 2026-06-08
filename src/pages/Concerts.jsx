@@ -561,9 +561,9 @@ function Concerts() {
                             <p className="font-display font-bold text-sm truncate max-w-32" style={{ color: 'var(--text-primary)' }}>
                               {concert.artist || 'Unknown Artist'}
                             </p>
-                            <p className="text-xs mt-1 truncate max-w-32" style={{ color: 'var(--text-muted)' }}>
+                            {/* <p className="text-xs mt-1 truncate max-w-32" style={{ color: 'var(--text-muted)' }}>
                               {concert.name || 'Live Event'}
-                            </p>
+                            </p> */}
                           </div>
                         </td>
                         <td className="px-4 py-4">
@@ -585,7 +585,7 @@ function Concerts() {
                         </td>
                         <td className="px-4 py-4">
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold truncate max-w-28" style={{ color: 'var(--text-primary)' }}>
+                            <p className="text-sm font-semibold truncate max-w-58" style={{ color: 'var(--text-primary)' }}>
                               {concert.venue || 'Venue TBA'}
                             </p>
                           </div>
