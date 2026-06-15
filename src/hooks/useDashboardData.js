@@ -268,11 +268,12 @@ export function useDashboardData() {
       .map(c => {
         const artist = c.artist?.artistName || c.artistName || 'Unknown Artist'
         const venue  = c.venueName || ''
+        const eventName = c.concertName || c.name || venue || c.city || 'Live Event'
         return {
           id:               c.id,
           artistId:         c.artistId,
           artist,
-          name:             venue ? `${artist} at ${venue}` : `${artist} in ${c.city}`,
+          name:             eventName,
           date:             new Date(c.concertDate),
           city:             c.city,
           state:            c.state,
