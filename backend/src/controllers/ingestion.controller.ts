@@ -289,9 +289,9 @@ export const ingestionController = {
               (1000 * 60 * 60 * 24)
           );
 
-          if (daysDiff >= 1 && daysDiff <= 7) {
+          if (daysDiff >= 1 && daysDiff <= 45) {
             if (Number(previous.followers) > 0) {
-              const rogDaily = ((Number(current.followers) - Number(previous.followers)) / Number(previous.followers)) * 100;
+              const rogDaily = ((Number(current.followers) - Number(previous.followers)) / Number(previous.followers)) * 100 / daysDiff;
               await prisma.platformMetric.update({
                 where: { id: current.id },
                 data: { rogDaily: parseFloat(rogDaily.toFixed(4)) },

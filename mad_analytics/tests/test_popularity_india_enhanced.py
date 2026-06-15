@@ -1,6 +1,5 @@
-﻿"""Test enhanced popularity formula for Indian market.
-V2: Fixed concert scoring — uses total tickets sold (volume), not just sell-through %.
-Compares current production formula vs enhanced India formula.
+﻿"""Test multiple popularity formula scenarios for all artists.
+Shows 4 scenarios side-by-side so the client can pick.
 """
 from __future__ import annotations
 import logging
@@ -26,11 +25,9 @@ if env_path.exists():
 
 
 def fetch_all_data():
-    """Fetch artist data, platform metrics, trends, and concert data from DB."""
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
-        print("ERROR: DATABASE_URL not set")
-        sys.exit(1)
+        print("ERROR: DATABASE_URL not set"); sys.exit(1)
 
     from sqlalchemy import create_engine, text as sql_text
     normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
@@ -38,50 +35,37 @@ def fetch_all_data():
 
     with engine.connect() as conn:
         artists = conn.execute(sql_text("""
-            SELECT id, "artistName",
-                   "instagramFollowers", "facebookFollowers",
-                   "twitterFollowers", "spotifyMonthlyListeners",
-                   "spotifyFollowers", "youtubeSubscribers",
-                   "googleTrendsScore", popularity
+            SELECT id, "artistName", "instagramFollowers", "facebookFollowers",
+                   "twitterFollowers", "spotifyMonthlyListeners", "spotifyFollowers",
+                   "youtubeSubscribers", "googleTrendsScore", popularity
             FROM artists WHERE active = true
         """)).mappings().all()
 
         ig_eng = conn.execute(sql_text("""
-            SELECT DISTINCT ON ("artistId")
-                "artistId", followers, likes, comments
-            FROM platform_metrics
-            WHERE platform = 'INSTAGRAM' AND followers > 0
+            SELECT DISTINCT ON ("artistId") "artistId", followers, likes, comments
+            FROM platform_metrics WHERE platform = 'INSTAGRAM' AND followers > 0
             ORDER BY "artistId", "metricDate" DESC
         """)).mappings().all()
 
         yt_data = conn.execute(sql_text("""
-            SELECT DISTINCT ON ("artistId")
-                "artistId", streams, followers as yt_followers
-            FROM platform_metrics
-            WHERE platform = 'YOUTUBE' AND streams > 0
+            SELECT DISTINCT ON ("artistId") "artistId", streams, followers as yt_followers
+            FROM platform_metrics WHERE platform = 'YOUTUBE' AND streams > 0
             ORDER BY "artistId", "metricDate" DESC
         """)).mappings().all()
 
         rog_data = conn.execute(sql_text("""
-            SELECT "artistId", AVG("rogDaily") as avg_rog
-            FROM platform_metrics
-            WHERE "rogDaily" IS NOT NULL
-              AND "metricDate" >= CURRENT_DATE - INTERVAL '90 days'
+            SELECT "artistId", AVG("rogDaily") as avg_rog FROM platform_metrics
+            WHERE "rogDaily" IS NOT NULL AND "metricDate" >= CURRENT_DATE - INTERVAL '90 days'
             GROUP BY "artistId"
         """)).mappings().all()
 
-        # Concert data with volume + revenue (last 12 months)
         concert_data = conn.execute(sql_text("""
-            SELECT "artistId",
-                   COUNT(*) as total_concerts,
+            SELECT "artistId", COUNT(*) as total_concerts,
                    SUM("ticketsSold") as total_tickets_sold,
-                   SUM(capacity) as total_capacity,
-                   SUM("totalRevenue") as total_revenue
+                   SUM(capacity) as total_capacity, SUM("totalRevenue") as total_revenue
             FROM concerts
             WHERE "concertDate" >= CURRENT_DATE - INTERVAL '12 months'
-              AND "ticketsSold" IS NOT NULL
-              AND capacity IS NOT NULL
-              AND capacity > 0
+              AND "ticketsSold" IS NOT NULL AND capacity IS NOT NULL AND capacity > 0
             GROUP BY "artistId"
         """)).mappings().all()
 
@@ -94,297 +78,260 @@ def fetch_all_data():
 
     merged = {}
     for a in artists:
-        aid = a["id"]
-        name = a["artistName"]
+        aid = a["id"]; name = a["artistName"]
 
         ig = ig_map.get(aid, {})
-        ig_followers = int(ig.get("followers", 0) or int(a["instagramFollowers"] or 0))
-        ig_likes = float(ig.get("likes", 0) or 0)
-        ig_comments = float(ig.get("comments", 0) or 0)
-        ig_er = round((ig_likes + ig_comments) / ig_followers * 100, 4) if ig_followers > 0 else 0.0
+        ig_f = int(ig.get("followers", 0) or int(a["instagramFollowers"] or 0))
+        ig_l = float(ig.get("likes", 0) or 0)
+        ig_c = float(ig.get("comments", 0) or 0)
+        ig_er = round((ig_l + ig_c) / ig_f * 100, 4) if ig_f > 0 else 0.0
 
         yt = yt_map.get(aid, {})
-        yt_streams = int(yt.get("streams", 0) or 0)
-        yt_subs_val = int(yt.get("yt_followers", 0) or int(a["youtubeSubscribers"] or 0))
+        yt_st = int(yt.get("streams", 0) or 0)
+        yt_subs = int(yt.get("yt_followers", 0) or int(a["youtubeSubscribers"] or 0))
+        # Fallback: when no YT platform_metrics exist, use subscribers as proxy
+        # (scraper will populate real total_views into streams column later)
+        if yt_st == 0 and yt_subs > 0:
+            yt_st = yt_subs * 200  # rough views-per-subscriber ratio for established channels
 
-        # Concert metrics: volume (tickets sold) + efficiency (sell-through %)
         cd = concert_map.get(aid, {})
-        total_tickets = int(cd.get("total_tickets_sold", 0) or 0)
-        total_capacity = int(cd.get("total_capacity", 0) or 0)
-        total_revenue = float(cd.get("total_revenue", 0) or 0)
-        has_concerts = cd.get("total_concerts", 0) > 0
-        if has_concerts and total_capacity > 0:
-            sell_through = round((total_tickets / total_capacity) * 100, 2)
-        else:
-            sell_through = 0.0
-        avg_capacity = round(total_capacity / cd["total_concerts"]) if has_concerts else 0
+        tix = int(cd.get("total_tickets_sold", 0) or 0)
+        cap = int(cd.get("total_capacity", 0) or 0)
+        rev = float(cd.get("total_revenue", 0) or 0)
+        has_c = cd.get("total_concerts", 0) > 0
+        st = round((tix / cap) * 100, 2) if has_c and cap > 0 else 0.0
+        avg_cap = round(cap / cd["total_concerts"]) if has_c else 0
+        num_shows = cd.get("total_concerts", 0) if has_c else 0
 
         merged[name] = {
-            "id": aid,
-            "name": name,
-            "ig_followers": ig_followers,
-            "ig_engagement_rate": ig_er,
+            "name": name, "id": aid, "ig_followers": ig_f, "ig_er": ig_er,
             "fb_followers": int(a["facebookFollowers"] or 0),
-            "yt_subscribers": yt_subs_val,
-            "yt_streams": yt_streams,
-            "sp_monthly_listeners": int(a["spotifyMonthlyListeners"] or 0),
+            "yt_subs": yt_subs, "yt_streams": yt_st,
+            "sp_listeners": int(a["spotifyMonthlyListeners"] or 0),
             "sp_followers": int(a["spotifyFollowers"] or 0),
             "tw_followers": int(a["twitterFollowers"] or 0),
-            "google_trends_score": float(a["googleTrendsScore"] or 0),
+            "gt_score": float(a["googleTrendsScore"] or 0),
             "rog_daily": rog_map.get(aid, 0.0),
-            "concert_tickets": total_tickets,
-            "concert_revenue": total_revenue,
-            "concert_avg_capacity": avg_capacity,
-            "concert_sell_through": sell_through,
-            "current_popularity": float(a["popularity"] or 0),
+            "tickets": tix, "revenue": rev, "sell_through": st,
+            "num_shows": num_shows, "avg_capacity": avg_cap,
+            "current_pop": float(a["popularity"] or 0),
         }
 
     return merged
 
 
-def log_normalize(val, max_val):
-    """Log-scale normalize a value to 0-100."""
-    if max_val <= 0 or val <= 0:
-        return 0.0
-    return min(100.0, math.log(1 + val) / math.log(1 + max_val) * 100)
+def min_max(val, mn, mx):
+    """Min-max normalization across all artists (see reference doc §2)."""
+    if mx <= mn or val <= mn: return 0.0
+    return min(100.0, (val - mn) / (mx - mn) * 100)
+
+def log_norm(val, mx):
+    if mx <= 0 or val <= 0: return 0.0
+    return min(100.0, math.log(1 + val) / math.log(1 + mx) * 100)
 
 
-def linear_normalize(val, max_val):
-    """Linear normalize a value to 0-100."""
-    if max_val <= 0 or val <= 0:
-        return 0.0
-    return min(100.0, (val / max_val) * 100)
+def compute_scenarios(data):
+    if not data: return data
 
+    # --- Min-Max normalization (as specified in reference doc) ---
+    all_ig = [d["ig_followers"] for d in data.values()]
+    all_fb = [d["fb_followers"] for d in data.values()]
+    all_yt_s = [d["yt_subs"] for d in data.values()]
+    all_sp = [d["sp_listeners"] for d in data.values()]
+    all_gt = [d["gt_score"] for d in data.values()]
+    all_rog = [d["rog_daily"] for d in data.values()]
 
-def compute_scores(data):
-    """Compute both current and enhanced formulas."""
-    if not data:
-        return data
+    mn_ig, mx_ig = min(all_ig), max(all_ig)
+    mn_fb, mx_fb = min(all_fb), max(all_fb)
+    mn_ys, mx_ys = min(all_yt_s), max(all_yt_s)
+    mn_sp, mx_sp = min(all_sp), max(all_sp)
+    mn_gt, mx_gt = min(all_gt), max(all_gt)
+    mn_rog, mx_rog = min(all_rog), max(all_rog)
 
-    all_ig_f = [d["ig_followers"] for d in data.values()]
-    all_fb_f = [d["fb_followers"] for d in data.values()]
-    all_yt_s = [d["yt_subscribers"] for d in data.values()]
-    all_yt_v = [d["yt_streams"] for d in data.values()]
-    all_sp_l = [d["sp_monthly_listeners"] for d in data.values()]
-    all_sp_f = [d["sp_followers"] for d in data.values()]
-    all_tw_f = [d["tw_followers"] for d in data.values()]
-    all_er   = [d["ig_engagement_rate"] for d in data.values()]
-    all_gt   = [d["google_trends_score"] for d in data.values()]
-    all_rog  = [d["rog_daily"] for d in data.values()]
-    all_tkts = [d["concert_tickets"] for d in data.values()]
-    all_rev  = [d["concert_revenue"] for d in data.values()]
-    all_st   = [d["concert_sell_through"] for d in data.values()]
+    # --- Log normalization (better for outlier-heavy data) ---
+    m_ig = max(all_ig) or 1; m_fb = max(all_fb) or 1; m_ys = max(all_yt_s) or 1
+    m_sp = max(all_sp) or 1; m_gt = max(all_gt) or 1; m_rog = max(all_rog) or 0.01
 
-    max_ig_f = max(all_ig_f) or 1
-    max_fb_f = max(all_fb_f) or 1
-    max_yt_s = max(all_yt_s) or 1
-    max_yt_v = max(all_yt_v) or 1
-    max_sp_l = max(all_sp_l) or 1
-    max_sp_f = max(all_sp_f) or 1
-    max_tw_f = max(all_tw_f) or 1
-    max_er   = max(all_er) or 0.01
-    max_gt   = max(all_gt) or 1
-    max_rog  = max(all_rog) or 0.01
-    max_tkts = max(all_tkts) or 1
-    max_rev  = max(all_rev) or 1
-    max_st   = max(all_st) or 1
+    for d in data.values():
+        # === Min-Max scores ===
+        ig_mm = min_max(d["ig_followers"], mn_ig, mx_ig)
+        fb_mm = min_max(d["fb_followers"], mn_fb, mx_fb)
+        yt_s_mm = min_max(d["yt_subs"], mn_ys, mx_ys)
+        sp_mm = min_max(d["sp_listeners"], mn_sp, mx_sp)
+        gt_mm = min_max(d["gt_score"], mn_gt, mx_gt)
+        rog_mm = min_max(d["rog_daily"], mn_rog, mx_rog)
 
-    for key, d in data.items():
-        ig_f_s = log_normalize(d["ig_followers"], max_ig_f)
-        fb_f_s = log_normalize(d["fb_followers"], max_fb_f)
-        yt_s_s = log_normalize(d["yt_subscribers"], max_yt_s)
-        yt_v_s = log_normalize(d["yt_streams"], max_yt_v)
-        sp_l_s = log_normalize(d["sp_monthly_listeners"], max_sp_l)
-        sp_f_s = log_normalize(d["sp_followers"], max_sp_f)
-        tw_f_s = log_normalize(d["tw_followers"], max_tw_f)
-        er_s   = log_normalize(d["ig_engagement_rate"], max_er)
-        gt_s   = log_normalize(d["google_trends_score"], max_gt)
-        rog_s  = log_normalize(d["rog_daily"], max_rog)
-        tkts_s = log_normalize(d["concert_tickets"], max_tkts)
-        rev_s  = log_normalize(d["concert_revenue"], max_rev)
-        st_s   = linear_normalize(d["concert_sell_through"], max_st)
+        # === Log scores ===
+        ig_ln = log_norm(d["ig_followers"], m_ig)
+        fb_ln = log_norm(d["fb_followers"], m_fb)
+        yt_s_ln = log_norm(d["yt_subs"], m_ys)
+        sp_ln = log_norm(d["sp_listeners"], m_sp)
+        gt_ln = log_norm(d["gt_score"], m_gt)
+        rog_ln = log_norm(d["rog_daily"], m_rog)
 
-        # Concert score: blend of volume (tickets sold) + efficiency (sell-through)
-        # Log scale for tickets captures diminishing returns of scale
-        # Concert score: blend of volume (tickets sold) + efficiency (sell-through)
-        # Fallback: artists with no concert data get a neutral 30 instead of 0
-        if d["concert_tickets"] > 0:
-            concert_s = tkts_s * 0.70 + st_s * 0.30
-        else:
-            concert_s = 30.0  # neutral default for missing data
+        # === Platform Size Score (Section 2 detail) ===
+        # Spotify(40%) + YTSubs(25%) + IG(25%) + FB(10%)
+        plat_mm = sp_mm * 0.40 + yt_s_mm * 0.25 + ig_mm * 0.25 + fb_mm * 0.10
+        plat_ln = sp_ln * 0.40 + yt_s_ln * 0.25 + ig_ln * 0.25 + fb_ln * 0.10
 
-        # -- CURRENT PRODUCTION FORMULA --
-        current_base = (
-            sp_l_s * 0.40 +
-            yt_s_s * 0.25 +
-            ig_f_s * 0.25 +
-            fb_f_s * 0.10
-        )
-        current_pop = (
-            current_base * 0.50 +
-            gt_s * 0.25 +
-            rog_s * 0.25
-        )
+        # === Current / Base Entropy (as used in reference doc) ===
+        current_mm = plat_mm * 0.50 + gt_mm * 0.25 + rog_mm * 0.25
+        current_ln = plat_ln * 0.50 + gt_ln * 0.25 + rog_ln * 0.25
 
-        # -- ENHANCED INDIA FORMULA V3 --
-        # Concert weight = highest (ticket sales = truest measure of popularity)
-        # GT weight reduced: "Arijit Singh" is a generic name that inflates search
-        # ER weight reduced: Arijit's 18% ER is anomalously high (data quality)
-        # Diljit: #1 in concert volume (236K tix, 21 stadium shows), YT streams
-        enhanced_base = (
-            yt_v_s * 0.25 +
-            sp_l_s * 0.20 +
-            ig_f_s * 0.15 +
-            yt_s_s * 0.10 +
-            tw_f_s * 0.05 +
-            fb_f_s * 0.05 +
-            sp_f_s * 0.05
-        )
-        enhanced_pop = (
-            enhanced_base * 0.30 +
-            gt_s * 0.05 +
-            rog_s * 0.10 +
-            er_s * 0.05 +
-            concert_s * 0.50
-        )
+        # === DEMAND SCORE (Section 2) ===
+        # Platform(35%) + Momentum(35%) + GT(20%) + City(10%)
+        demand_mm = plat_mm * 0.35 + rog_mm * 0.35 + gt_mm * 0.20 + 10.0  # city_affinity = 10 (neutral)
+        demand_ln = plat_ln * 0.35 + rog_ln * 0.35 + gt_ln * 0.20 + 10.0
+
+        # === POPULARITY SCORE (Section 7) ===
+        # BaseEntropy(60%) + Momentum(20%) + GT(20%)
+        pop_mm = current_mm * 0.60 + rog_mm * 0.20 + gt_mm * 0.20
+        pop_ln = current_ln * 0.60 + rog_ln * 0.20 + gt_ln * 0.20
+
+        # === VARIANT: Balanced ===
+        # BaseEntropy(50%) + Momentum(25%) + GT(25%)
+        bal_mm = current_mm * 0.50 + rog_mm * 0.25 + gt_mm * 0.25
+        bal_ln = current_ln * 0.50 + rog_ln * 0.25 + gt_ln * 0.25
+
+        # === VARIANT: Stream-weighted ===
+        # BaseEntropy(40%) + Momentum(30%) + GT(30%)
+        str_mm = current_mm * 0.40 + rog_mm * 0.30 + gt_mm * 0.30
+        str_ln = current_ln * 0.40 + rog_ln * 0.30 + gt_ln * 0.30
 
         d["scores"] = {
-            "ig_followers_norm": round(ig_f_s, 2),
-            "fb_followers_norm": round(fb_f_s, 2),
-            "yt_subscribers_norm": round(yt_s_s, 2),
-            "yt_streams_norm": round(yt_v_s, 2),
-            "sp_listeners_norm": round(sp_l_s, 2),
-            "sp_followers_norm": round(sp_f_s, 2),
-            "tw_followers_norm": round(tw_f_s, 2),
-            "engagement_rate_norm": round(er_s, 2),
-            "google_trends_norm": round(gt_s, 2),
-            "rog_norm": round(rog_s, 2),
-            "tickets_norm": round(tkts_s, 2),
-            "revenue_norm": round(rev_s, 2),
-            "sell_through_norm": round(st_s, 2),
-            "concert_score": round(concert_s, 2),
-            "current_popularity": round(current_pop, 2),
-            "enhanced_popularity": round(enhanced_pop, 2),
+            "current_mm": round(current_mm, 2),
+            "current_ln": round(current_ln, 2),
+            "plat_mm": round(plat_mm, 2),
+            "plat_ln": round(plat_ln, 2),
+            "demand_mm": round(demand_mm, 2),
+            "demand_ln": round(demand_ln, 2),
+            "pop_mm": round(pop_mm, 2),
+            "pop_ln": round(pop_ln, 2),
+            "bal_mm": round(bal_mm, 2),
+            "bal_ln": round(bal_ln, 2),
+            "str_mm": round(str_mm, 2),
+            "str_ln": round(str_ln, 2),
+            "gt_mm": round(gt_mm, 2),
+            "gt_ln": round(gt_ln, 2),
+            "rog_mm": round(rog_mm, 2),
+            "rog_ln": round(rog_ln, 2),
         }
 
     return data
 
 
 def print_results(data):
-    """Print side-by-side comparison of current vs enhanced."""
-    sorted_current = sorted(
-        data.items(),
-        key=lambda x: x[1]["scores"]["current_popularity"],
-        reverse=True
-    )
-    sorted_enhanced = sorted(
-        data.items(),
-        key=lambda x: x[1]["scores"]["enhanced_popularity"],
-        reverse=True
-    )
+    print("=" * 190)
+    print("PREDICTION REFERENCE FORMULAS — All Artists (No Concerts)")
+    print("=" * 190)
 
-    print("=" * 180)
-    print("INDIAN ARTIST POPULARITY - CURRENT vs ENHANCED FORMULA V3")
-    print("=" * 180)
+    scenarios = [
+        ("pop_mm",   "Popularity (§7) [MM]"),
+        ("pop_ln",   "Popularity (§7) [LOG]"),
+        ("demand_mm", "Demand (§2) [MM]"),
+        ("demand_ln", "Demand (§2) [LOG]"),
+        ("plat_mm",  "Platform [MM]"),
+        ("plat_ln",  "Platform [LOG]"),
+        ("bal_mm",   "Balanced [MM]"),
+        ("bal_ln",   "Balanced [LOG]"),
+        ("str_mm",   "Stream [MM]"),
+        ("str_ln",   "Stream [LOG]"),
+    ]
 
-    current_rank = {k: i+1 for i, (k, _) in enumerate(sorted_current)}
-    enhanced_rank = {k: i+1 for i, (k, _) in enumerate(sorted_enhanced)}
+    for s, lbl in scenarios:
+        sorted_by_s = sorted(data.items(), key=lambda x: x[1]["scores"][s], reverse=True)
+        print(f"\n--- Ranking by {lbl} ---")
+        header = (f"{'Rank':<5} {'Artist':<22} {'Score':>8} {'IG Foll':>10} {'YT Subs':>10} "
+                  f"{'SP List':>10} {'GT':>6} {'RoG':>6}")
+        print(header)
+        print("-" * 80)
+        for rank, (key, d) in enumerate(sorted_by_s, 1):
+            sc = d["scores"]
+            print(
+                f"{rank:<5} {d['name']:<22} {sc[s]:>8.2f} "
+                f"{d['ig_followers']:>10,} {d['yt_subs']:>10,} {d['sp_listeners']:>10,} "
+                f"{sc['gt_ln' if 'LN' in lbl.upper() else 'gt_mm']:>5.1f} "
+                f"{sc['rog_ln' if 'LN' in lbl.upper() else 'rog_mm']:>5.1f}"
+            )
 
-    header = (f"{'Rank Chg':<10} {'Artist':<22} {'Current':>8} {'Enhanced':>10} {'Diff':>6} "
-              f"{'IG Foll':>10} {'ER%':>6} {'YT Strm':>10} {'SP List':>10} "
-              f"{'Tickets':>10} {'Rev(M)':>10} {'SellThru':>7} {'Concert':>7}")
-    print(f"\n{header}")
-    print("-" * 180)
+    # === SIDE-BY-SIDE: Min-Max (reference doc) ===
+    print("\n" + "=" * 130)
+    print("SIDE-BY-SIDE — MIN-MAX (as specified in doc)")
+    print("=" * 130)
+    print(f"{'Artist':<22} {'Current':>8} {'Popularity':>10} {'Demand':>8} {'Platform':>9} {'Balanced':>9} {'Stream':>8}")
+    print("-" * 77)
+    for key, d in sorted(data.items(), key=lambda x: x[1]["scores"]["current_mm"], reverse=True):
+        sc = d["scores"]
+        print(f"{d['name']:<22} {sc['current_mm']:>8.1f} {sc['pop_mm']:>10.1f} {sc['demand_mm']:>8.1f} {sc['plat_mm']:>9.1f} {sc['bal_mm']:>9.1f} {sc['str_mm']:>8.1f}")
 
-    for key, d in sorted_enhanced:
-        s = d["scores"]
-        cr = current_rank.get(key, "-")
-        er_rank = enhanced_rank.get(key, "-")
-        rank_chg = f"{cr}>{er_rank}" if cr != er_rank else f"  {cr}  "
-        delta = s["enhanced_popularity"] - s["current_popularity"]
-        delta_str = f"+{delta:.1f}" if delta > 0 else f"{delta:.1f}"
-        rev_m = d["concert_revenue"] / 1_000_000 if d["concert_revenue"] else 0
+    # === SIDE-BY-SIDE: Log (better for outliers) ===
+    print("\n" + "=" * 130)
+    print("SIDE-BY-SIDE — LOG (better for outlier-heavy data)")
+    print("=" * 130)
+    print(f"{'Artist':<22} {'Current':>8} {'Popularity':>10} {'Demand':>8} {'Platform':>9} {'Balanced':>9} {'Stream':>8}")
+    print("-" * 77)
+    for key, d in sorted(data.items(), key=lambda x: x[1]["scores"]["current_ln"], reverse=True):
+        sc = d["scores"]
+        print(f"{d['name']:<22} {sc['current_ln']:>8.1f} {sc['pop_ln']:>10.1f} {sc['demand_ln']:>8.1f} {sc['plat_ln']:>9.1f} {sc['bal_ln']:>9.1f} {sc['str_ln']:>8.1f}")
 
-        print(
-            f"{rank_chg:<10} {d['name']:<22} "
-            f"{s['current_popularity']:>8.2f} {s['enhanced_popularity']:>9.2f} {delta_str:>6} "
-            f"{d['ig_followers']:>10,} {d['ig_engagement_rate']:>5.3f}% "
-            f"{d['yt_streams']:>10,} {d['sp_monthly_listeners']:>10,} "
-            f"{d['concert_tickets']:>10,} {rev_m:>9.1f} {d['concert_sell_through']:>6.2f}% "
-            f"{s['concert_score']:>6.2f}"
-        )
-
-    print("\n" + "=" * 180)
-    print("FORMULA BREAKDOWN")
-    print("=" * 180)
+    print("\n" + "=" * 130)
+    print("FORMULA DEFINITIONS (from Prediction_Formula_Reference)")
+    print("=" * 130)
     print("""
-CURRENT FORMULA:
-  Popularity = Base(50%) + Google Trends(25%) + RoG(25%)
-  Base = Spotify(40%) + YouTube Subs(25%) + Instagram(25%) + Facebook(10%)
+All use: Spotify(40%) + YTSubs(25%) + IG(25%) + FB(10%) as Platform score
 
-ENHANCED INDIA FORMULA V3:
-  Popularity = Enhanced Base(30%) + Concert Score(50%)
-               + Google Trends(5%) + RoG(10%) + Instagram ER(5%)
+Current (Base Entropy) = Platform(50%) + GT(25%) + RoG(25%)
 
-  Enhanced Base = YouTube Streams(25%) + Spotify Listeners(20%)
-                  + Instagram Followers(15%) + YouTube Subs(10%)
-                  + Twitter(5%) + Facebook(5%) + Spotify Followers(5%)
+Popularity (§7) = Current x 0.60 + RoG x 0.20 + GT x 0.20
 
-  Concert Score = Ticket Volume(70%) + Sell-Through Rate(30%)
-                  - Ticket volume uses log scale (diminishing returns)
+Demand (§2)     = Platform x 0.35 + RoG x 0.35 + GT x 0.20 + 10(City)
+  city_affinity fixed at 10 (neutral) for artist-level
 
-KEY CHANGES:
-  Concert weight increased to 50% (ticket sales = truest popularity signal)
-  GT weight reduced to 5% ("Arijit Singh" is a common name inflating search)
-  ER weight reduced to 5% (Arijit's 18% ER is suspiciously high)
-  Diljit: 236K tickets across 21 stadium shows -> properly rewarded as #1
+Balanced        = Current x 0.50 + RoG x 0.25 + GT x 0.25
+
+Stream          = Current x 0.40 + RoG x 0.30 + GT x 0.30
+
+[MM] = min-max normalization (as specified in doc)
+[LOG] = log normalization (better for Taylor/Drake outliers)
 """)
+    print("=" * 190)
 
-    print("=" * 180)
-    print("TOP 5 DETAIL - ENHANCED FORMULA V3")
-    print("=" * 180)
 
-    for rank, (key, d) in enumerate(sorted_enhanced[:5], 1):
-        s = d["scores"]
-        print(f"\n  #{rank} {d['name']}")
-
-        eb = (s["yt_streams_norm"] * 0.25 + s["sp_listeners_norm"] * 0.20 +
-              s["ig_followers_norm"] * 0.15 + s["yt_subscribers_norm"] * 0.10 +
-              s["tw_followers_norm"] * 0.05 + s["fb_followers_norm"] * 0.05 +
-              s["sp_followers_norm"] * 0.05)
-        concert_s = s["tickets_norm"] * 0.70 + s["sell_through_norm"] * 0.30
-
-        eb_contrib = eb * 0.30
-        gt_contrib = s["google_trends_norm"] * 0.05
-        rog_contrib = s["rog_norm"] * 0.10
-        er_contrib = s["engagement_rate_norm"] * 0.05
-        cs_contrib = concert_s * 0.50
-
-        print(f"    Current: {s['current_popularity']:.2f} -> Enhanced: {s['enhanced_popularity']:.2f}")
-        print(f"    Base(30%): {eb:.2f} x 0.30 = {eb_contrib:.2f}")
-        print(f"      YT Strm({s['yt_streams_norm']:.1f}x0.25) + SP List({s['sp_listeners_norm']:.1f}x0.20)")
-        print(f"      + IG Foll({s['ig_followers_norm']:.1f}x0.15) + YT Subs({s['yt_subscribers_norm']:.1f}x0.10)")
-        print(f"      + TW Foll({s['tw_followers_norm']:.1f}x0.05) + FB({s['fb_followers_norm']:.1f}x0.05) + SP Foll({s['sp_followers_norm']:.1f}x0.05)")
-        print(f"    Concert(50%): {concert_s:.2f} x 0.50 = {cs_contrib:.2f}")
-        print(f"      Tickets({d['concert_tickets']:,}, norm={s['tickets_norm']:.1f}) x 0.70 + SellThru({d['concert_sell_through']:.1f}%, norm={s['sell_through_norm']:.1f}) x 0.30")
-        print(f"    GT(5%): {s['google_trends_norm']:.1f} x 0.05 = {gt_contrib:.2f}")
-        print(f"    RoG(10%): {s['rog_norm']:.1f} x 0.10 = {rog_contrib:.2f}")
-        print(f"    IG ER(5%): {s['engagement_rate_norm']:.1f} x 0.05 = {er_contrib:.2f}")
-        print(f"    FINAL = {eb_contrib + gt_contrib + rog_contrib + er_contrib + cs_contrib:.2f}")
-
-    print("\n" + "=" * 180)
-    print(f"Artists scored: {len(data)}")
-    print("=" * 180)
+def highlight_7(data):
+    """Print only the 7 user artists side by side."""
+    target = {"A R Rahman", "Arijit Singh", "Diljit Dosanjh", "Drake", "Shreya Ghoshal", "Sonu Nigam", "Taylor swift",
+              "Vishal Mishra", "Badshah"}
+    key_map = {
+        "taylor": "Taylor swift", "arijit": "Arijit Singh", "drake": "Drake",
+        "diljit": "Diljit Dosanjh", "shreya": "Shreya Ghoshal", "sonu": "Sonu Nigam",
+        "vishal": "Vishal Mishra", "badshah": "Badshah", "rahman": "A R Rahman"
+    }
+    print("\n" + "=" * 150)
+    print("YOUR 7 ARTISTS — All 10 Scenarios (Log + Min-Max)")
+    print("=" * 150)
+    print(f"{'Artist':<22} {'Cur[L]':>7} {'Pop[L]':>7} {'Dem[L]':>7} {'Plat[L]':>7} {'Bal[L]':>7} {'Str[L]':>7} |"
+          f"{'Cur[M]':>7} {'Pop[M]':>7} {'Dem[M]':>7} {'Plat[M]':>7} {'Bal[M]':>7} {'Str[M]':>7}")
+    print("-" * 150)
+    order = ["taylor", "drake", "arijit", "diljit", "shreya", "badshah", "rahman", "sonu", "vishal"]
+    for k in order:
+        n = key_map[k]
+        if n not in data: continue
+        d = data[n]
+        sc = d["scores"]
+        print(f"{d['name']:<22} "
+              f"{sc['current_ln']:>7.1f} {sc['pop_ln']:>7.1f} {sc['demand_ln']:>7.1f} {sc['plat_ln']:>7.1f} {sc['bal_ln']:>7.1f} {sc['str_ln']:>7.1f} |"
+              f"{sc['current_mm']:>7.1f} {sc['pop_mm']:>7.1f} {sc['demand_mm']:>7.1f} {sc['plat_mm']:>7.1f} {sc['bal_mm']:>7.1f} {sc['str_mm']:>7.1f}")
 
 
 if __name__ == "__main__":
-    print("=" * 180)
-    print("ENHANCED POPULARITY FORMULA V3 - INDIA MARKET")
-    print("=" * 180)
-    print("\nFetching data from database...")
+    print("=" * 185)
+    print("MULTI-SCENARIO POPULARITY COMPARISON")
+    print("=" * 185)
+    print("\nFetching data...")
 
     data = fetch_all_data()
-    print(f"Found {len(data)} active artists")
+    print(f"Found {len(data)} artists")
 
-    data = compute_scores(data)
+    data = compute_scenarios(data)
     print_results(data)
+    highlight_7(data)

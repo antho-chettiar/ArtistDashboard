@@ -178,7 +178,9 @@ export function useDashboardData() {
       }
 
       const totalFollowers = Number(item.totalFollowers || 0)
-      const popularity     = Math.min(100, Math.round(totalFollowers / 1_000_000))
+      const popularity     = Number(item.compositeScore) > 0
+        ? Number(item.compositeScore)
+        : Math.min(100, Math.round(totalFollowers / 1_000_000))
       const monthlyStreams  = Math.round(totalFollowers * 0.001)
       const photo = artist.photoUrl ||
         `https://ui-avatars.com/api/?name=${encodeURIComponent(artist.artistName)}&background=6366F1&color=fff`

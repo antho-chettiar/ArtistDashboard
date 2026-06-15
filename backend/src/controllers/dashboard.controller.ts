@@ -157,6 +157,7 @@ export const dashboardController = {
           artistId: true,
           platform: true,
           followers: true,
+          rogDaily: true,
         },
       });
 
@@ -170,6 +171,15 @@ export const dashboardController = {
       }
       const latestMetrics = Array.from(latestMap.values());
 
+      // Track Rog values per artist (averaged across platforms)
+      const artistRogs: Record<string, number[]> = {};
+      for (const metric of latestMetrics) {
+        if (metric.rogDaily !== null) {
+          if (!artistRogs[metric.artistId]) artistRogs[metric.artistId] = [];
+          artistRogs[metric.artistId].push(Number(metric.rogDaily));
+        }
+      }
+
       if (latestMetrics.length === 0) {
         // Fallback: Query artists directly and aggregate followers
         const fallbackArtists = await prisma.artist.findMany({
@@ -181,29 +191,47 @@ export const dashboardController = {
           },
         });
 
-        const sortedFallbackArtists = fallbackArtists.map(artist => {
+        const fallbackScored = fallbackArtists.map(artist => {
           const totalFollowers = 
             Number(artist.instagramFollowers || 0) +
             Number(artist.youtubeSubscribers || 0) +
             Number(artist.spotifyMonthlyListeners || 0) +
             Number(artist.facebookFollowers || 0);
-          
+
+          // Weighted base score from artist-level fields
+          const igF = Number(artist.instagramFollowers || 0);
+          const ytF = Number(artist.youtubeSubscribers || 0);
+          const spF = Number(artist.spotifyMonthlyListeners || 0);
+          const fbF = Number(artist.facebookFollowers || 0);
+          const maxFb = Math.max(igF, ytF, spF, fbF, 1);
+          const baseScore = (
+            (igF / maxFb) * 100 * 0.45 +
+            (ytF / maxFb) * 100 * 0.25 +
+            (spF / maxFb) * 100 * 0.20 +
+            (fbF / maxFb) * 100 * 0.10
+          );
+
+          const trendsScore = Number(artist.googleTrendsScore || 0);
+          const compositeScore = Math.round(baseScore * 0.50 + trendsScore * 0.25);
+
           return {
             artistId: artist.id,
             totalFollowers,
+            compositeScore,
             platforms: [
-              { platform: 'INSTAGRAM', followers: Number(artist.instagramFollowers || 0) },
-              { platform: 'YOUTUBE', followers: Number(artist.youtubeSubscribers || 0) },
-              { platform: 'SPOTIFY', followers: Number(artist.spotifyMonthlyListeners || 0) }
+              { platform: 'INSTAGRAM', followers: igF },
+              { platform: 'YOUTUBE', followers: ytF },
+              { platform: 'SPOTIFY', followers: spF },
+              { platform: 'FACEBOOK', followers: fbF },
             ],
             artist: artist,
           };
-        }).sort((a, b) => b.totalFollowers - a.totalFollowers).slice(0, parseInt(limit as string));
+        }).sort((a, b) => b.compositeScore - a.compositeScore).slice(0, parseInt(limit as string));
 
-        await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(sortedFallbackArtists));
+        await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(fallbackScored));
         return res.status(200).json({
           success: true,
-          data: { artists: sortedFallbackArtists },
+          data: { artists: fallbackScored },
         });
       }
 
@@ -227,12 +255,80 @@ export const dashboardController = {
         });
       }
 
-      // Sort by total followers
-      const sortedArtists = Object.values(artistFollowers)
-        .sort((a: any, b: any) => b.totalFollowers - a.totalFollowers)
+      // Fetch googleTrendsScore for composite scoring
+      const allArtistIds = Object.keys(artistFollowers);
+      const artistsWithTrends = await prisma.artist.findMany({
+        where: { id: { in: allArtistIds } },
+        select: { id: true, googleTrendsScore: true },
+      });
+      const trendsMap = artistsWithTrends.reduce((acc, a) => {
+        acc[a.id] = Number(a.googleTrendsScore || 0);
+        return acc;
+      }, {} as Record<string, number>);
+
+      // Compute composite score directly from platform metrics:
+      //   baseScore (weighted platform followers) × 0.50
+      //   + googleTrendsScore × 0.25
+      //   + rogScore (avg daily RoG normalized) × 0.25
+      const PLATFORM_WEIGHTS: Record<string, number> = {
+        INSTAGRAM: 0.45,
+        YOUTUBE: 0.25,
+        SPOTIFY: 0.20,
+        FACEBOOK: 0.10,
+      };
+
+      // Find max per-platform for normalization
+      const platformMax: Record<string, number> = {};
+      for (const item of Object.values(artistFollowers) as any[]) {
+        for (const p of item.platforms) {
+          const key = String(p.platform).toUpperCase();
+          platformMax[key] = Math.max(platformMax[key] || 0, Number(p.followers || 0));
+        }
+      }
+
+      const scored = Object.values(artistFollowers).map((item: any) => {
+        // Build platform follower map
+        const platformFollowers: Record<string, number> = {};
+        for (const p of item.platforms) {
+          platformFollowers[String(p.platform).toUpperCase()] = Number(p.followers || 0);
+        }
+
+        // Weighted base score (0-100)
+        let baseScore = 0;
+        for (const [platform, weight] of Object.entries(PLATFORM_WEIGHTS)) {
+          const followers = platformFollowers[platform] || 0;
+          const maxF = platformMax[platform] || 1;
+          const normalized = maxF > 0 ? (followers / maxF) * 100 : 0;
+          baseScore += normalized * weight;
+        }
+        baseScore = Math.min(100, Math.max(0, baseScore));
+
+        // Google Trends score (0-100)
+        const trendsScore = trendsMap[item.artistId] || 0;
+
+        // RoG score: normalize avg daily rog to 0-100
+        const rogValues = artistRogs[item.artistId] || [];
+        const avgRog = rogValues.length > 0
+          ? rogValues.reduce((a: number, b: number) => a + b, 0) / rogValues.length
+          : 0;
+        // Log scale: rogDaily of 0.1% → ~30, 0.5% → ~62, 2% → ~92
+        const rogScore = avgRog > 0
+          ? Math.min(100, Math.round((Math.log(1 + avgRog * 40) / Math.log(81)) * 100))
+          : 0;
+
+        const compositeScore = Math.round(
+          baseScore * 0.50 + trendsScore * 0.25 + rogScore * 0.25
+        );
+
+        return { ...item, compositeScore };
+      });
+
+      // Sort by composite score (descending)
+      const sortedArtists = scored
+        .sort((a: any, b: any) => b.compositeScore - a.compositeScore)
         .slice(0, parseInt(limit as string));
 
-      // Enrich with artist details
+      // Enrich with full artist details
       const artistIds = sortedArtists.map((a: any) => a.artistId);
       const artists = await prisma.artist.findMany({
         where: { id: { in: artistIds } },

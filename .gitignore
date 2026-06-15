@@ -67,3 +67,4 @@ mad_analytics/models/*.joblib
 
 # Browser profile for scraping (contains cookies/session)
 bms_profile/
+ig_session/

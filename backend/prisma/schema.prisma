@@ -26,6 +26,7 @@ model Artist {
   spotifyMonthlyListeners BigInt?
   youtubeSubscribers      BigInt?
   popularity              Decimal?              @db.Decimal(5, 2)
+  googleTrendsScore       Decimal?              @db.Decimal(5, 2)
   imageUrl                String?
   spotifyFollowers        BigInt?
   topCity1                String?

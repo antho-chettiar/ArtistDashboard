@@ -1,0 +1,173 @@
+Prediction Model — Formula Reference
+Signals: Platform metrics + Google Trends + City/Venue data
+No historical ticket sales data used
+1. Available inputs
+Signal
+Source
+Field / API
+Spotify monthly listeners
+GET /artists
+monthlyStreams
+Spotify follower count
+GET /artists
+followers.spotify
+Spotify RoG
+GET /artists
+rog.spotify
+YouTube RoG
+GET /artists
+rog.youtube
+Instagram RoG
+GET /artists
+rog.instagram
+Facebook RoG
+GET /artists
+rog.facebook
+Cross-platform growth score
+GET /analytics/ml/growth (useMadGrowth)
+cross_platform_score
+Base popularity score
+GET /analytics/ml/popularity (useMadPopularity)
+popularity
+Google Trends score
+pytrends — new module
+artist + concert, geo=IN, 3-month, 0–100
+Venue capacity
+GET /concerts
+concerts.capacity
+City
+GET /concerts / Analysis.jsx CITIES array
+city name + tier multiplier
+Avg ticket price
+GET /concerts
+concerts.avgTicketPrice (artist avg, not event-specific)
+Note: No ticketsSold, no sellthrough rate, no historical attendance used anywhere in this version.
+2. Demand score (0–100)
+Estimates audience demand for an artist in a given city using only platform signals and search interest.
+demand_score =
+    platform_size_score    x 0.35
+  + momentum_score         x 0.35
+  + google_trends_score    x 0.20
+  + city_affinity_score    x 0.10
+Component
+Formula
+Source
+platform_size_score
+normalize(monthlyStreams, 0–100) weighted avg across platforms
+GET /artists → monthlyStreams, followers.*
+momentum_score
+cross_platform_score / 100
+useMadGrowth → cross_platform_score
+google_trends_score
+pytrends(artist + concert, geo=IN, 3-month)  → 0–100 raw
+New pytrends module
+city_affinity_score
+city_demand_index / 100  (see §3 below)
+Analysis.jsx CITIES array
+Platform size score detail
+Weighted average of normalised per-platform scores. Weights reflect commercial relevance for live events:
+platform_size_score =
+    normalize(monthlyStreams)    x 0.40   // Spotify — strongest purchase-intent signal
+  + normalize(followers.youtube) x 0.25   // YouTube — reach
+  + normalize(followers.instagram) x 0.25 // Instagram — cultural relevance
+  + normalize(followers.facebook)  x 0.10 // Facebook — supplementary
+normalize(x) = (x − min) / (max − min) across all artists in your DB. Output: 0.0 – 1.0, then × 100.
+Note: RoG fields (rog.*) are used in momentum_score via cross_platform_score, not duplicated here. Avoid double-counting growth signals.
+3. City affinity score
+Measures how strong the demand environment is in a given city — independent of the artist. Based on city tier, population, and market activity.
+city_affinity_score = city_tier_factor x market_activity_index x 100
+market_activity_index = normalize(concerts_in_city_last_12m, 0–1)
+                        // from concerts.city + concerts.date
+Tier
+Cities
+city_tier_factor
+1 — Mega
+Mumbai, Delhi NCR
+1.00
+2 — Major
+Bangalore, Hyderabad, Chennai, Kolkata
+0.85
+3 — Large
+Pune, Ahmedabad, Jaipur, Chandigarh
+0.75
+4 — Other
+All remaining metros
+0.65
+Note: market_activity_index uses concert count in that city over the last 12 months from your concerts table — it measures how active the live market is in that city, not sellthrough.
+4. Revenue prediction
+Predicts gross revenue using demand score, venue capacity, and average ticket price. No sellthrough history required.
+predicted_sellthrough = (demand_score / 100) x city_tier_factor
+predicted_tickets     = capacity x predicted_sellthrough
+avg_ticket_price      = AVG(concerts.avgTicketPrice) for artist
+                        // fallback: city-level avg if artist has no past concerts
+gross_revenue         = predicted_tickets x avg_ticket_price
+Note: avgTicketPrice from past concerts is used only as a price reference, not as a performance signal. If the artist has zero past concerts, use the median avgTicketPrice across all artists in the same genre/category.
+5. Risk score
+Flags prediction uncertainty. Average of three flags (0–1 each). No sparsity flag — that was based on ticket history.
+Display: Low (< 0.33) / Medium (0.33–0.66) / High (> 0.66)
+Flag
+Formula
+Source
+Fires when
+Market saturation
+concerts_city_90d / 20
+concerts.city, concerts.date
+> 15 concerts in city recently — diluted demand
+Momentum volatility
+STDDEV(rog.spotify, rog.youtube, rog.instagram, rog.facebook)
+GET /artists → rog.*
+High variance across platforms — growth is uneven
+Trends recency gap
+IF google_trends_score < 30 → 1.0, ELSE 0.0
+pytrends score
+Low search interest despite platform size
+Note: Fee/revenue ratio flag removed here — artist fee is a manual input not available without historical booking data. Add it back once fee data is collected.
+6. Confidence tiers
+Since there is no ticket history, confidence is based on data completeness across the three signal types.
+Tier
+Condition
+Display
+High
+All three signals present: platform metrics + Google Trends + city data
+Green badge
+Medium
+Two of three signals available
+Amber badge
+Low
+Only platform metrics available — no Trends score or city data
+Red badge
+Insufficient
+Artist has no platform data (new/unscraped artist)
+Greyed out — no prediction shown
+7. Revised popularity score
+Replaces the static entropy-weighted score. No ticket data dependency.
+popularity_score =
+    base_entropy_score   x 0.60   // useMadPopularity — unchanged
+  + momentum_score       x 0.20   // cross_platform_score / 100 from useMadGrowth
+  + google_trends_score  x 0.20   // pytrends, normalised 0–1
+Note: google_trends_score is relative within a query batch. Normalise all artists in a single pytrends batch call so scores are comparable. Refresh every 7 days via scheduler.
+8. Endpoint → formula map
+Endpoint
+Hook
+Feeds into
+GET /analytics/ml/growth
+useMadGrowth
+momentum_score (§2), trending_score (§7)
+GET /analytics/ml/popularity
+useMadPopularity
+base_entropy_score (§7)
+GET /analytics/ml/demand
+useMadDemand
+Validate or override §2 demand_score
+GET /analytics/ml/venue-capacity
+useMadVenueCapacity
+capacity fallback if concerts.capacity is null
+GET /analytics/ml/revenue
+useAutoPredict
+Cross-check gross_revenue output from §4
+GET /analytics/ml/llm-predict
+useMadLlmPrediction
+Natural language recommendation — reads all scores
+pytrends (new)
+Scheduled job, 7-day refresh
+google_trends_score in §2 and §7

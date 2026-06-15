@@ -58,6 +58,9 @@ from .venue_capacity.resolver import fetch_saved_capacity_resolutions
 
 SCRAPE_INTERVAL_HOURS = int(os.environ.get("SCRAPE_INTERVAL_HOURS", "12"))
 RETRAIN_INTERVAL_HOURS = int(os.environ.get("RETRAIN_INTERVAL_HOURS", "24"))
+INSTAGRAM_INTERVAL_HOURS = int(os.environ.get("INSTAGRAM_INTERVAL_HOURS", "120"))  # 5 days
+GOOGLE_TRENDS_INTERVAL_HOURS = int(os.environ.get("GOOGLE_TRENDS_INTERVAL_HOURS", "168"))  # 7 days
+YOUTUBE_API_INTERVAL_HOURS = int(os.environ.get("YOUTUBE_API_INTERVAL_HOURS", "168"))  # 7 days
 _scheduler_running = False
 
 
@@ -401,6 +404,70 @@ def _run_data_validation_job():
         logger.error(f"[Scheduler] Data validation error: {e}")
 
 
+def _run_instagram_scraper_job():
+    """Scrape Instagram profiles for all active artists and update follower counts + engagement."""
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        logger.info("[Scheduler] Skipping Instagram scrape (DATABASE_URL not set)")
+        return
+
+    api_token = os.environ.get("APIFY_API_TOKEN")
+    if not api_token:
+        logger.info("[Scheduler] Skipping Instagram scrape (APIFY_API_TOKEN not set)")
+        return
+
+    try:
+        from .scrapers.instagram import run_instagram_scraper_job
+        logger.info("[Scheduler] Running Instagram scraper (Apify)...")
+        result = run_instagram_scraper_job(db_url=db_url)
+        logger.info(f"[Scheduler] Instagram scrape: {result.get('updated_in_db', 0)}/{result.get('total_artists', 0)} "
+                    f"artists updated. Engagement: {result.get('with_engagement', 0)}. "
+                    f"Failed: {result.get('failed_usernames', [])}")
+    except Exception as e:
+        logger.error(f"[Scheduler] Instagram scraper error: {e}")
+
+
+def _run_google_trends_job():
+    """Fetch Google Trends scores for all active artists and store in DB."""
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        logger.info("[Scheduler] Skipping Google Trends (DATABASE_URL not set)")
+        return
+
+    try:
+        from .trends.google_trends import fetch_and_store_trends
+        logger.info("[Scheduler] Fetching Google Trends scores...")
+        scores = fetch_and_store_trends(db_url=db_url)
+        logger.info(f"[Scheduler] Google Trends: updated scores for {len(scores)} artists.")
+    except ImportError:
+        logger.warning("[Scheduler] pytrends not installed. Run: pip install pytrends")
+    except Exception as e:
+        logger.error(f"[Scheduler] Google Trends error: {e}")
+
+
+def _run_youtube_api_job():
+    """Fetch YouTube channel stats for all active artists via Data API v3."""
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        logger.info("[Scheduler] Skipping YouTube API (DATABASE_URL not set)")
+        return
+
+    api_key = os.environ.get("YOUTUBE_API_KEY")
+    if not api_key:
+        logger.info("[Scheduler] Skipping YouTube API (YOUTUBE_API_KEY not set)")
+        return
+
+    try:
+        from .provider.youtube_api import fetch_and_store_all
+        logger.info("[Scheduler] Fetching YouTube channel data...")
+        count = fetch_and_store_all(db_url=db_url)
+        logger.info(f"[Scheduler] YouTube API: updated {count} artists.")
+    except ImportError:
+        logger.warning("[Scheduler] requests library missing? Run: pip install requests")
+    except Exception as e:
+        logger.error(f"[Scheduler] YouTube API error: {e}")
+
+
 def _run_retrain_job():
     """Retrain the revenue prediction model with all available data."""
     db_url = os.environ.get("DATABASE_URL")
@@ -463,6 +530,7 @@ def _scheduler_loop():
 
     # ── STARTUP: Full pipeline run ──
     logger.info("[Scheduler] === STARTUP PIPELINE ===")
+    _run_google_trends_job()           # 0. Fetch Google Trends (needed for popularity)
     _run_popularity_job()              # 1. Update artist popularity scores
     _run_verification_job()            # 2. Deduplicate concerts
     _run_fix_capacities_job()          # 3. Fix capacities from known venues DB
@@ -471,16 +539,24 @@ def _scheduler_loop():
     _run_data_validation_job()         # 6. Validate all data (tickets <= capacity, revenue consistency)
     _run_scraper_job()                 # 7. Scrape new concerts
     _run_retrain_job()                 # 8. Retrain ML model (self-learning: more data = better model)
+    _run_instagram_scraper_job()       # 9. Scrape Instagram profiles (followers, posts)
+    _run_youtube_api_job()             # 10. Fetch YouTube channel stats
     logger.info("[Scheduler] === STARTUP COMPLETE ===")
 
     # ── PERIODIC: Continuous improvement loop ──
     hours_since_scrape = 0
     hours_since_retrain = 0
+    hours_since_instagram = 0
+    hours_since_trends = 0
+    hours_since_youtube = 0
 
     while _scheduler_running:
         time.sleep(3600)  # Sleep 1 hour
         hours_since_scrape += 1
         hours_since_retrain += 1
+        hours_since_instagram += 1
+        hours_since_trends += 1
+        hours_since_youtube += 1
 
         # Every 12 hours: scrape + validate + predict
         if hours_since_scrape >= SCRAPE_INTERVAL_HOURS:
@@ -499,7 +575,27 @@ def _scheduler_loop():
             _run_retrain_job()
             _run_popularity_job()
             hours_since_retrain = 0
-            hours_since_retrain = 0
+
+        # Every 5 days (120 hours): scrape Instagram profiles
+        if hours_since_instagram >= INSTAGRAM_INTERVAL_HOURS:
+            logger.info("[Scheduler] === 5-DAY INSTAGRAM SCRAPE ===")
+            _run_instagram_scraper_job()
+            _run_popularity_job()  # Re-calculate popularity with fresh IG data
+            hours_since_instagram = 0
+
+        # Every 7 days (168 hours): update Google Trends scores
+        if hours_since_trends >= GOOGLE_TRENDS_INTERVAL_HOURS:
+            logger.info("[Scheduler] === 7-DAY GOOGLE TRENDS UPDATE ===")
+            _run_google_trends_job()
+            _run_popularity_job()
+            hours_since_trends = 0
+
+        # Every 7 days (168 hours): fetch YouTube channel stats
+        if hours_since_youtube >= YOUTUBE_API_INTERVAL_HOURS:
+            logger.info("[Scheduler] === 7-DAY YOUTUBE API UPDATE ===")
+            _run_youtube_api_job()
+            _run_popularity_job()
+            hours_since_youtube = 0
 
 
 @asynccontextmanager
@@ -679,4 +775,25 @@ def trigger_verify():
 def trigger_predict_empty():
     """Manually trigger revenue prediction for empty concerts."""
     _run_predict_empty_concerts_job()
+    return {"status": "done"}
+
+
+@app.post("/scheduler/instagram")
+def trigger_instagram():
+    """Manually trigger Instagram profile scraping for all artists."""
+    _run_instagram_scraper_job()
+    return {"status": "done"}
+
+
+@app.post("/scheduler/google-trends")
+def trigger_google_trends():
+    """Manually trigger Google Trends score fetch for all artists."""
+    _run_google_trends_job()
+    return {"status": "done"}
+
+
+@app.post("/scheduler/youtube")
+def trigger_youtube():
+    """Manually trigger YouTube Data API scrape for all artists."""
+    _run_youtube_api_job()
     return {"status": "done"}

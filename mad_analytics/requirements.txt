@@ -25,3 +25,11 @@ uvicorn[standard]>=0.29.0
 # DB connection (for training script only)
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.9
+
+# Web scraping (Instagram profiles, BookMyShow, etc.)
+playwright>=1.44.0
+playwright-stealth>=1.0.6
+apify-client>=3.0.0
+
+# Google Trends (popularity scoring)
+pytrends>=4.9.2

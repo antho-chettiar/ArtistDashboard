@@ -1,0 +1,1 @@
+from .google_trends import fetch_trends_scores, fetch_single_trend_score
