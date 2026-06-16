@@ -3,7 +3,6 @@ import { Redis } from 'ioredis';
 
 export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
-  datasourceUrl: process.env.DATABASE_URL + (process.env.DATABASE_URL?.includes('?') ? '&' : '?') + 'connection_limit=3',
 });
 
 // Redis client (optional - used for caching)
@@ -11,21 +10,43 @@ let redisClient: Redis | null = null;
 
 export const connectRedis = async (): Promise<void> => {
   try {
-    redisClient = new Redis({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: parseInt(process.env.REDIS_PORT || '6379'),
-      username: process.env.REDIS_USERNAME || 'default',
-      password: process.env.REDIS_PASSWORD,
-      maxRetriesPerRequest: 3,
-      ...(process.env.REDIS_TLS === 'true' ? { tls: { rejectUnauthorized: false } } : {}),
+    const redisUrl = process.env.REDIS_URL;
+    const client = redisUrl
+      ? new Redis(redisUrl, {
+          lazyConnect: true,
+          enableOfflineQueue: false,
+          maxRetriesPerRequest: 1,
+          ...(process.env.REDIS_TLS === 'true' ? { tls: { rejectUnauthorized: false } } : {}),
+        })
+      : new Redis({
+          host: process.env.REDIS_HOST || 'localhost',
+          port: parseInt(process.env.REDIS_PORT || '6379'),
+          username: process.env.REDIS_USERNAME || 'default',
+          password: process.env.REDIS_PASSWORD,
+          lazyConnect: true,
+          enableOfflineQueue: false,
+          maxRetriesPerRequest: 1,
+          ...(process.env.REDIS_TLS === 'true' ? { tls: { rejectUnauthorized: false } } : {}),
+        });
+
+    client.on('error', () => {
+      // ioredis emits connection errors even when we fall back to no-cache mode.
+      // Swallow them here so the app can keep running without noisy stderr output.
     });
 
-    // Test connection
-    await redisClient.ping();
+    redisClient = client;
+    await client.ping();
     console.log('✅ Redis connected successfully');
   } catch (error) {
-    console.warn('⚠️  Redis connection failed, caching disabled:', error);
-    redisClient = null; // Disable Redis if connection fails
+    const redisConfigured = Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDIS_PORT);
+    if (redisConfigured) {
+      console.warn('⚠️  Redis connection failed, caching disabled:', error instanceof Error ? error.message : error);
+    }
+    if (redisClient) {
+      redisClient.removeAllListeners();
+      redisClient.disconnect();
+    }
+    redisClient = null;
   }
 };
 

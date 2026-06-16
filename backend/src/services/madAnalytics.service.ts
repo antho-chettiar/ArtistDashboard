@@ -461,7 +461,7 @@ export const madAnalyticsService = {
       // Resolve currency from country if not explicitly provided
       let currency = payload.currency;
       if (!currency && payload.country) {
-        const { currencyConversionService } = await import('./currency/currencyConversion.service');
+        const { currencyConversionService } = await import('./currency/currencyConversion.service.js');
         currency = currencyConversionService.resolveCurrency(payload.country);
       }
 

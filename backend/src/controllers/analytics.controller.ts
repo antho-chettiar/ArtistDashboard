@@ -74,8 +74,10 @@ export const analyticsController = {
         dateTo,
       } = req.query;
 
+      const useLegacyTrends = Boolean(metric || dateFrom || dateTo);
+
       // ── New aggregated path (used by Dashboard chart) ──────────────────
-      if (platform) {
+      if (platform && !useLegacyTrends) {
         const platformUpper = String(platform).toUpperCase();
         const monthCount = Math.min(parseInt(months as string) || 12, 36);
 

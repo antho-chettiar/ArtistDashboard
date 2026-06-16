@@ -37,7 +37,7 @@ client.interceptors.response.use(
           originalRequest.headers.Authorization = `Bearer ${refreshedToken}`
           return client(originalRequest)
         }
-      } catch (refreshError) {
+      } catch {
         // Continue to logout below if refresh fails
       }
     }

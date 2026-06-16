@@ -3,6 +3,8 @@ Known venue capacities — curated database of verified venue sizes.
 This is the most reliable source (higher priority than web search or heuristic).
 Add venues here as you verify them manually.
 """
+from __future__ import annotations
+from typing import Optional
 
 # Format: (venue_name_lowercase, city_lowercase): capacity
 KNOWN_VENUES: dict[tuple[str, str], int] = {
@@ -184,7 +186,7 @@ KNOWN_VENUES: dict[tuple[str, str], int] = {
 }
 
 
-def lookup_known_capacity(venue_name: str, city: str) -> int | None:
+def lookup_known_capacity(venue_name: str, city: str) -> Optional[int]:
     """Look up a venue in the known venues database. Returns capacity or None."""
     if not venue_name:
         return None
