@@ -47,7 +47,7 @@ export function useArtists({ search = '', genre = '', limit = 100 } = {}) {
     const followers = {
       instagram: Number(artist.instagramFollowers || metricsByPlatform.instagram?.followers || 0),
       youtube: Number(artist.youtubeSubscribers || metricsByPlatform.youtube?.followers || 0),
-      spotify: Number(artist.spotifyMonthlyListeners || 0),
+      spotify: Number(artist.spotifyFollowers || 0),
       spotifyFollowers: Number(artist.spotifyFollowers || 0),
       spotifyMonthlyListeners: Number(artist.spotifyMonthlyListeners || 0),
       facebook: Number(artist.facebookFollowers || metricsByPlatform.facebook?.followers || 0),

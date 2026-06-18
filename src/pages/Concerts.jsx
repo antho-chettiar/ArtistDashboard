@@ -585,7 +585,7 @@ function Concerts() {
                         </td>
                         <td className="px-4 py-4">
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold truncate max-w-58" style={{ color: 'var(--text-primary)' }}>
+                            <p className="text-sm font-semibold truncate max-w-32" style={{ color: 'var(--text-primary)' }}>
                               {concert.venue || 'Venue TBA'}
                             </p>
                           </div>

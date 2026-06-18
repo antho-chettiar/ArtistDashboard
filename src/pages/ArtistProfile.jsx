@@ -171,7 +171,8 @@ function ArtistProfile() {
   const followers = {
     instagram: followerMap.get('instagram') || Number(artist.instagramFollowers) || 0,
     youtube: followerMap.get('youtube') || Number(artist.youtubeSubscribers) || 0,
-    spotify: followerMap.get('spotify') || Number(artist.spotifyMonthlyListeners) || 0,
+    spotify: followerMap.get('spotify') || Number(artist.spotifyFollowers) || 0,
+    spotifyMonthlyListeners: followerMap.get('spotify') || Number(artist.spotifyMonthlyListeners) || 0,
     facebook: followerMap.get('facebook') || Number(artist.facebookFollowers) || 0,
     applemusic: followerMap.get('applemusic') || 0,
   }
@@ -291,7 +292,7 @@ function ArtistProfile() {
             {/* KPI Strip */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
-                { label: 'Monthly Listeners (Spotify)', value: formatNumber(totalFollowers), icon: Users, color: 'var(--accent-indigo)' },
+                { label: 'Spotify Monthly Listeners', value: formatNumber(followers.spotifyMonthlyListeners), icon: Users, color: 'var(--accent-indigo)' },
                 { label: 'Top Platform', value: Object.entries(followers).sort((a, b) => b[1] - a[1])[0][0] || 'N/A', icon: TrendingUp, color: 'var(--accent-gold)' },
                 { label: 'Total Revenue', value: formatCurrency(totalRevenue), icon: DollarSign, color: 'var(--accent-green)' },
                 { label: 'Tickets Sold', value: formatNumber(totalTickets), icon: Ticket, color: 'var(--accent-red)' },
