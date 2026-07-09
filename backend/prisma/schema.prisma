@@ -35,6 +35,7 @@ model Artist {
   topCity4                String?
   topCity5                String?
   lastUpdated             DateTime?
+  viberateSlug            String?               @unique 
   created_at              DateTime              @default(now())
   updated_at              DateTime              @updatedAt
   genres                  ArtistGenre[]
@@ -44,6 +45,7 @@ model Artist {
   platformMetrics         PlatformMetric[]
   trendScores             ArtistTrendScore[]
   popularityV2Snapshots   ArtistPopularityV2Snapshot[]
+  viberateMetrics         ViberateMetricDaily[]
 
   @@index([artistName])
   @@index([active])
@@ -432,6 +434,44 @@ model ArtistPopularityV2Snapshot {
   @@index([finalScore])
   @@index([computedAt])
   @@map("artist_popularity_v2_snapshots")
+}
+
+model ViberateMetricDaily {
+  id          String   @id @default(dbgenerated("gen_random_uuid()"))
+  artistId    String
+  artist      Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+
+  // The metric name exactly as Viberate returns it:
+  // "spotify_listeners", "youtube_views", "instagram_followers", etc.
+  metricName  String
+
+  // The calendar date this data point represents (YYYY-MM-DD)
+  date        DateTime @db.Date
+
+  // Daily change value from Viberate's graph.diff
+  // NOTE: 0 means "Viberate had no update that day", not "no change occurred"
+  // NULL means the metric was not present in the response at all
+  diffValue   Float?
+
+  // Running total from Viberate's graph.total
+  // NULL for metrics Viberate never provides a total for:
+  // (instagram_likes, instagram_comments, tiktok_views, tiktok_comments)
+  totalValue  Float?
+
+  // API version string from the response — useful if Viberate changes their
+  // data shape and you need to know which rows were collected under which version
+  apiVersion  String   @default("unknown")
+
+  // When this row was written/updated in our DB
+  fetchedAt   DateTime @default(now())
+
+  // @@unique enforces idempotency — running the collector twice on the same
+  // day simply upserts, never creates duplicates
+  @@unique([artistId, metricName, date])
+  @@index([artistId, metricName, date])
+  @@index([artistId, date])
+  @@index([date])
+  @@map("viberate_metrics_daily")
 }
 
 model PredictionTrainingData {

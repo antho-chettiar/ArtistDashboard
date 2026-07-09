@@ -24,6 +24,7 @@ import scrapingRoutes from './routes/scraping.routes';
 import userRoutes from './routes/user.routes';
 import { PrismaClient } from '@prisma/client';
 import { connectRedis } from './utils/database';
+import { startViberateScheduler } from './services/scrapers/viberate/scheduler';
 
 const app = express();
 const prisma = new PrismaClient();
@@ -157,6 +158,7 @@ if (process.env.NODE_ENV !== 'test') {
         console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
         console.log(`🔗 API: http://localhost:${PORT}/api/v1`);
         console.log(`💚 Health: http://localhost:${PORT}/health`);
+        startViberateScheduler();
       });
     } catch (error) {
       console.error('❌ Failed to start server:', error);
