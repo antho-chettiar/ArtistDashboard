@@ -16,7 +16,7 @@
 import { chromium } from 'playwright';
 import path from 'path';
 import fs from 'fs';
-import nodemailer from 'nodemailer';
+// import nodemailer from 'nodemailer';
 
 const SESSION_PATH = path.resolve(__dirname, 'viberate-session.json');
 
@@ -125,62 +125,76 @@ export async function checkSessionHealth(): Promise<SessionHealthResult> {
 
 // ─── Alert ───────────────────────────────────────────────────────────────────
 
-export async function sendSessionAlert(result: SessionHealthResult): Promise<void> {
-  // Only send if email env vars are configured
-  const user = process.env.ALERT_EMAIL_USER;
-  const pass = process.env.ALERT_EMAIL_PASS;
-  const to   = process.env.ALERT_EMAIL_TO;
+// export async function sendSessionAlert(result: SessionHealthResult): Promise<void> {
+//   // Only send if email env vars are configured
+//   const user = process.env.ALERT_EMAIL_USER;
+//   const pass = process.env.ALERT_EMAIL_PASS;
+//   const to   = process.env.ALERT_EMAIL_TO;
 
-  if (!user || !pass || !to) {
-    // No email configured — just log loudly to console
-    console.error('');
-    console.error('╔══════════════════════════════════════════════════════════╗');
-    console.error('║  ⚠  VIBERATE SESSION EXPIRED — ACTION REQUIRED          ║');
-    console.error('╠══════════════════════════════════════════════════════════╣');
-    console.error(`║  Reason:  ${result.reason.padEnd(48)} ║`);
-    console.error(`║  Time:    ${result.checkedAt.toISOString().padEnd(48)} ║`);
-    console.error('╠══════════════════════════════════════════════════════════╣');
-    console.error('║  Fix: cd backend && npx ts-node                          ║');
-    console.error('║       src/services/scrapers/viberate/login.ts            ║');
-    console.error('╚══════════════════════════════════════════════════════════╝');
-    console.error('');
-    return;
-  }
+//   if (!user || !pass || !to) {
+//     // No email configured — just log loudly to console
+//     console.error('');
+//     console.error('╔══════════════════════════════════════════════════════════╗');
+//     console.error('║  ⚠  VIBERATE SESSION EXPIRED — ACTION REQUIRED          ║');
+//     console.error('╠══════════════════════════════════════════════════════════╣');
+//     console.error(`║  Reason:  ${result.reason.padEnd(48)} ║`);
+//     console.error(`║  Time:    ${result.checkedAt.toISOString().padEnd(48)} ║`);
+//     console.error('╠══════════════════════════════════════════════════════════╣');
+//     console.error('║  Fix: cd backend && npx ts-node                          ║');
+//     console.error('║       src/services/scrapers/viberate/login.ts            ║');
+//     console.error('╚══════════════════════════════════════════════════════════╝');
+//     console.error('');
+//     return;
+//   }
+
+export async function sendSessionAlert(result: SessionHealthResult): Promise<void> {
+  console.error('');
+  console.error('╔══════════════════════════════════════════════════════════╗');
+  console.error('║  ⚠  VIBERATE SESSION EXPIRED — ACTION REQUIRED          ║');
+  console.error('╠══════════════════════════════════════════════════════════╣');
+  console.error(`║  Reason:  ${result.reason.slice(0, 48).padEnd(48)} ║`);
+  console.error(`║  Time:    ${result.checkedAt.toISOString().padEnd(48)} ║`);
+  console.error('╠══════════════════════════════════════════════════════════╣');
+  console.error('║  Fix: cd backend && npx ts-node                          ║');
+  console.error('║       src/services/scrapers/viberate/login.ts            ║');
+  console.error('╚══════════════════════════════════════════════════════════╝');
+  console.error('');
+}
 
   // Send email alert
-  try {
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user, pass },
-    });
+//   try {
+//     const transporter = nodemailer.createTransport({
+//       service: 'gmail',
+//       auth: { user, pass },
+//     });
 
-    await transporter.sendMail({
-      from: user,
-      to,
-      subject: '⚠ ArtistDashboard: Viberate session expired',
-      text: [
-        'Your Viberate session has expired.',
-        '',
-        `Reason: ${result.reason}`,
-        `Detected at: ${result.checkedAt.toISOString()}`,
-        '',
-        'The daily collection did NOT run today.',
-        '',
-        'To fix:',
-        '  1. Open a terminal in your backend folder',
-        '  2. Run: npx ts-node src/services/scrapers/viberate/login.ts',
-        '  3. Log in manually in the browser window that opens',
-        '  4. Press Enter to save the new session',
-        '',
-        'Collection will resume automatically on the next scheduled run.',
-      ].join('\n'),
-    });
+//     await transporter.sendMail({
+//       from: user,
+//       to,
+//       subject: '⚠ ArtistDashboard: Viberate session expired',
+//       text: [
+//         'Your Viberate session has expired.',
+//         '',
+//         `Reason: ${result.reason}`,
+//         `Detected at: ${result.checkedAt.toISOString()}`,
+//         '',
+//         'The daily collection did NOT run today.',
+//         '',
+//         'To fix:',
+//         '  1. Open a terminal in your backend folder',
+//         '  2. Run: npx ts-node src/services/scrapers/viberate/login.ts',
+//         '  3. Log in manually in the browser window that opens',
+//         '  4. Press Enter to save the new session',
+//         '',
+//         'Collection will resume automatically on the next scheduled run.',
+//       ].join('\n'),
+//     });
 
-    console.log(`[session-health] Alert email sent to ${to}`);
-  } catch (err) {
-    console.error('[session-health] Failed to send alert email:', err);
-  }
-}
+//     console.log(`[session-health] Alert email sent to ${to}`);
+//   } catch (err) {
+//     console.error('[session-health] Failed to send alert email:', err);
+//   }
+// }
 
 // ─── Standalone runner ────────────────────────────────────────────────────────
 
