@@ -12,6 +12,14 @@ const router = Router();
 router.get('/', artistController.list);
 
 /**
+ * @route GET /api/v1/artists/leaderboard
+ * @desc All artists ranked by latest ArtistPopularityV2 finalScore
+ * @access Public
+ * NOTE: must be registered BEFORE /:id, or Express matches "leaderboard" as an id
+ */
+router.get('/leaderboard', artistController.leaderboard);
+
+/**
  * @route GET /api/v1/artists/:id
  * @desc Get single artist by ID
  * @access Public
@@ -74,5 +82,19 @@ router.get('/:id/concerts', artistController.getConcerts);
  * @access Public
  */
 router.get('/:id/demographics', artistController.getDemographics);
+
+/**
+ * @route GET /api/v1/artists/:id/score
+ * @desc Latest ArtistPopularityV2 score breakdown (?history=N for trend)
+ * @access Public
+ */
+router.get('/:id/score', artistController.getScore);
+
+/**
+ * @route GET /api/v1/artists/:id/viberate-metrics
+ * @desc Viberate daily time-series (?metric=spotify_listeners&days=30)
+ * @access Public
+ */
+router.get('/:id/viberate-metrics', artistController.getViberateMetrics);
 
 export default router;

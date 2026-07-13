@@ -27,9 +27,10 @@ const SESSION_PATH = path.resolve(__dirname, 'viberate-session.json');
 const BASE_URL = 'https://api.viberate.com/api/v1';
 
 // How many days of history to fetch on each run.
-// 365 days means we always re-fetch the trailing year, which automatically
-// handles Viberate's retroactive corrections to earlier days.
-const LOOKBACK_DAYS = 365;
+// 30 days keeps daily runs light while still re-fetching a trailing window,
+// which absorbs Viberate's retroactive corrections to recent days.
+// (Set to 365 only for one-off historical backfills.)
+const LOOKBACK_DAYS = 30;
 
 // Delay between platform group requests per artist (ms)
 // Keeps us within reasonable request cadence

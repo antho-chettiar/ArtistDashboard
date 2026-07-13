@@ -17,6 +17,7 @@
 
 import cron from 'node-cron';
 import { runCollection } from './collector';
+import { runScorer } from './scorer';
 import { checkSessionHealth, sendSessionAlert } from './sessionHealth';
 
 // 6:00 AM IST = 00:30 UTC
@@ -52,6 +53,10 @@ export function startViberateScheduler(): void {
 
       // Step 2: Run collection
       await runCollection();
+
+      // Step 3: Recompute scores from the fresh data
+      console.log('[viberate-scheduler] Collection done — running scorer');
+      await runScorer();
 
     } catch (err) {
       console.error('[viberate-scheduler] Unexpected error:', err);

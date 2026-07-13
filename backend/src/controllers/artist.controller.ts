@@ -303,7 +303,8 @@ export const artistController = {
   // Get artist metrics with filters
   getMetrics: async (req: any, res: Response) => {
     try {
-      const { artistId } = req.params;
+      // Route declares /:id — read it as the artist id
+      const { id: artistId } = req.params;
       const { platform, dateFrom, dateTo } = req.query;
 
       // Check artist exists
@@ -349,7 +350,8 @@ export const artistController = {
   // Get artist concerts
   getConcerts: async (req: any, res: Response) => {
     try {
-      const { artistId } = req.params;
+      // Route declares /:id — read it as the artist id
+      const { id: artistId } = req.params;
 
       const concerts = await prisma.concert.findMany({
         where: { artistId },
@@ -378,7 +380,8 @@ export const artistController = {
   // Get artist demographics
   getDemographics: async (req: any, res: Response) => {
     try {
-      const { artistId } = req.params;
+      // Route declares /:id — read it as the artist id
+      const { id: artistId } = req.params;
       const { dimension } = req.query;
 
       const where: any = {
@@ -398,6 +401,193 @@ export const artistController = {
       return res.status(200).json({
         success: true,
         data: { demographics },
+      });
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // ─── Viberate / PopularityV2 endpoints ─────────────────────────────────────
+
+  // GET /api/v1/artists/leaderboard
+  // All artists ranked by latest finalScore from ArtistPopularityV2Snapshot
+  leaderboard: async (req: any, res: Response) => {
+    try {
+      const { scoreVersion = 'v2.1-viberate' } = req.query;
+
+      const artists = await prisma.artist.findMany({
+        where: { active: true, viberateSlug: { not: null } },
+        select: {
+          id: true,
+          artistName: true,
+          displayName: true,
+          photoUrl: true,
+          imageUrl: true,
+          genre: true,
+          nationality: true,
+          popularityV2Snapshots: {
+            where: { scoreVersion: scoreVersion as string },
+            orderBy: { computedAt: 'desc' },
+            take: 1,
+          },
+        },
+      });
+
+      const leaderboard = artists
+        .filter((a) => a.popularityV2Snapshots.length > 0)
+        .map((a) => {
+          const snap = a.popularityV2Snapshots[0];
+          return {
+            artistId: a.id,
+            artistName: a.artistName,
+            displayName: a.displayName,
+            photoUrl: a.photoUrl || a.imageUrl,
+            genre: a.genre,
+            nationality: a.nationality,
+            score: {
+              finalScore: Number(snap.finalScore),
+              reachScore: Number(snap.reachScore),
+              engagementMultiplier: Number(snap.engagementMultiplier),
+              adjustedReach: Number(snap.adjustedReach),
+              trendsScore: Number(snap.trendsScore),
+              scoreVersion: snap.scoreVersion,
+              computedAt: snap.computedAt,
+            },
+          };
+        })
+        .sort((a, b) => b.score.finalScore - a.score.finalScore)
+        .map((entry, index) => ({ rank: index + 1, ...entry }));
+
+      const unscored = artists
+        .filter((a) => a.popularityV2Snapshots.length === 0)
+        .map((a) => ({ artistId: a.id, artistName: a.artistName }));
+
+      return res.status(200).json({
+        success: true,
+        data: { leaderboard, unscored, scoreVersion },
+      });
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // GET /api/v1/artists/:id/score
+  // Latest score breakdown for one artist (+ optional history)
+  getScore: async (req: any, res: Response) => {
+    try {
+      const { id: artistId } = req.params;
+      const { scoreVersion = 'v2.1-viberate', history = '0' } = req.query;
+
+      const artist = await prisma.artist.findUnique({
+        where: { id: artistId },
+        select: { id: true, artistName: true },
+      });
+
+      if (!artist) {
+        return res.status(404).json({
+          success: false,
+          message: 'Artist not found',
+          code: 'ARTIST_NOT_FOUND',
+        });
+      }
+
+      const historyCount = Math.min(parseInt(history as string) || 0, 365);
+
+      const snapshots = await prisma.artistPopularityV2Snapshot.findMany({
+        where: { artistId, scoreVersion: scoreVersion as string },
+        orderBy: { computedAt: 'desc' },
+        take: Math.max(1, historyCount),
+      });
+
+      if (snapshots.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'No score snapshots for this artist yet. Run the scorer first.',
+          code: 'SCORE_NOT_FOUND',
+        });
+      }
+
+      const [latest, ...rest] = snapshots;
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          artistId: artist.id,
+          artistName: artist.artistName,
+          latest,
+          history: historyCount > 0 ? [latest, ...rest] : undefined,
+        },
+      });
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  // GET /api/v1/artists/:id/viberate-metrics?metric=spotify_listeners&days=30
+  // Time-series rows from ViberateMetricDaily for charting.
+  // `metric` accepts a single name or comma-separated list.
+  getViberateMetrics: async (req: any, res: Response) => {
+    try {
+      const { id: artistId } = req.params;
+      const { metric, days = '30' } = req.query;
+
+      const artist = await prisma.artist.findUnique({
+        where: { id: artistId },
+        select: { id: true },
+      });
+
+      if (!artist) {
+        return res.status(404).json({
+          success: false,
+          message: 'Artist not found',
+          code: 'ARTIST_NOT_FOUND',
+        });
+      }
+
+      const daysNum = Math.min(Math.max(parseInt(days as string) || 30, 1), 730);
+      const since = new Date();
+      since.setDate(since.getDate() - daysNum);
+
+      const where: any = {
+        artistId,
+        date: { gte: since },
+      };
+
+      if (metric) {
+        const metricNames = (metric as string)
+          .split(',')
+          .map((m) => m.trim())
+          .filter(Boolean);
+        where.metricName = metricNames.length === 1
+          ? metricNames[0]
+          : { in: metricNames };
+      }
+
+      const rows = await prisma.viberateMetricDaily.findMany({
+        where,
+        orderBy: [{ metricName: 'asc' }, { date: 'asc' }],
+        select: {
+          metricName: true,
+          date: true,
+          diffValue: true,
+          totalValue: true,
+        },
+      });
+
+      // Group by metric for easy charting on the frontend
+      const series: Record<string, { date: string; diff: number | null; total: number | null }[]> = {};
+      for (const row of rows) {
+        if (!series[row.metricName]) series[row.metricName] = [];
+        series[row.metricName].push({
+          date: row.date.toISOString().split('T')[0],
+          diff: row.diffValue,
+          total: row.totalValue,
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: { artistId, days: daysNum, series },
       });
     } catch (error) {
       throw error;
