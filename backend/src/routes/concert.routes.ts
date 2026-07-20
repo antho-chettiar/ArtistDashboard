@@ -105,6 +105,20 @@ router.post(
 );
 
 /**
+ * @route POST /api/v1/concerts/ingest/scrapers
+ * @desc Run the registered concert scrapers (BookMyShow, District) and ingest
+ *       their output into the canonical-event pipeline (CanonicalEvent +
+ *       SourceEventReference + duplicate detection + ValidationLog only)
+ * @access Private (Admin)
+ */
+router.post(
+  '/ingest/scrapers',
+  authenticate,
+  isAdmin,
+  concertController.ingestFromScrapers
+);
+
+/**
  * @route POST /api/v1/concerts/predictions/revenue
  * @desc Predict concert revenue, attendance, sellout probability, and demand score
  * @access Private (Admin)

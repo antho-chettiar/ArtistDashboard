@@ -18,6 +18,8 @@ import path from 'path';
 import fs from 'fs';
 import { PrismaClient } from '@prisma/client';
 import { mapGraphResponse, ViberateGraphResponse } from './mapper';
+import { retryWithBackoff } from '../retry';
+import { RateLimiter } from '../rateLimiter';
 
 const prisma = new PrismaClient();
 
@@ -40,6 +42,18 @@ const INTER_REQUEST_JITTER_MS = 1000;
 // Delay between artists (ms)
 const INTER_ARTIST_DELAY_MS = 3000;
 const INTER_ARTIST_JITTER_MS = 2000;
+
+// Retry config for transient fetch failures (network errors, non-200, non-JSON).
+// 401/403 are deliberately NOT retried -- they mean the session died, which
+// retrying can't fix (sessionHealth.ts already gates the whole run on this).
+const FETCH_RETRY_ATTEMPTS = 3;
+const FETCH_RETRY_BASE_DELAY_MS = 1000;
+const FETCH_RETRY_MAX_DELAY_MS = 8000;
+
+// Enforces the minimum spacing above; jitter (below) stays a separate,
+// deliberate anti-fingerprinting concern layered on top of it.
+const interRequestLimiter = new RateLimiter(INTER_REQUEST_DELAY_MS);
+const interArtistLimiter = new RateLimiter(INTER_ARTIST_DELAY_MS);
 
 // ─── Metric groups ───────────────────────────────────────────────────────────
 // Grouped exactly as Viberate fires them — one request per platform group.
@@ -99,11 +113,59 @@ function getDateRange(): { dateFrom: string; dateTo: string } {
   };
 }
 
-function delay(base: number, jitter: number): Promise<void> {
-  return new Promise(res => setTimeout(res, base + Math.random() * jitter));
+// Random jitter on top of the RateLimiter's enforced minimum spacing above --
+// kept as its own helper since jitter (anti-fingerprinting/politeness) is a
+// distinct concern from rate limiting (minimum spacing), not something
+// RateLimiter itself models.
+function jitter(maxMs: number): Promise<void> {
+  return new Promise(res => setTimeout(res, Math.random() * maxMs));
 }
 
 // ─── Fetch one metric group ───────────────────────────────────────────────────
+
+// A single fetch attempt either succeeds, or resolves with a fatal (non-retryable)
+// auth failure -- everything else (non-200, non-JSON, thrown network errors)
+// throws so retryWithBackoff will retry it.
+type FetchAttemptResult =
+  | { ok: true; data: ViberateGraphResponse }
+  | { ok: false; fatal: true; status: number };
+
+async function attemptFetch(
+  context: BrowserContext,
+  url: string,
+  slug: string,
+  metricParam: string
+): Promise<FetchAttemptResult> {
+  // Fresh page per attempt: retrying on the exact page/connection that just
+  // got blocked is worse than a fresh one from the same authenticated context.
+  const page = await context.newPage();
+
+  try {
+    const response = await page.request.get(url);
+    const status = response.status();
+
+    // Session expired mid-run -- retrying won't help, so resolve instead of
+    // throwing (which retryWithBackoff would otherwise retry 3x for nothing).
+    if (status === 401 || status === 403) {
+      return { ok: false, fatal: true, status };
+    }
+
+    if (status !== 200) {
+      throw new Error(`Non-200 for ${slug}/${metricParam}: ${status}`);
+    }
+
+    const contentType = response.headers()['content-type'] || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error(`Non-JSON response for ${slug}/${metricParam}`);
+    }
+
+    const data = await response.json() as ViberateGraphResponse;
+    return { ok: true, data };
+
+  } finally {
+    await page.close();
+  }
+}
 
 async function fetchMetricGroup(
   context: BrowserContext,
@@ -115,29 +177,26 @@ async function fetchMetricGroup(
   const metricParam = metrics.join(',');
   const url = `${BASE_URL}/artist/${slug}/graphs/?date-from=${dateFrom}&date-to=${dateTo}&metric=${metricParam}&period=daily`;
 
-  const page = await context.newPage();
-
   try {
-    const response = await page.request.get(url);
+    const result = await retryWithBackoff(
+      () => attemptFetch(context, url, slug, metricParam),
+      {
+        attempts: FETCH_RETRY_ATTEMPTS,
+        baseDelayMs: FETCH_RETRY_BASE_DELAY_MS,
+        maxDelayMs: FETCH_RETRY_MAX_DELAY_MS,
+      }
+    );
 
-    if (response.status() !== 200) {
-      console.warn(`  [collector] Non-200 for ${slug}/${metricParam}: ${response.status()}`);
+    if (!result.ok) {
+      console.warn(`  [collector] Auth failure (HTTP ${result.status}) for ${slug}/${metricParam} — session likely expired, not retrying`);
       return null;
     }
 
-    const contentType = response.headers()['content-type'] || '';
-    if (!contentType.includes('application/json')) {
-      console.warn(`  [collector] Non-JSON response for ${slug}/${metricParam}`);
-      return null;
-    }
-
-    return await response.json() as ViberateGraphResponse;
+    return result.data;
 
   } catch (err) {
-    console.error(`  [collector] Request error for ${slug}/${metricParam}:`, err);
+    console.error(`  [collector] Request failed for ${slug}/${metricParam} after ${FETCH_RETRY_ATTEMPTS} attempts:`, err);
     return null;
-  } finally {
-    await page.close();
   }
 }
 
@@ -208,7 +267,8 @@ async function collectArtist(
 
     if (!response) {
       console.warn(`  ✗ ${group.platform} — fetch failed, skipping`);
-      await delay(INTER_REQUEST_DELAY_MS, INTER_REQUEST_JITTER_MS);
+      await interRequestLimiter.wait();
+      await jitter(INTER_REQUEST_JITTER_MS);
       continue;
     }
 
@@ -222,7 +282,8 @@ async function collectArtist(
       totalRows += upserted;
     }
 
-    await delay(INTER_REQUEST_DELAY_MS, INTER_REQUEST_JITTER_MS);
+    await interRequestLimiter.wait();
+    await jitter(INTER_REQUEST_JITTER_MS);
   }
 
   return { success: true, rowsUpserted: totalRows };
@@ -306,7 +367,8 @@ export async function runCollection(): Promise<void> {
 
     // Polite delay between artists
     if (artists.indexOf(artist) < artists.length - 1) {
-      await delay(INTER_ARTIST_DELAY_MS, INTER_ARTIST_JITTER_MS);
+      await interArtistLimiter.wait();
+      await jitter(INTER_ARTIST_JITTER_MS);
     }
   }
 

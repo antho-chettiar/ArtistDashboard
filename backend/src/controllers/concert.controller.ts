@@ -6,6 +6,10 @@ import { concertIntelligenceService } from '../services/concertIntelligence.serv
 import { revenuePredictionService } from '../services/predictions/revenuePrediction.service';
 import { ConcertSourcePlatform } from '../services/scrapers/types';
 import { calculateConcertMetrics, withCalculatedConcertRevenue } from '../utils/concertRevenue';
+import {
+  runConcertScraperIngestion,
+  AVAILABLE_SCRAPER_SOURCES,
+} from '../services/ingestion/concertScraperIngestion.service';
 
 const SUPPORTED_INTELLIGENCE_SOURCES: ConcertSourcePlatform[] = [
   'BOOKMYSHOW',
@@ -485,6 +489,92 @@ export const concertController = {
         data: { jobId },
         message: 'Concert intelligence scrape job enqueued',
       });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Internal server error',
+      });
+    }
+  },
+
+  // Run the registered ConcertSourceScraper implementations (BookMyShow,
+  // District) and ingest their output into the existing canonical-event
+  // pipeline. Stops after CanonicalEvent + SourceEventReference + duplicate
+  // detection + ValidationLog -- no Concert/prediction/analytics in this phase.
+  ingestFromScrapers: async (req: any, res: Response) => {
+    try {
+      const inProgress = await prisma.ingestionJob.findFirst({
+        where: { jobType: 'CONCERT_SCRAPE', status: 'RUNNING' },
+      });
+
+      if (inProgress) {
+        return res.status(409).json({
+          success: false,
+          message: `A concert scraper ingestion job is already running (jobId: ${inProgress.id})`,
+        });
+      }
+
+      const { sources, artists, cities, country, dateFrom, dateTo, limitPerSource, maxPages } = req.body;
+
+      // Validated against the sources actually registered in
+      // concertScraperIngestion.service.ts, NOT the older SUPPORTED_INTELLIGENCE_SOURCES
+      // constant above -- that list excludes 'ZOMATO' (District), which would
+      // otherwise silently drop District from any sources-filtered request.
+      const parsedSources = Array.isArray(sources)
+        ? sources
+            .map((source: unknown) => String(source).toUpperCase())
+            .filter((source: string): source is ConcertSourcePlatform =>
+              AVAILABLE_SCRAPER_SOURCES.includes(source as ConcertSourcePlatform)
+            )
+        : undefined;
+
+      const query = {
+        sources: parsedSources && parsedSources.length ? parsedSources : undefined,
+        artists: Array.isArray(artists) ? artists.map(String) : undefined,
+        cities: Array.isArray(cities) ? cities.map(String) : undefined,
+        country: country ? String(country) : undefined,
+        dateFrom: parseOptionalDate(dateFrom),
+        dateTo: parseOptionalDate(dateTo),
+        limitPerSource: limitPerSource ? Number(limitPerSource) : undefined,
+        maxPages: maxPages ? Number(maxPages) : undefined,
+      };
+
+      const job = await prisma.ingestionJob.create({
+        data: { jobType: 'CONCERT_SCRAPE', status: 'RUNNING' },
+      });
+
+      const startTime = Date.now();
+
+      try {
+        const result = await runConcertScraperIngestion(query);
+
+        await prisma.ingestionJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'SUCCESS',
+            rowCount: result.totalRawEvents,
+            duration: Math.floor((Date.now() - startTime) / 1000),
+            completedAt: new Date(),
+          },
+        });
+
+        return res.status(200).json({
+          success: true,
+          data: { jobId: job.id, ...result },
+          message: 'Scraper ingestion completed successfully',
+        });
+      } catch (error: any) {
+        await prisma.ingestionJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: error.message || 'Unknown error',
+            duration: Math.floor((Date.now() - startTime) / 1000),
+            completedAt: new Date(),
+          },
+        });
+        throw error;
+      }
     } catch (error: any) {
       return res.status(500).json({
         success: false,

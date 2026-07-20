@@ -16,15 +16,28 @@
  */
 
 import cron from 'node-cron';
+import { randomUUID } from 'crypto';
 import { runCollection } from './collector';
 import { runSync } from './sync';
 import { runScorer } from './scorer';
 import { checkSessionHealth, sendSessionAlert } from './sessionHealth';
+import { ScrapingJobQueue } from '../jobQueue';
 
 // 6:00 AM IST = 00:30 UTC
 const CRON_SCHEDULE = '30 0 * * *';
 
 let isRunning = false;
+
+// Job payload for this scraper only -- kept local rather than in the shared
+// scrapers/types.ts, which holds types shared across multiple scrapers/consumers.
+interface ViberateScrapeJob {
+  id: string;
+  triggeredAt: string;
+}
+
+// Own namespace ('viberate') so this never shares Redis keys with the
+// concert-scraper queue (`scrapingJobQueue`, namespace 'concert').
+const viberateJobQueue = new ScrapingJobQueue<ViberateScrapeJob>('viberate');
 
 export function startViberateScheduler(): void {
   console.log('[viberate-scheduler] Starting — will run daily at 6:00 AM IST');
@@ -37,6 +50,22 @@ export function startViberateScheduler(): void {
 
     isRunning = true;
     console.log(`[viberate-scheduler] Triggered at ${new Date().toISOString()}`);
+
+    // Route this tick through the shared job queue so the enqueue/dequeue
+    // pattern is established for future scrapers to reuse. This is scaffolding,
+    // not a real async dispatch mechanism yet -- it enqueues and immediately
+    // drains in the same tick, so it can never change collection timing/output.
+    // Best-effort only: must never block or fail the actual run below.
+    try {
+      const job: ViberateScrapeJob = { id: randomUUID(), triggeredAt: new Date().toISOString() };
+      await viberateJobQueue.enqueue(job);
+      const dequeued = await viberateJobQueue.dequeue();
+      if (dequeued) {
+        console.log(`[viberate-scheduler] Dispatched job ${dequeued.id} via ScrapingJobQueue`);
+      }
+    } catch (err) {
+      console.warn('[viberate-scheduler] Job queue enqueue/dequeue failed (non-fatal):', err);
+    }
 
     try {
       // Step 1: Check session health before doing anything
