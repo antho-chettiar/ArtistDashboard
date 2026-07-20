@@ -44,14 +44,16 @@ export function useArtists({ search = '', genre = '', limit = 100 } = {}) {
       return acc
     }, {})
 
+    // Keyed strictly by platform so totalFollowers/topPlatform math (in Artists.jsx)
+    // isn't double-counted by aliases of the same Spotify number.
     const followers = {
       instagram: Number(artist.instagramFollowers || metricsByPlatform.instagram?.followers || 0),
       youtube: Number(artist.youtubeSubscribers || metricsByPlatform.youtube?.followers || 0),
       spotify: Number(artist.spotifyFollowers || 0),
-      spotifyFollowers: Number(artist.spotifyFollowers || 0),
-      spotifyMonthlyListeners: Number(artist.spotifyMonthlyListeners || 0),
       facebook: Number(artist.facebookFollowers || metricsByPlatform.facebook?.followers || 0),
     }
+
+    const spotifyMonthlyListeners = Number(artist.spotifyMonthlyListeners || 0)
 
     const rog = {
       instagram: Number(metricsByPlatform.instagram?.rogDaily || 0),
@@ -72,6 +74,7 @@ export function useArtists({ search = '', genre = '', limit = 100 } = {}) {
       popularity: artist.popularity || 0,
       monthlyStreams: artist.monthlyStreams || 0,
       followers,
+      spotifyMonthlyListeners,
       rog,
       photo: artist.photoUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(artist.artistName || artist.name || 'Unknown')}&background=6366F1&color=fff`,
     }

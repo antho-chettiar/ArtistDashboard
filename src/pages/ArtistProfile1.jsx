@@ -10,10 +10,8 @@ import PieChart from '../components/charts/PieChart'
 import EmptyState from '../components/ui/EmptyState'
 import client from '../api/client'
 import { formatNumber, formatCurrency, formatDate } from '../utils/formatters'
-import ViberateTrends from '../components/viberate/ViberateTrends'
-import ScoreBreakdown from '../components/viberate/ScoreBreakdown'
 
-const TABS = ['Platforms', 'Growth Trends', 'Concerts', 'Viberate Trends', 'Score', 'Demographics']
+const TABS = ['Platforms', 'Growth Trends', 'Concerts', 'Demographics']
 
 const PLATFORM_META = {
   instagram: { label: 'Instagram', color: '#E1306C' },
@@ -173,15 +171,11 @@ function ArtistProfile() {
   const followers = {
     instagram: followerMap.get('instagram') || Number(artist.instagramFollowers) || 0,
     youtube: followerMap.get('youtube') || Number(artist.youtubeSubscribers) || 0,
-    // platform_metrics.SPOTIFY.followers stores Spotify *monthly listeners*, not the
-    // follower count -- use the Artist column directly so this stays distinct from
-    // spotifyMonthlyListeners below (matches Artists.jsx list card behavior).
-    spotify: Number(artist.spotifyFollowers) || 0,
+    spotify: followerMap.get('spotify') || Number(artist.spotifyFollowers) || 0,
+    spotifyMonthlyListeners: followerMap.get('spotify') || Number(artist.spotifyMonthlyListeners) || 0,
     facebook: followerMap.get('facebook') || Number(artist.facebookFollowers) || 0,
     applemusic: followerMap.get('applemusic') || 0,
   }
-
-  const spotifyMonthlyListeners = followerMap.get('spotify') || Number(artist.spotifyMonthlyListeners) || 0
 
   const rog = {
     instagram: rogMap.get('instagram') || 0,
@@ -298,7 +292,7 @@ function ArtistProfile() {
             {/* KPI Strip */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
-                { label: 'Spotify Monthly Listeners', value: formatNumber(spotifyMonthlyListeners), icon: Users, color: 'var(--accent-indigo)' },
+                { label: 'Spotify Monthly Listeners', value: formatNumber(followers.spotifyMonthlyListeners), icon: Users, color: 'var(--accent-indigo)' },
                 { label: 'Top Platform', value: Object.entries(followers).sort((a, b) => b[1] - a[1])[0][0] || 'N/A', icon: TrendingUp, color: 'var(--accent-gold)' },
                 { label: 'Total Revenue', value: formatCurrency(totalRevenue), icon: DollarSign, color: 'var(--accent-green)' },
                 { label: 'Tickets Sold', value: formatNumber(totalTickets), icon: Ticket, color: 'var(--accent-red)' },
@@ -391,8 +385,7 @@ function ArtistProfile() {
           <LineChart data={trendData} xKey="date" lines={TREND_LINES} height={320} />
         </ChartContainer>
       )}
-{activeTab === 'Viberate Trends' && <ViberateTrends artistId={id} />}
-{activeTab === 'Score' && <ScoreBreakdown artistId={id} />}
+
       {/* ── Tab: Concerts ── */}
       {activeTab === 'Concerts' && (
         transformedConcerts.length === 0 ? (

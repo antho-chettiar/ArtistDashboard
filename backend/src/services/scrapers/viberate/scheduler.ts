@@ -17,6 +17,7 @@
 
 import cron from 'node-cron';
 import { runCollection } from './collector';
+import { runSync } from './sync';
 import { runScorer } from './scorer';
 import { checkSessionHealth, sendSessionAlert } from './sessionHealth';
 
@@ -54,8 +55,13 @@ export function startViberateScheduler(): void {
       // Step 2: Run collection
       await runCollection();
 
-      // Step 3: Recompute scores from the fresh data
-      console.log('[viberate-scheduler] Collection done — running scorer');
+      // Step 3: Sync fresh Viberate data into the legacy Artist columns
+      // and PlatformMetric table that the rest of the dashboard reads from
+      console.log('[viberate-scheduler] Collection done — running sync');
+      await runSync();
+
+      // Step 4: Recompute scores from the fresh data
+      console.log('[viberate-scheduler] Sync done — running scorer');
       await runScorer();
 
     } catch (err) {

@@ -218,7 +218,7 @@ function ArtistCard({ artist, onClick, delay = 0 }) {
         <p className="text-xs uppercase tracking-widest mb-1"
           style={{ color: 'var(--text-muted)', fontSize: '10px' }}>Spotify Monthly Listeners</p>
         <p className="font-display font-bold text-2xl" style={{ color: 'var(--text-primary)' }}>
-          {formatNumber(artist.spotifyMonthlyListeners || 0)}
+          {formatNumber(followers.spotifyMonthlyListeners || 0)}
         </p>
       </div>
 
