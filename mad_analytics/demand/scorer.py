@@ -13,7 +13,9 @@ Input:  DemandInput
 Output: DemandOutput
 """
 from __future__ import annotations
+import logging
 from datetime import datetime, timezone, timedelta
+from typing import Callable, Optional
 
 from ..utils.schemas import DemandInput, DemandOutput
 from ..utils.db import fetch_artist_snapshots
@@ -143,6 +145,117 @@ def _recency_score(concerts, city: str, country: str) -> float:
     if days_since < 180:
         return 0.8
     return 0.9       # long absence → strong anticipation
+
+
+# ── City Affinity Score (Formula Blueprint v2.0 — Step 3) ─────────────────────
+#
+#   city_affinity = city_tier_factor × market_activity_index × 100
+#
+# city_tier_factor is a documented static table (below). market_activity_index is
+# a 0–1 signal of how active the live-music market is in that city; by default it
+# is the count of concerts in the city over the last 12 months, normalized by the
+# busiest city (count / max_count).
+#
+# NCCS PLUG-POINT: market_activity_index is produced by a *provider* function.
+# The default provider reads the concerts table; a future NCCS-backed provider can
+# be passed to city_affinity_scores() / city_affinity_for_city() to replace the
+# market-activity source WITHOUT changing this formula or the public interface.
+
+logger = logging.getLogger(__name__)
+
+CITY_TIER_FACTORS = {
+    # Tier 1 — Mega
+    "mumbai": 1.00, "delhi": 1.00, "new delhi": 1.00, "delhi ncr": 1.00,
+    # Tier 2 — Major
+    "bangalore": 0.85, "bengaluru": 0.85, "hyderabad": 0.85, "chennai": 0.85, "kolkata": 0.85,
+    # Tier 3 — Large
+    "pune": 0.75, "ahmedabad": 0.75, "jaipur": 0.75, "chandigarh": 0.75,
+}
+DEFAULT_CITY_TIER_FACTOR = 0.65   # Tier 4 — all remaining metros
+
+# A market-activity provider returns {city_lower: market_activity_index_0_1}.
+MarketActivityProvider = Callable[[], "dict[str, float]"]
+
+
+def city_tier_factor(city: str) -> float:
+    """Resolve the documented city tier factor (defaults to 0.65 for other cities)."""
+    if not city:
+        return DEFAULT_CITY_TIER_FACTOR
+    return CITY_TIER_FACTORS.get(city.strip().lower(), DEFAULT_CITY_TIER_FACTOR)
+
+
+def city_affinity_score(city: str, market_activity_index: float) -> float:
+    """Pure: city_affinity = city_tier_factor(city) × market_activity_index × 100.
+
+    market_activity_index is clamped to [0, 1]. Output 0–100. No DB — offline-testable.
+    """
+    idx = max(0.0, min(1.0, float(market_activity_index or 0.0)))
+    return round(min(100.0, max(0.0, city_tier_factor(city) * idx * 100.0)), 2)
+
+
+def _concert_market_activity() -> dict[str, float]:
+    """Default market-activity provider: concerts per city in the last 12 months,
+    normalized by the busiest city (count / max_count) into [0, 1].
+
+    Returns {city_lower: index}. Returns {} on any failure (so callers treat the
+    component as unavailable rather than fabricating a value).
+    """
+    import os
+    try:
+        from sqlalchemy import create_engine, text as sql_text
+        db_url = os.environ.get("DATABASE_URL")
+        if not db_url:
+            return {}
+        normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+        engine = create_engine(normalized)
+        with engine.connect() as conn:
+            rows = conn.execute(sql_text("""
+                SELECT LOWER(city) AS city, COUNT(*) AS cnt
+                FROM concerts
+                WHERE "concertDate" >= CURRENT_DATE - INTERVAL '12 months'
+                  AND city IS NOT NULL AND city <> ''
+                GROUP BY LOWER(city)
+            """)).mappings().all()
+        engine.dispose()
+    except Exception as e:
+        logger.warning(f"[Demand] Failed to fetch concert market activity: {e}")
+        return {}
+
+    counts = {row["city"]: float(row["cnt"]) for row in rows if row["city"]}
+    if not counts:
+        return {}
+    hi = max(counts.values())
+    if hi <= 0:
+        return {}
+    return {city: min(1.0, cnt / hi) for city, cnt in counts.items()}
+
+
+def city_affinity_scores(
+    market_activity_provider: Optional[MarketActivityProvider] = None,
+) -> dict[str, float]:
+    """City Affinity (0–100) for every city that has market-activity data.
+
+    Pass a different provider (e.g. a future NCCS-backed one) to swap the
+    market-activity source without touching the formula. Returns {city_lower: score}.
+    """
+    provider = market_activity_provider or _concert_market_activity
+    activity = provider()
+    return {city: city_affinity_score(city, idx) for city, idx in activity.items()}
+
+
+def city_affinity_for_city(
+    city: str,
+    market_activity_provider: Optional[MarketActivityProvider] = None,
+) -> Optional[float]:
+    """City Affinity (0–100) for a single city, or None when there is no
+    market-activity data for it (so the Demand blend renormalizes it out).
+    """
+    provider = market_activity_provider or _concert_market_activity
+    activity = provider()
+    key = (city or "").strip().lower()
+    if key not in activity:
+        return None
+    return city_affinity_score(city, activity[key])
 
 
 # ── Main entry point ───────────────────────────────────────────────────────────
