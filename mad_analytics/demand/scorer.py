@@ -95,7 +95,11 @@ def platform_size_scores() -> dict[str, float]:
     Returns {artist_id: score_0_100}. Returns {} if no snapshot data is available
     (so callers renormalize this component out rather than fabricating a value).
     """
-    artists = fetch_artist_snapshots()
+    try:
+        artists = fetch_artist_snapshots()
+    except Exception as e:
+        logger.warning(f"[Demand] Platform Size unavailable (snapshot fetch failed): {e}")
+        return {}
     if not artists:
         return {}
 
@@ -258,31 +262,104 @@ def city_affinity_for_city(
     return city_affinity_score(city, activity[key])
 
 
+# ── Demand Score (Formula Blueprint v2.0 — Step 4) ────────────────────────────
+#
+#   Demand = PlatformSize*0.35 + Momentum*0.35 + GoogleTrends*0.20 + CityAffinity*0.10
+#
+# All four components are 0–100. Missing components are renormalized out (present
+# weights rescaled to sum to 1.0) so a missing Google-Trends or city-affinity
+# signal never silently zeroes the score and no value is fabricated.
+
+DEMAND_WEIGHTS = {
+    "platform_size": 0.35,
+    "momentum":      0.35,   # cross_platform_score (growth module / useMadGrowth)
+    "google_trends": 0.20,
+    "city_affinity": 0.10,
+}
+
+
+def _blend_demand(
+    platform_size: Optional[float],
+    momentum: Optional[float],
+    google_trends: Optional[float],
+    city_affinity: Optional[float],
+) -> tuple[float, dict[str, float], dict[str, float]]:
+    """Apply the Demand blend, renormalizing over available components.
+
+    Pure function — no DB — so it is unit-testable offline.
+    Returns (score_0_100, components_present, effective_weights).
+    """
+    spec = [
+        ("platform_size", platform_size),
+        ("momentum", momentum),
+        ("google_trends", google_trends),
+        ("city_affinity", city_affinity),
+    ]
+    present = [(name, float(val), DEMAND_WEIGHTS[name]) for name, val in spec if val is not None]
+    components = {name: round(val, 4) for name, val, _ in present}
+    total_w = sum(w for _, _, w in present)
+    if total_w <= 0:
+        return 0.0, components, {}
+    score = round(min(100.0, max(0.0, sum(val * w for _, val, w in present) / total_w)), 2)
+    effective = {name: round(w / total_w, 4) for name, _, w in present}
+    return score, components, effective
+
+
+def _artist_momentum_from_metrics(artist_id: str, metrics) -> Optional[float]:
+    """Momentum = cross_platform_score from the growth module (useMadGrowth),
+    computed from the payload's platform_metrics. None if it can't be computed."""
+    try:
+        from ..growth.rog_calculator import calculate as growth_calculate
+        from ..utils.schemas import GrowthInput
+        result = growth_calculate(GrowthInput(artist_id=artist_id, metrics=metrics))
+        return result.cross_platform_score
+    except Exception as e:
+        logger.warning(f"[Demand] Momentum calc failed for {artist_id}: {e}")
+        return None
+
+
+def _google_trends_for_artist(artist_id: str) -> Optional[float]:
+    """Stored Google Trends score for an artist (reuses the popularity module's
+    DB helpers). Returns None when unavailable (pytrends not yet run)."""
+    try:
+        from ..popularity.calculator import _get_artist_name, _fetch_stored_trends_scores
+        name = _get_artist_name(artist_id)
+        if not name:
+            return None
+        return _fetch_stored_trends_scores().get(name)
+    except Exception as e:
+        logger.warning(f"[Demand] Google Trends lookup failed for {artist_id}: {e}")
+        return None
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 def calculate(payload: DemandInput) -> DemandOutput:
     """
-    Compute the composite demand score.
+    Compute the composite demand score (Formula Blueprint v2.0):
 
-    Each component returns a 0–1 float.
-    Final score = weighted sum × 100, clamped to [0, 100].
+        Demand = PlatformSize*0.35 + Momentum*0.35 + GoogleTrends*0.20 + CityAffinity*0.10
+
+    Each component is 0–100. Weights are renormalized over whichever components are
+    available. The returned `components` dict reports only the present components.
     """
-    df = metrics_to_df(payload.platform_metrics)
+    # Platform Size (Step 2) — needs the artist cohort, so computed over snapshots.
+    platform_size = platform_size_scores().get(payload.artist_id)
 
-    sv = social_velocity(df, days=14)
-    tv = ticket_velocity(payload.recent_concerts, days_back=90)
-    sf = seasonality_factor(payload.target_date, payload.city)
-    rv = _recency_score(payload.recent_concerts, payload.city, payload.country)
+    # Momentum = cross_platform_score (growth module / useMadGrowth) from payload metrics.
+    momentum = _artist_momentum_from_metrics(payload.artist_id, payload.platform_metrics)
 
-    components = {
-        "social_velocity": round(sv, 4),
-        "ticket_velocity": round(tv, 4),
-        "seasonality":     round(sf, 4),
-        "recency":         round(rv, 4),
-    }
+    # Google Trends — explicit input > stored DB score > unavailable.
+    google_trends = payload.google_trends_score
+    if google_trends is None:
+        google_trends = _google_trends_for_artist(payload.artist_id)
 
-    raw_score = sum(WEIGHTS[k] * v for k, v in components.items())
-    score = round(min(100.0, max(0.0, raw_score * 100)), 2)
+    # City Affinity (Step 3) for the target city — None if no market-activity data.
+    city_affinity = city_affinity_for_city(payload.city)
+
+    score, components, _effective = _blend_demand(
+        platform_size, momentum, google_trends, city_affinity
+    )
 
     return DemandOutput(
         artist_id=payload.artist_id,

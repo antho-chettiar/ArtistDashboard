@@ -126,6 +126,11 @@ class DemandInput(BaseModel):
     target_date: date
     platform_metrics: list[PlatformMetricRow] = Field(..., min_length=7)
     recent_concerts: list[ConcertRow] = Field(default_factory=list)
+    # Google Trends interface (Blueprint v2.0): callers may supply a precomputed
+    # 0–100 search-interest score. When omitted, the demand scorer falls back to
+    # the stored artists.googleTrendsScore, else treats the component as
+    # unavailable (renormalized out). Never fabricated.
+    google_trends_score: Optional[float] = None
 
 
 class DemandOutput(BaseModel):

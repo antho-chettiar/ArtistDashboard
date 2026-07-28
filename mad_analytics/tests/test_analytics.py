@@ -175,9 +175,13 @@ class TestDemandScorer:
         assert 0 <= out.score <= 100
 
     def test_components_present(self):
+        # Blueprint v2.0 demand components: platform_size, momentum, google_trends,
+        # city_affinity. Only *available* components are reported; momentum is
+        # computable from the payload metrics alone (no DB), so it is always present.
         out = demand_calc(self._payload())
-        for key in ("social_velocity", "ticket_velocity", "seasonality", "recency"):
-            assert key in out.components
+        valid = {"platform_size", "momentum", "google_trends", "city_affinity"}
+        assert set(out.components).issubset(valid)
+        assert "momentum" in out.components
 
     def test_high_ticket_velocity_raises_score(self):
         base_out = demand_calc(self._payload())
@@ -201,8 +205,17 @@ class TestDemandScorer:
         high_out = demand_calc(payload)
         assert high_out.score >= base_out.score
 
-    def test_recent_concert_lowers_score(self):
-        """Artist who played last week should have lower recency score."""
+    def test_recent_concerts_do_not_affect_score(self):
+        """Blueprint v2.0 is signals-only ("No historical ticket sales data used"):
+        recent concert history no longer feeds the demand score — the ticket-velocity
+        and recency components were removed. Adding a recent concert must not change it.
+        """
+        metrics = make_metrics(60, "spotify") + make_metrics(60, "instagram")
+        without = DemandInput(
+            artist_id="artist_001", city="Mumbai", country="India",
+            target_date=date.today() + timedelta(days=30),
+            platform_metrics=metrics, recent_concerts=[],
+        )
         very_recent = [
             ConcertRow(
                 concert_id="c_recent", artist_id="artist_001",
@@ -211,14 +224,12 @@ class TestDemandScorer:
                 date=date.today() - timedelta(days=5),
             )
         ]
-        metrics = make_metrics(60, "spotify") + make_metrics(60, "instagram")
-        payload = DemandInput(
+        with_recent = DemandInput(
             artist_id="artist_001", city="Mumbai", country="India",
             target_date=date.today() + timedelta(days=30),
             platform_metrics=metrics, recent_concerts=very_recent,
         )
-        out = demand_calc(payload)
-        assert out.components["recency"] <= 0.3
+        assert demand_calc(with_recent).score == demand_calc(without).score
 
 
 # ── Revenue module ─────────────────────────────────────────────────────────────
