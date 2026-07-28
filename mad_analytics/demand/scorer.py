@@ -441,6 +441,30 @@ def _concerts_in_city_last_90d(city: str) -> Optional[int]:
         return None
 
 
+# ── Confidence Score (Formula Blueprint v2.0 — Step 7) ────────────────────────
+#
+# Signal-completeness tier (Prediction_Formula §6):
+#   High         — platform metrics + Google Trends + city data all present
+#   Medium       — two of the three signals present
+#   Low          — only platform metrics present
+#   Insufficient — no platform data (no usable prediction)
+
+def compute_confidence(
+    platform_present: bool,
+    trends_present: bool,
+    city_present: bool,
+) -> str:
+    """Pure confidence tier from signal availability. Offline-testable."""
+    if not platform_present:
+        return "Insufficient"
+    signals = int(platform_present) + int(trends_present) + int(city_present)
+    if signals >= 3:
+        return "High"
+    if signals == 2:
+        return "Medium"
+    return "Low"
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 def calculate(payload: DemandInput) -> DemandOutput:
@@ -477,6 +501,14 @@ def calculate(payload: DemandInput) -> DemandOutput:
         google_trends,
     )
 
+    # Confidence tier (Step 7) — signal completeness across platform / trends / city.
+    platform_present = platform_size is not None or momentum is not None
+    confidence = compute_confidence(
+        platform_present,
+        google_trends is not None,
+        city_affinity is not None,
+    )
+
     return DemandOutput(
         artist_id=payload.artist_id,
         city=payload.city,
@@ -484,4 +516,5 @@ def calculate(payload: DemandInput) -> DemandOutput:
         components=components,
         computed_at=datetime.now(timezone.utc).isoformat(),
         risk=risk,
+        confidence=confidence,
     )

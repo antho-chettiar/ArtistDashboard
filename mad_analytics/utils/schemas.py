@@ -143,6 +143,9 @@ class DemandOutput(BaseModel):
     # flags: {market_saturation, momentum_volatility, trends_recency_gap}}.
     # None when no flag is computable (inputs unavailable). Additive / non-breaking.
     risk: Optional[dict] = None
+    # Blueprint v2.0 Confidence tier (Step 7): "High" | "Medium" | "Low" |
+    # "Insufficient", based on availability of platform / Google-Trends / city signals.
+    confidence: Optional[str] = None
 
 
 # ── Revenue ───────────────────────────────────────────────────────────────────
