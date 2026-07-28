@@ -600,10 +600,19 @@ def _scheduler_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start background scheduler on server startup."""
-    thread = threading.Thread(target=_scheduler_loop, daemon=True, name="mad-scheduler")
-    thread.start()
-    logger.info("[Server] Background scheduler thread started.")
+    """Start background scheduler on server startup.
+
+    Set DISABLE_SCHEDULER=1 (or true/yes) to serve the analytics endpoints WITHOUT
+    the background scraper/retrain loop — useful for local/API-only runs. Defaults
+    to enabled, so normal deployments are unchanged.
+    """
+    scheduler_disabled = os.environ.get("DISABLE_SCHEDULER", "").strip().lower() in ("1", "true", "yes")
+    if scheduler_disabled:
+        logger.info("[Server] Background scheduler DISABLED (DISABLE_SCHEDULER set). Endpoints only.")
+    else:
+        thread = threading.Thread(target=_scheduler_loop, daemon=True, name="mad-scheduler")
+        thread.start()
+        logger.info("[Server] Background scheduler thread started.")
     yield
     global _scheduler_running
     _scheduler_running = False
