@@ -137,8 +137,12 @@ class DemandOutput(BaseModel):
     artist_id: str
     city: str
     score: float = Field(..., ge=0, le=100)
-    components: dict[str, float]    # social_velocity, ticket_velocity, seasonality, recency
+    components: dict[str, float]    # platform_size, momentum, google_trends, city_affinity
     computed_at: str
+    # Blueprint v2.0 Risk Score (Step 6): {score: 0-1, level: Low|Medium|High,
+    # flags: {market_saturation, momentum_volatility, trends_recency_gap}}.
+    # None when no flag is computable (inputs unavailable). Additive / non-breaking.
+    risk: Optional[dict] = None
 
 
 # ── Revenue ───────────────────────────────────────────────────────────────────
