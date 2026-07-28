@@ -164,6 +164,26 @@ def _heuristic_revenue(feature_dict: dict) -> float:
     return capacity * avg_price * sell_through
 
 
+def signal_revenue(
+    demand_score: float, city: str, capacity: float, avg_ticket_price: float
+) -> tuple[float, int, float]:
+    """Formula Blueprint v2.0 (Step 5) — signals-only revenue, no historical ticket data:
+
+        sell_through = (demand_score / 100) * city_tier_factor(city)   # clamped [0, 1]
+        tickets      = capacity * sell_through
+        revenue      = tickets * avg_ticket_price
+
+    Returns (sell_through, tickets, revenue). Pure — offline-testable. Revenue is in
+    the same (local) currency as avg_ticket_price. city_tier_factor is reused from the
+    demand module (Step 3) so tiering stays consistent across the analytics engine.
+    """
+    from ..demand.scorer import city_tier_factor
+    st = max(0.0, min(1.0, (float(demand_score) / 100.0) * city_tier_factor(city)))
+    tickets = int(round(max(0.0, float(capacity)) * st))
+    revenue = round(tickets * max(0.0, float(avg_ticket_price)), 2)
+    return round(st, 4), tickets, revenue
+
+
 def calculate(payload: RevenueInput) -> RevenueOutput:
     """
     Predict concert revenue.
@@ -241,6 +261,15 @@ def calculate(payload: RevenueInput) -> RevenueOutput:
     lower_usd = local_to_usd(lower_local, local_currency)
     upper_usd = local_to_usd(upper_local, local_currency)
 
+    # ── Signals-only revenue (Blueprint v2.0 Step 5) — additive cross-check ──
+    # Does not alter predicted_revenue (GradientBoosting stays the headline number).
+    sig_sell_through, sig_tickets, sig_revenue = signal_revenue(
+        feature_dict["demand_score"],
+        concert.city,
+        feature_dict["venue_capacity"],
+        feature_dict["avg_ticket_price"],
+    )
+
     return RevenueOutput(
         concert_id=concert.concert_id,
         artist_id=concert.artist_id,
@@ -256,4 +285,8 @@ def calculate(payload: RevenueInput) -> RevenueOutput:
         lower_bound_usd=lower_usd,
         upper_bound_usd=upper_usd,
         exchange_rate=exchange_rate,
+        signal_revenue=sig_revenue,
+        signal_tickets=sig_tickets,
+        signal_sell_through=sig_sell_through,
+        signal_avg_ticket_price=round(feature_dict["avg_ticket_price"], 2),
     )

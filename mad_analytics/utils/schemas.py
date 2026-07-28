@@ -171,6 +171,13 @@ class RevenueOutput(BaseModel):
     lower_bound_usd: Optional[float] = None
     upper_bound_usd: Optional[float] = None
     exchange_rate: Optional[float] = None       # USD → local currency rate
+    # Blueprint v2.0 signals-only revenue (cross-check; no historical ticket data):
+    #   sell_through = (demand/100) * city_tier_factor; tickets = capacity * sell_through;
+    #   revenue = tickets * avg_ticket_price. In local currency. None if not computed.
+    signal_revenue: Optional[float] = None
+    signal_tickets: Optional[int] = None
+    signal_sell_through: Optional[float] = None
+    signal_avg_ticket_price: Optional[float] = None
 
 
 class PopularityInput(BaseModel):
