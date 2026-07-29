@@ -1,0 +1,303 @@
+[
+  {
+    "city": "Delhi",
+    "population": 30222405.0,
+    "nccs_a": 7037710.117919999,
+    "nccs_b": 8446104.413325,
+    "nccs_c": 6577846.00344
+  },
+  {
+    "city": "Mumbai",
+    "population": 22089000.0,
+    "nccs_a": 5271473.583,
+    "nccs_b": 6107232.987,
+    "nccs_c": 4767601.404
+  },
+  {
+    "city": "Kolkata",
+    "population": 15850000.0,
+    "nccs_a": 2496137.25,
+    "nccs_b": 3862359.7,
+    "nccs_c": 3957063.4499999997
+  },
+  {
+    "city": "Bengaluru",
+    "population": 14395000.0,
+    "nccs_a": 3260251.5749999997,
+    "nccs_b": 3850460.97,
+    "nccs_c": 3063903.775
+  },
+  {
+    "city": "Chennai",
+    "population": 12667046.0,
+    "nccs_a": 2399987.204482,
+    "nccs_b": 3312242.52331,
+    "nccs_c": 2830907.4423559997
+  },
+  {
+    "city": "Hyderabad",
+    "population": 11008322.0,
+    "nccs_a": 2056816.899124,
+    "nccs_b": 2860666.5882079997,
+    "nccs_c": 2437991.056696
+  },
+  {
+    "city": "Ahmedabad",
+    "population": 9062000.0,
+    "nccs_a": 1626311.83,
+    "nccs_b": 2309568.506,
+    "nccs_c": 2110050.452
+  },
+  {
+    "city": "Surat",
+    "population": 8582000.0,
+    "nccs_a": 1445740.884,
+    "nccs_b": 2142453.39,
+    "nccs_c": 2089588.27
+  },
+  {
+    "city": "Pune",
+    "population": 7526000.0,
+    "nccs_a": 1494987.2179999999,
+    "nccs_b": 1946562.27,
+    "nccs_c": 1631990.522
+  },
+  {
+    "city": "Jaipur",
+    "population": 4455000.0,
+    "nccs_a": 706750.11,
+    "nccs_b": 1090882.485,
+    "nccs_c": 1107704.565
+  },
+  {
+    "city": "Lucknow",
+    "population": 4133000.0,
+    "nccs_a": 557405.311,
+    "nccs_b": 969953.105,
+    "nccs_c": 1102862.119
+  },
+  {
+    "city": "Indore",
+    "population": 3483000.0,
+    "nccs_a": 602022.618,
+    "nccs_b": 866020.086,
+    "nccs_c": 796377.5009999999
+  },
+  {
+    "city": "Ghaziabad",
+    "population": 3474000.0,
+    "nccs_a": 631027.782,
+    "nccs_b": 877699.1519999999,
+    "nccs_c": 770755.536
+  },
+  {
+    "city": "Kanpur",
+    "population": 3345000.0,
+    "nccs_a": 430317.525,
+    "nccs_b": 764810.8350000001,
+    "nccs_c": 919423.425
+  },
+  {
+    "city": "Patna",
+    "population": 3309383.0,
+    "nccs_a": 385493.478755,
+    "nccs_b": 740133.5798010001,
+    "nccs_c": 938680.012886
+  },
+  {
+    "city": "Nagpur",
+    "population": 3257841.0,
+    "nccs_a": 478387.888122,
+    "nccs_b": 777467.465445,
+    "nccs_c": 797724.720783
+  },
+  {
+    "city": "Coimbatore",
+    "population": 3123000.0,
+    "nccs_a": 551162.655,
+    "nccs_b": 776512.089,
+    "nccs_c": 708436.9349999999
+  },
+  {
+    "city": "Kochi",
+    "population": 3099000.0,
+    "nccs_a": 566698.635,
+    "nccs_b": 779355.114,
+    "nccs_c": 677013.738
+  },
+  {
+    "city": "Trivandrum",
+    "population": 3073000.0,
+    "nccs_a": 548976.085,
+    "nccs_b": 764092.231,
+    "nccs_c": 681124.304
+  },
+  {
+    "city": "Gurgaon",
+    "population": 2910000.0,
+    "nccs_a": 625254.24,
+    "nccs_b": 752648.22,
+    "nccs_c": 567057.15
+  },
+  {
+    "city": "Bhopal",
+    "population": 2756000.0,
+    "nccs_a": 393741.452,
+    "nccs_b": 652744.82,
+    "nccs_c": 685257.352
+  },
+  {
+    "city": "Thane",
+    "population": 2691000.0,
+    "nccs_a": 528741.135,
+    "nccs_b": 685847.0970000001,
+    "nccs_c": 578199.024
+  },
+  {
+    "city": "Vadodara",
+    "population": 2664000.0,
+    "nccs_a": 449264.952,
+    "nccs_b": 657600.408,
+    "nccs_c": 630955.08
+  },
+  {
+    "city": "Faridabad",
+    "population": 2480000.0,
+    "nccs_a": 458470.16000000003,
+    "nccs_b": 624622.72,
+    "nccs_c": 550178.08
+  },
+  {
+    "city": "Agra",
+    "population": 2478000.0,
+    "nccs_a": 309412.992,
+    "nccs_b": 566582.3099999999,
+    "nccs_c": 676112.3879999999
+  },
+  {
+    "city": "Visakhapatnam",
+    "population": 2446000.0,
+    "nccs_a": 412505.67,
+    "nccs_b": 608178.332,
+    "nccs_c": 574477.3439999999
+  },
+  {
+    "city": "Nashik",
+    "population": 2351000.0,
+    "nccs_a": 392252.595,
+    "nccs_b": 575672.913,
+    "nccs_c": 552172.317
+  },
+  {
+    "city": "Ludhiana",
+    "population": 2245106.0,
+    "nccs_a": 365649.18869000004,
+    "nccs_b": 542969.905676,
+    "nccs_c": 535787.811582
+  },
+  {
+    "city": "Rajkot",
+    "population": 2150000.0,
+    "nccs_a": 341091.05000000005,
+    "nccs_b": 519968.9,
+    "nccs_c": 519966.75
+  },
+  {
+    "city": "Madurai",
+    "population": 2138746.0,
+    "nccs_a": 317907.482932,
+    "nccs_b": 506551.29637,
+    "nccs_c": 531784.2216780001
+  },
+  {
+    "city": "Varanasi",
+    "population": 2080000.0,
+    "nccs_a": 246785.76,
+    "nccs_b": 467344.8,
+    "nccs_c": 585821.6
+  },
+  {
+    "city": "Raipur",
+    "population": 1923000.0,
+    "nccs_a": 278575.39499999996,
+    "nccs_b": 455447.16599999997,
+    "nccs_c": 470879.241
+  },
+  {
+    "city": "Ranchi",
+    "population": 1819944.0,
+    "nccs_a": 234123.055992,
+    "nccs_b": 416121.09588,
+    "nccs_c": 488913.39604799997
+  },
+  {
+    "city": "Allahabad",
+    "population": 1772000.0,
+    "nccs_a": 203544.324,
+    "nccs_b": 393111.11199999996,
+    "nccs_c": 493439.98000000004
+  },
+  {
+    "city": "Jodhpur",
+    "population": 1663000.0,
+    "nccs_a": 210938.246,
+    "nccs_b": 380233.309,
+    "nccs_c": 446759.96100000007
+  },
+  {
+    "city": "Amritsar",
+    "population": 1511000.0,
+    "nccs_a": 218894.03699999998,
+    "nccs_b": 357868.262,
+    "nccs_c": 369991.015
+  },
+  {
+    "city": "Mysore",
+    "population": 1447000.0,
+    "nccs_a": 238556.76100000003,
+    "nccs_b": 354319.655,
+    "nccs_c": 330846.42100000003
+  },
+  {
+    "city": "Chandigarh",
+    "population": 1410000.0,
+    "nccs_a": 288858.24,
+    "nccs_b": 361643.85000000003,
+    "nccs_c": 280092.26999999996
+  },
+  {
+    "city": "Bhubaneswar",
+    "population": 1321000.0,
+    "nccs_a": 222782.68699999998,
+    "nccs_b": 328456.082,
+    "nccs_c": 302040.045
+  },
+  {
+    "city": "Guwahati",
+    "population": 1314019.0,
+    "nccs_a": 187702.358074,
+    "nccs_b": 313584.064255,
+    "nccs_c": 324355.077998
+  },
+  {
+    "city": "Noida",
+    "population": 1250000.0,
+    "nccs_a": 260806.25,
+    "nccs_b": 321052.5,
+    "nccs_c": 248303.74999999997
+  },
+  {
+    "city": "Dehradun",
+    "population": 1041000.0,
+    "nccs_a": 182033.424,
+    "nccs_b": 258839.445,
+    "nccs_c": 227607.363
+  },
+  {
+    "city": "Puducherry",
+    "population": 941000.0,
+    "nccs_a": 153255.965,
+    "nccs_b": 230419.847,
+    "nccs_c": 215152.122
+  }
+]

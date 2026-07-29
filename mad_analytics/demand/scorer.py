@@ -13,7 +13,9 @@ Input:  DemandInput
 Output: DemandOutput
 """
 from __future__ import annotations
+import json
 import logging
+import os
 from datetime import datetime, timezone, timedelta
 from typing import Callable, Optional
 
@@ -236,15 +238,75 @@ def _concert_market_activity() -> dict[str, float]:
     return {city: min(1.0, cnt / hi) for city, cnt in counts.items()}
 
 
+# ── NCCS-backed market activity (Blueprint: "Future NCCS integration") ────────
+# Static consumer-class reference data bundled at mad_analytics/data/nccs.json.
+#   market_activity_index = (NCCS_A + NCCS_B) / max(A+B across cities), in [0, 1]
+# — a city's affluent + upper-middle consumer base (the concert-ticket segment),
+# normalized so the strongest market = 1.0. This is the NCCS source plugged into
+# the same provider interface City Affinity was built around (no formula change).
+
+_NCCS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "nccs.json")
+_nccs_cache: Optional[dict[str, float]] = None
+
+_CITY_ALIASES = {
+    "bangalore": "bengaluru",
+    "bombay": "mumbai",
+    "calcutta": "kolkata",
+    "madras": "chennai",
+    "new delhi": "delhi",
+    "delhi ncr": "delhi",
+    "gurugram": "gurgaon",
+    "thiruvananthapuram": "trivandrum",
+    "prayagraj": "allahabad",
+    "pondicherry": "puducherry",
+}
+
+
+def _normalize_city_key(name: str) -> str:
+    k = (name or "").strip().lower()
+    return _CITY_ALIASES.get(k, k)
+
+
+def nccs_market_activity() -> dict[str, float]:
+    """Market-activity provider backed by NCCS consumer-class data.
+
+    index = (NCCS_A + NCCS_B) / max(A+B across cities), clamped to [0, 1],
+    keyed by normalized city name. Returns {} if the reference file is missing.
+    """
+    global _nccs_cache
+    if _nccs_cache is not None:
+        return _nccs_cache
+    try:
+        with open(_NCCS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        logger.warning(f"[Demand] NCCS data unavailable: {e}")
+        _nccs_cache = {}
+        return _nccs_cache
+    ab = {
+        _normalize_city_key(r.get("city", "")): float(r.get("nccs_a", 0) or 0) + float(r.get("nccs_b", 0) or 0)
+        for r in data if r.get("city")
+    }
+    hi = max(ab.values()) if ab else 0.0
+    _nccs_cache = {c: min(1.0, v / hi) for c, v in ab.items()} if hi > 0 else {}
+    return _nccs_cache
+
+
+def _default_market_activity() -> dict[str, float]:
+    """Default market-activity source: NCCS if available, else concert history."""
+    nccs = nccs_market_activity()
+    return nccs if nccs else _concert_market_activity()
+
+
 def city_affinity_scores(
     market_activity_provider: Optional[MarketActivityProvider] = None,
 ) -> dict[str, float]:
     """City Affinity (0–100) for every city that has market-activity data.
 
-    Pass a different provider (e.g. a future NCCS-backed one) to swap the
+    Defaults to the NCCS-backed provider; pass a different provider to swap the
     market-activity source without touching the formula. Returns {city_lower: score}.
     """
-    provider = market_activity_provider or _concert_market_activity
+    provider = market_activity_provider or _default_market_activity
     activity = provider()
     return {city: city_affinity_score(city, idx) for city, idx in activity.items()}
 
@@ -256,9 +318,9 @@ def city_affinity_for_city(
     """City Affinity (0–100) for a single city, or None when there is no
     market-activity data for it (so the Demand blend renormalizes it out).
     """
-    provider = market_activity_provider or _concert_market_activity
+    provider = market_activity_provider or _default_market_activity
     activity = provider()
-    key = (city or "").strip().lower()
+    key = _normalize_city_key(city)
     if key not in activity:
         return None
     return city_affinity_score(city, activity[key])
