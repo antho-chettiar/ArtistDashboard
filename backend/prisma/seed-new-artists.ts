@@ -1,13 +1,19 @@
 /**
  * seed-new-artists.ts
  *
+ * ⚠️ DEPRECATED — NOT part of the production population pipeline.
+ * Artists are now sourced from Excel via scripts/import-artist-baseline.ts
+ * (the single source of truth); slugs are assigned by prisma/viberate-slugs.ts.
+ * This file is retained only as a dev/manual fallback for bootstrapping a
+ * hardcoded roster without the spreadsheet. Do not run it in production.
+ *
  * Creates the 6 artists that don't exist in the DB yet,
  * then sets their Viberate slugs so the collector picks them up.
  *
  * Safe to re-run — uses upsert so it won't create duplicates.
  *
  * Usage:
- *   npx ts-node prisma/seed-new-artists.ts
+ *   npx tsx prisma/seed-new-artists.ts
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -59,6 +65,8 @@ const NEW_ARTISTS = [
 ];
 
 async function main() {
+  console.warn('[seed-new-artists] DEPRECATED: not part of the production pipeline.');
+  console.warn('[seed-new-artists] Use import-artist-baseline.ts (artists) + viberate-slugs.ts (slugs).\n');
   console.log('Seeding new artists...\n');
 
   let created = 0;

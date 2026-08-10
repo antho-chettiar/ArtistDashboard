@@ -3,14 +3,14 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
 model Artist {
-  id                      String                @id @default(dbgenerated("gen_random_uuid()"))
-  artistName              String                @unique
+  id                      String                       @id @default(dbgenerated("gen_random_uuid()"))
+  artistName              String                       @unique
   displayName             String?
   age                     Int?
   gender                  String?
@@ -19,14 +19,14 @@ model Artist {
   bio                     String?
   photoUrl                String?
   wikiUrl                 String?
-  active                  Boolean               @default(true)
+  active                  Boolean                      @default(true)
   instagramFollowers      BigInt?
   facebookFollowers       BigInt?
   twitterFollowers        BigInt?
   spotifyMonthlyListeners BigInt?
   youtubeSubscribers      BigInt?
-  popularity              Decimal?              @db.Decimal(5, 2)
-  googleTrendsScore       Decimal?              @db.Decimal(5, 2)
+  popularity              Decimal?                     @db.Decimal(5, 2)
+  googleTrendsScore       Decimal?                     @db.Decimal(5, 2)
   imageUrl                String?
   spotifyFollowers        BigInt?
   topCity1                String?
@@ -35,16 +35,16 @@ model Artist {
   topCity4                String?
   topCity5                String?
   lastUpdated             DateTime?
-  viberateSlug            String?               @unique 
-  created_at              DateTime              @default(now())
-  updated_at              DateTime              @updatedAt
+  viberateSlug            String?                      @unique
+  created_at              DateTime                     @default(now())
+  updated_at              DateTime                     @updatedAt
   genres                  ArtistGenre[]
+  popularityV2Snapshots   ArtistPopularityV2Snapshot[]
+  trendScores             ArtistTrendScore[]
   audienceDemographics    AudienceDemographic[]
   concerts                Concert[]
   featureSnapshots        FeatureSnapshot[]
   platformMetrics         PlatformMetric[]
-  trendScores             ArtistTrendScore[]
-  popularityV2Snapshots   ArtistPopularityV2Snapshot[]
   viberateMetrics         ViberateMetricDaily[]
 
   @@index([artistName])
@@ -414,21 +414,21 @@ model ArtistTrendScore {
 }
 
 model ArtistPopularityV2Snapshot {
-  id                    String   @id @default(dbgenerated("gen_random_uuid()"))
-  artistId              String
-  scoreVersion          String
-  reachScore            Decimal  @db.Decimal(8, 6)
-  engagementMultiplier  Decimal  @db.Decimal(10, 4)
-  adjustedReach         Decimal  @db.Decimal(12, 6)
-  trendsScore           Decimal  @db.Decimal(8, 6)
-  finalScore            Decimal  @db.Decimal(5, 2)
-  reachWeights          Json
-  normalizedValues      Json
-  platformMultipliers   Json
-  trendsMetadata        Json?
-  computedAt            DateTime
-  createdAt             DateTime @default(now())
-  artist                Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  id                   String   @id @default(dbgenerated("gen_random_uuid()"))
+  artistId             String
+  scoreVersion         String
+  reachScore           Decimal  @db.Decimal(8, 6)
+  engagementMultiplier Decimal  @db.Decimal(10, 4)
+  adjustedReach        Decimal  @db.Decimal(12, 6)
+  trendsScore          Decimal  @db.Decimal(8, 6)
+  finalScore           Decimal  @db.Decimal(5, 2)
+  reachWeights         Json
+  normalizedValues     Json
+  platformMultipliers  Json
+  trendsMetadata       Json?
+  computedAt           DateTime
+  createdAt            DateTime @default(now())
+  artist               Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
 
   @@index([artistId, scoreVersion, computedAt])
   @@index([finalScore])
@@ -437,36 +437,16 @@ model ArtistPopularityV2Snapshot {
 }
 
 model ViberateMetricDaily {
-  id          String   @id @default(dbgenerated("gen_random_uuid()"))
-  artistId    String
-  artist      Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  id         String   @id @default(dbgenerated("gen_random_uuid()"))
+  artistId   String
+  metricName String
+  date       DateTime @db.Date
+  diffValue  Float?
+  totalValue Float?
+  apiVersion String   @default("unknown")
+  fetchedAt  DateTime @default(now())
+  artist     Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
 
-  // The metric name exactly as Viberate returns it:
-  // "spotify_listeners", "youtube_views", "instagram_followers", etc.
-  metricName  String
-
-  // The calendar date this data point represents (YYYY-MM-DD)
-  date        DateTime @db.Date
-
-  // Daily change value from Viberate's graph.diff
-  // NOTE: 0 means "Viberate had no update that day", not "no change occurred"
-  // NULL means the metric was not present in the response at all
-  diffValue   Float?
-
-  // Running total from Viberate's graph.total
-  // NULL for metrics Viberate never provides a total for:
-  // (instagram_likes, instagram_comments, tiktok_views, tiktok_comments)
-  totalValue  Float?
-
-  // API version string from the response — useful if Viberate changes their
-  // data shape and you need to know which rows were collected under which version
-  apiVersion  String   @default("unknown")
-
-  // When this row was written/updated in our DB
-  fetchedAt   DateTime @default(now())
-
-  // @@unique enforces idempotency — running the collector twice on the same
-  // day simply upserts, never creates duplicates
   @@unique([artistId, metricName, date])
   @@index([artistId, metricName, date])
   @@index([artistId, date])

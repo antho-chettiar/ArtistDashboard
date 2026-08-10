@@ -2,10 +2,12 @@
  * viberate-slugs.ts
  *
  * Maps artistName (as stored in the DB) to Viberate URL slugs.
+ * Run this AFTER importing artists (scripts/import-artist-baseline.ts) so every
+ * imported artist receives its viberateSlug before collector/sync/scorer run.
  * Run this whenever you add new artists or correct a slug.
  *
  * Usage:
- *   npx ts-node prisma/viberate-slugs.ts
+ *   npx tsx prisma/viberate-slugs.ts
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -23,25 +25,49 @@ const SLUGS: Record<string, string> = {
   'Amaal Mallik':      'amaal-mallik',
   'Sachet Parampara':  'sachet-parampara',
   'Neeraj Shridhar':   'neeraj-shridhar',
+  'Hansraj Raghuwanshi': 'hansraj-raghuwanshi',
 };
+
+// Normalize a name for matching: lowercase, punctuation → spaces, collapse whitespace.
+// Lets DB names that differ only by case/punctuation (e.g. "SONU NIGAM",
+// "Sachet-Parampara") still match their slug entry.
+function normalizeName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
 
 async function main() {
   console.log('Updating Viberate slugs...\n');
 
+  // Build a normalized lookup from the slug map.
+  const normalizedSlugs = new Map<string, { canonicalName: string; slug: string }>();
+  for (const [name, slug] of Object.entries(SLUGS)) {
+    normalizedSlugs.set(normalizeName(name), { canonicalName: name, slug });
+  }
+
+  const artists = await prisma.artist.findMany({ select: { id: true, artistName: true } });
+
   let updated = 0;
   let notFound = 0;
+  const matchedKeys = new Set<string>();
 
-  for (const [name, slug] of Object.entries(SLUGS)) {
-    const result = await prisma.artist.updateMany({
-      where: { artistName: name },
-      data: { viberateSlug: slug },
+  for (const artist of artists) {
+    const key = normalizeName(artist.artistName);
+    const entry = normalizedSlugs.get(key);
+    if (!entry) continue;
+
+    await prisma.artist.update({
+      where: { id: artist.id },
+      data: { viberateSlug: entry.slug },
     });
+    matchedKeys.add(key);
+    console.log(`  ✓ ${artist.artistName} → ${entry.slug}`);
+    updated++;
+  }
 
-    if (result.count > 0) {
-      console.log(`  ✓ ${name} → ${slug}`);
-      updated++;
-    } else {
-      console.log(`  ✗ ${name} → NOT FOUND in DB (artist may not exist yet)`);
+  // Report slug-map entries that matched no artist in the DB.
+  for (const [key, entry] of normalizedSlugs) {
+    if (!matchedKeys.has(key)) {
+      console.log(`  ✗ ${entry.canonicalName} → NOT FOUND in DB (artist may not exist yet)`);
       notFound++;
     }
   }

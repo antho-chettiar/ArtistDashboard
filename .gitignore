@@ -71,3 +71,6 @@ bms_profile/
 # Viberate session — live cookies, never commit
 backend/src/services/scrapers/viberate/viberate-session.json
 viberate-session.json
+
+# Python virtualenvs (never commit)
+venv/
