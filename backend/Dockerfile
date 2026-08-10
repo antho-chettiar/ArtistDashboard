@@ -8,7 +8,7 @@ COPY package*.json ./
 COPY prisma ./prisma/
 
 # Install all dependencies (dev deps like typescript are required by the build stage)
-RUN npm ci
+RUN npm ci --include=dev
 
 # Generate Prisma client
 RUN npx prisma generate
