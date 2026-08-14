@@ -2,6 +2,67 @@ import { prisma } from '../utils/database';
 
 const ANALYTICS_URL = process.env.ANALYTICS_URL ?? 'http://localhost:8001';
 const DEFAULT_COUNTRY = 'India';
+const ANALYTICS_TIMEOUT_MS = Number(process.env.ANALYTICS_TIMEOUT_MS) || 12_000;
+
+/**
+ * Raised when the Python analytics service (ANALYTICS_URL) cannot produce a
+ * result — it is unreachable, timed out, or returned a non-2xx status.
+ * Controllers can detect this to return an explicit "analytics unavailable"
+ * state instead of a generic 500 (and the frontend must NOT fabricate a value).
+ */
+export class AnalyticsUnavailableError extends Error {
+  constructor(
+    message: string,
+    public readonly reason: 'timeout' | 'network' | 'status',
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'AnalyticsUnavailableError';
+  }
+}
+
+/**
+ * Single hardened entry point to the canonical Python analytics engine.
+ * Adds an AbortController timeout (no more indefinite hangs when the Render
+ * service is cold/asleep) and normalizes every failure into
+ * AnalyticsUnavailableError. This is the ONLY way this module talks to the
+ * analytics service — we deliberately keep one engine, not two.
+ */
+const postAnalytics = async <T = unknown>(path: string, body?: unknown): Promise<T> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ANALYTICS_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${ANALYTICS_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new AnalyticsUnavailableError(
+        `Analytics ${path} returned ${res.status}${text ? ` ${text}` : ''}`,
+        'status',
+        res.status,
+      );
+    }
+    return (await res.json()) as T;
+  } catch (err) {
+    if (err instanceof AnalyticsUnavailableError) throw err;
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new AnalyticsUnavailableError(
+        `Analytics ${path} timed out after ${ANALYTICS_TIMEOUT_MS}ms`,
+        'timeout',
+      );
+    }
+    throw new AnalyticsUnavailableError(
+      `Analytics ${path} unreachable: ${err instanceof Error ? err.message : String(err)}`,
+      'network',
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 export interface MetricRow {
   platform: string;
@@ -275,6 +336,16 @@ const buildPlatformMetrics = (
   return [...dbMetrics, ...syntheticMetrics];
 };
 
+/**
+ * Real, DB-backed platform metrics only — NO synthetic rows.
+ * Used by the Popularity and Growth endpoints so that Momentum is computed
+ * from genuine history. When an artist has only a current snapshot (or no
+ * metrics), the series is empty/short and the Python engine renormalizes
+ * Momentum out (Blueprint v2.0), rather than us fabricating a growth curve.
+ */
+const realPlatformMetrics = (artist: ArtistWithMetrics | null): MetricRow[] =>
+  metricsFromArtist(artist);
+
 const toAnalyticsConcert = (
   concert: Record<string, unknown>,
   artistId: string,
@@ -351,9 +422,13 @@ const buildDemandPayload = async (payload: DemandPayload) => {
     city,
     country,
     target_date: targetDate.toISOString().slice(0, 10),
+    // Real metrics only — no synthetic rows. Momentum (0.35 of Demand) must come
+    // from genuine platform history. If an artist has too little real history the
+    // Python DemandInput contract (min 7 rows) is unmet and the endpoint reports
+    // unavailable — we never fabricate a growth curve to force a number.
     platform_metrics: payload.platform_metrics?.length
       ? payload.platform_metrics.map(toAnalyticsMetric)
-      : buildPlatformMetrics(artist, payload, targetDate),
+      : realPlatformMetrics(artist),
     recent_concerts: payload.recent_concerts?.length
       ? payload.recent_concerts
       : await fetchRecentConcerts(artist?.id || payload.artist_id, city, country),
@@ -426,13 +501,7 @@ export const madAnalyticsService = {
   getRevenuePrediction: async (payload: RevenuePayload) => {
     try {
       const analyticsPayload = await buildRevenuePayload(payload);
-      const res = await fetch(`${ANALYTICS_URL}/revenue`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(analyticsPayload),
-      });
-      if (!res.ok) throw new Error(`Analytics error: ${res.status} ${await res.text()}`);
-      const prediction = await res.json() as Record<string, unknown>;
+      const prediction = await postAnalytics<Record<string, unknown>>('/revenue', analyticsPayload);
       return {
         ...prediction,
         model_source: 'mad_analytics.revenue.predictor',
@@ -472,13 +541,7 @@ export const madAnalyticsService = {
         venue_capacity: payload.venue_capacity || 5_000,
         currency: currency || 'INR',
       };
-      const res = await fetch(`${ANALYTICS_URL}/llm-predict`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) throw new Error(`Analytics error: ${res.status} ${await res.text()}`);
-      const prediction = await res.json() as Record<string, unknown>;
+      const prediction = await postAnalytics<Record<string, unknown>>('/llm-predict', body);
       return {
         ...prediction,
         model_source: 'mad_analytics.revenue.llm_model',
@@ -492,16 +555,15 @@ export const madAnalyticsService = {
   getGrowthForecast: async (artistId: string, metrics?: MetricRow[]) => {
     try {
       const artist = await resolveArtist({ artist_id: artistId });
+      // Real metrics only — do not fabricate a growth series (Blueprint v2.0:
+      // missing time series ⇒ Momentum renormalized out downstream).
       const bodyMetrics = metrics?.length
         ? metrics.map(toAnalyticsMetric)
-        : buildPlatformMetrics(artist, { artist_id: artistId }, new Date());
-      const res = await fetch(`${ANALYTICS_URL}/growth`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ artist_id: artist?.id || artistId, metrics: bodyMetrics }),
+        : realPlatformMetrics(artist);
+      return await postAnalytics('/growth', {
+        artist_id: artist?.id || artistId,
+        metrics: bodyMetrics,
       });
-      if (!res.ok) throw new Error(`Analytics error: ${res.status} ${await res.text()}`);
-      return await res.json();
     } catch (error) {
       console.error('Error fetching growth forecast from mad_analytics:', error);
       throw error;
@@ -511,13 +573,7 @@ export const madAnalyticsService = {
   getDemandScore: async (payload: DemandPayload) => {
     try {
       const analyticsPayload = await buildDemandPayload(payload);
-      const res = await fetch(`${ANALYTICS_URL}/demand`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(analyticsPayload),
-      });
-      if (!res.ok) throw new Error(`Analytics error: ${res.status} ${await res.text()}`);
-      return await res.json();
+      return await postAnalytics('/demand', analyticsPayload);
     } catch (error) {
       console.error('Error fetching demand score from mad_analytics:', error);
       throw error;
@@ -527,21 +583,15 @@ export const madAnalyticsService = {
   getPopularityScore: async (artistId: string, platformMetrics?: any[]) => {
     try {
       const artist = await resolveArtist({ artist_id: artistId });
+      // Real metrics only — no synthetic rows. Momentum (0.20 of Popularity)
+      // must come from genuine history or renormalize out (Blueprint v2.0).
       const body = {
         artist_id: artist?.id || artistId,
         platform_metrics: platformMetrics?.length
           ? platformMetrics.map(toAnalyticsMetric)
-          : buildPlatformMetrics(artist, { artist_id: artistId }, new Date()),
+          : realPlatformMetrics(artist),
       };
-      
-      const res = await fetch(`${ANALYTICS_URL}/popularity`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      
-      if (!res.ok) throw new Error(`Analytics error: ${res.status} ${await res.text()}`);
-      return await res.json();
+      return await postAnalytics('/popularity', body);
     } catch (error) {
       console.error('Error fetching popularity score from mad_analytics:', error);
       throw error;
@@ -550,23 +600,16 @@ export const madAnalyticsService = {
 
   getVenueCapacity: async (payload: VenueCapacityPayload) => {
     try {
-      const res = await fetch(`${ANALYTICS_URL}/venue-capacity`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          venue_name: payload.venue_name,
-          city: payload.city || '',
-          country: payload.country || DEFAULT_COUNTRY,
-          venue_type: payload.venue_type || '',
-          artist_tier: payload.artist_tier,
-          supplied_capacity: payload.supplied_capacity,
-          source_texts: payload.source_texts || [],
-          persist: Boolean(payload.persist),
-        }),
+      const result = await postAnalytics<Record<string, unknown>>('/venue-capacity', {
+        venue_name: payload.venue_name,
+        city: payload.city || '',
+        country: payload.country || DEFAULT_COUNTRY,
+        venue_type: payload.venue_type || '',
+        artist_tier: payload.artist_tier,
+        supplied_capacity: payload.supplied_capacity,
+        source_texts: payload.source_texts || [],
+        persist: Boolean(payload.persist),
       });
-
-      if (!res.ok) throw new Error(`Analytics error: ${res.status} ${await res.text()}`);
-      const result = await res.json() as Record<string, unknown>;
       return {
         ...result,
         model_source: 'mad_analytics.venue_capacity.resolver',
@@ -579,13 +622,7 @@ export const madAnalyticsService = {
   
   saveAllPopularityScores: async () => {
     try {
-      const res = await fetch(`${ANALYTICS_URL}/popularity/all/save`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      
-      if (!res.ok) throw new Error(`Analytics error: ${res.status}`);
-      return await res.json();
+      return await postAnalytics('/popularity/all/save');
     } catch (error) {
       console.error('Error saving all popularity scores via mad_analytics:', error);
       throw error;
