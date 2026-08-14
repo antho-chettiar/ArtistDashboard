@@ -471,23 +471,32 @@ def _blend_popularity(
 # ── Main Calculation ──────────────────────────────────────────────────────────
 
 def _calculate_base_entropy_score(artist_id: str, artists: list[dict], matrix: pd.DataFrame, weights: dict[str, float]) -> tuple[float, dict[str, float], dict[str, float]]:
-    """Calculate the base entropy-weighted score for a single artist."""
+    """Calculate the base entropy-weighted score for a single artist.
+
+    The target artist is normalized RELATIVE TO THE COHORT — the same
+    cohort-normalized matrix that calculate_all() iterates — i.e. each platform
+    value is divided by the cohort max. Previously the target was normalized
+    against itself (a 1-row frame whose per-column max is the artist's own
+    value), which forced every present platform to 1.0 and made every
+    single-artist /popularity call return ~100. Reusing the cohort row makes the
+    single /popularity endpoint agree with /popularity/all. Weights unchanged.
+    """
     if matrix.empty:
         return 5.0, {}, {}
 
     transformed = np.log1p(matrix)
     normalized = _normalize_vector(transformed)
 
-    target_row = next((row for row in artists if row["artist_id"] == artist_id), None)
-    if not target_row:
+    # matrix/normalized rows are built in `artists` order by _build_snapshot_matrix,
+    # so the target's positional index into `artists` indexes its cohort-normalized row.
+    target_index = next(
+        (i for i, row in enumerate(artists) if row["artist_id"] == artist_id),
+        None,
+    )
+    if target_index is None or target_index >= len(normalized):
         return 5.0, {}, {}
 
-    target_values = {
-        PLATFORM_LABELS[platform]: float(target_row.get(platform) or 0.0)
-        for platform in SNAPSHOT_PLATFORMS
-    }
-    target_series = pd.Series(target_values)
-    target_normalized = _normalize_vector(target_series.to_frame().T).iloc[0]
+    target_normalized = normalized.iloc[target_index]
 
     platform_contributions = {
         platform: round(float(target_normalized.get(platform, 0.0) * weights.get(platform, 0.0)), 4)
