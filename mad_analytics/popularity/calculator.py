@@ -25,7 +25,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from ..utils.db import fetch_artist_snapshots
+from ..utils.db import fetch_artist_snapshots, get_engine
 from ..utils.schemas import PopularityInput, PopularityOutput
 from ..utils.feature_engineering import metrics_to_df, platform_series, rog
 
@@ -201,19 +201,14 @@ def _fetch_stored_trends_scores() -> dict[str, float]:
     """Read previously stored Google Trends scores from the artists table."""
     import os
     try:
-        from sqlalchemy import create_engine, text as sql_text
-        db_url = os.environ.get("DATABASE_URL")
-        if not db_url:
-            return {}
-        normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
-        engine = create_engine(normalized)
+        from sqlalchemy import text as sql_text
+        engine = get_engine()
         with engine.connect() as conn:
             rows = conn.execute(sql_text("""
                 SELECT "artistName", "googleTrendsScore"
                 FROM artists
                 WHERE active = true AND "googleTrendsScore" IS NOT NULL
             """)).mappings().all()
-        engine.dispose()
         return {row["artistName"]: float(row["googleTrendsScore"]) for row in rows}
     except Exception:
         return {}
@@ -363,12 +358,8 @@ def _fetch_recent_metrics_by_artist(days: int = 120) -> dict[str, list]:
     import os
     from ..utils.schemas import PlatformMetricRow
     try:
-        from sqlalchemy import create_engine, text as sql_text
-        db_url = os.environ.get("DATABASE_URL")
-        if not db_url:
-            return {}
-        normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
-        engine = create_engine(normalized)
+        from sqlalchemy import text as sql_text
+        engine = get_engine()
         with engine.connect() as conn:
             rows = conn.execute(sql_text(f"""
                 SELECT "artistId", platform, "metricDate", followers, streams, views
@@ -376,7 +367,6 @@ def _fetch_recent_metrics_by_artist(days: int = 120) -> dict[str, list]:
                 WHERE "metricDate" >= CURRENT_DATE - INTERVAL '{int(days)} days'
                 ORDER BY "artistId", "metricDate" ASC
             """)).mappings().all()
-        engine.dispose()
     except Exception as e:
         logger.warning(f"[Popularity] Failed to fetch recent metrics for momentum: {e}")
         return {}
@@ -672,18 +662,13 @@ def _get_artist_name(artist_id: str) -> Optional[str]:
     """Lookup artist name from ID via DB."""
     import os
     try:
-        from sqlalchemy import create_engine, text as sql_text
-        db_url = os.environ.get("DATABASE_URL")
-        if not db_url:
-            return None
-        normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
-        engine = create_engine(normalized)
+        from sqlalchemy import text as sql_text
+        engine = get_engine()
         with engine.connect() as conn:
             result = conn.execute(
                 sql_text('SELECT "artistName" FROM artists WHERE id = :id'),
                 {"id": artist_id},
             ).scalar()
-        engine.dispose()
         return result
     except Exception:
         return None

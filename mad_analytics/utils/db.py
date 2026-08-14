@@ -5,10 +5,19 @@ import os
 from typing import Optional
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
 from .schemas import PopularityOutput
 
 DATABASE_URL_ENV = "DATABASE_URL"
+
+# Conservative bounded pool for the shared engine. Total connections held by
+# this process = pool_size + max_overflow = 5, which stays well under the
+# Supabase Session Pooler's 15-client cap and leaves headroom for the Node
+# backend that shares the same pooler. pool_pre_ping discards dead connections;
+# pool_recycle refreshes them before the pooler's server-side idle timeout.
+_POOL_KWARGS = dict(pool_size=3, max_overflow=2, pool_pre_ping=True, pool_recycle=1800)
+_ENGINE: Optional[Engine] = None
 
 
 def _normalize_db_url(db_url: str) -> str:
@@ -28,9 +37,27 @@ def _get_db_url(db_url: Optional[str] = None) -> str:
     return _normalize_db_url(env_url)
 
 
+def get_engine(db_url: Optional[str] = None) -> Engine:
+    """Return the process-wide shared SQLAlchemy Engine (created once, reused).
+
+    This is SQLAlchemy's recommended pattern: a single long-lived Engine per
+    database for the lifetime of the process, with a bounded connection pool.
+    The popularity/demand request path MUST use this shared engine and MUST NOT
+    dispose it (disposing would tear down the shared pool for every other
+    request). When an explicit db_url is passed (CLI/one-off scripts), a
+    dedicated bounded engine is returned that the caller owns and may dispose.
+    """
+    global _ENGINE
+    if db_url is not None:
+        return create_engine(_normalize_db_url(db_url), **_POOL_KWARGS)
+    if _ENGINE is None:
+        _ENGINE = create_engine(_get_db_url(), **_POOL_KWARGS)
+    return _ENGINE
+
+
 def fetch_artist_snapshots(db_url: Optional[str] = None) -> list[dict[str, object]]:
     """Fetch current artist platform snapshot values from the backend artist table."""
-    engine = create_engine(_get_db_url(db_url))
+    engine = get_engine(db_url)
     query = text(
         """
         SELECT id AS artist_id, "artistName",
@@ -43,6 +70,8 @@ def fetch_artist_snapshots(db_url: Optional[str] = None) -> list[dict[str, objec
     )
     with engine.connect() as conn:
         rows = conn.execute(query).mappings().all()
+    if db_url is not None:
+        engine.dispose()  # dedicated (CLI) engine only; never the shared one
     return [dict(row) for row in rows]
 
 
@@ -76,7 +105,7 @@ def persist_popularity_scores(outputs: list[PopularityOutput], db_url: Optional[
     if not outputs:
         return 0
 
-    engine = create_engine(_get_db_url(db_url))
+    engine = get_engine(db_url)
     create_table_q = _create_popularity_table_query(engine.dialect.name)
     with engine.begin() as conn:
         conn.execute(text(create_table_q))
@@ -118,13 +147,14 @@ def persist_popularity_scores(outputs: list[PopularityOutput], db_url: Optional[
                 },
             )
 
-    engine.dispose()
+    if db_url is not None:
+        engine.dispose()  # dedicated (CLI) engine only; never the shared one
     return len(outputs)
 
 
 def fetch_saved_popularity(db_url: Optional[str] = None) -> list[dict[str, object]]:
     """Read the last-saved artist popularity scores from the analytics persistence table."""
-    engine = create_engine(_get_db_url(db_url))
+    engine = get_engine(db_url)
     query = text(
         """
         SELECT artist_id, popularity_score, platform_weights, platform_contributions, computed_at, inserted_at
@@ -134,7 +164,8 @@ def fetch_saved_popularity(db_url: Optional[str] = None) -> list[dict[str, objec
     )
     with engine.connect() as conn:
         rows = conn.execute(query).mappings().all()
-    engine.dispose()
+    if db_url is not None:
+        engine.dispose()  # dedicated (CLI) engine only; never the shared one
     results: list[dict[str, object]] = []
     for row in rows:
         results.append(

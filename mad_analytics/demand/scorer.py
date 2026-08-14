@@ -210,12 +210,9 @@ def _concert_market_activity() -> dict[str, float]:
     """
     import os
     try:
-        from sqlalchemy import create_engine, text as sql_text
-        db_url = os.environ.get("DATABASE_URL")
-        if not db_url:
-            return {}
-        normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
-        engine = create_engine(normalized)
+        from sqlalchemy import text as sql_text
+        from ..utils.db import get_engine
+        engine = get_engine()
         with engine.connect() as conn:
             rows = conn.execute(sql_text("""
                 SELECT LOWER(city) AS city, COUNT(*) AS cnt
@@ -224,7 +221,6 @@ def _concert_market_activity() -> dict[str, float]:
                   AND city IS NOT NULL AND city <> ''
                 GROUP BY LOWER(city)
             """)).mappings().all()
-        engine.dispose()
     except Exception as e:
         logger.warning(f"[Demand] Failed to fetch concert market activity: {e}")
         return {}
@@ -484,19 +480,15 @@ def _concerts_in_city_last_90d(city: str) -> Optional[int]:
     if not city:
         return None
     try:
-        from sqlalchemy import create_engine, text as sql_text
-        db_url = os.environ.get("DATABASE_URL")
-        if not db_url:
-            return None
-        normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
-        engine = create_engine(normalized)
+        from sqlalchemy import text as sql_text
+        from ..utils.db import get_engine
+        engine = get_engine()
         with engine.connect() as conn:
             count = conn.execute(sql_text("""
                 SELECT COUNT(*) FROM concerts
                 WHERE LOWER(city) = LOWER(:city)
                   AND "concertDate" >= CURRENT_DATE - INTERVAL '90 days'
             """), {"city": city}).scalar()
-        engine.dispose()
         return int(count) if count is not None else None
     except Exception as e:
         logger.warning(f"[Demand] Risk market-saturation lookup failed for {city}: {e}")
