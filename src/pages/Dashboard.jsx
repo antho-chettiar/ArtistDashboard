@@ -97,18 +97,14 @@ function Dashboard() {
 
   // Apply time filter and get top 10
   const topArtistsByPopularity = useMemo(() => {
+    // Real composite popularity only — no time-scaling (there is no time-scoped
+    // popularity endpoint yet) and no fabricated streams. Unscored artists
+    // (popularity === null) sort last and render as "—".
     return [...filteredArtists]
-      .map(a => ({
-        ...a,
-        adjustedPopularity: Math.min(
-          Math.round(a.popularity * (1 + (timeFilter - 12) * 0.005)),
-          100
-        ),
-        adjustedStreams: Math.round(a.monthlyStreams * (timeFilter / 12)),
-      }))
-      .sort((a, b) => b.adjustedPopularity - a.adjustedPopularity)
+      .map(a => ({ ...a, displayPopularity: a.popularity }))
+      .sort((a, b) => (b.displayPopularity ?? -1) - (a.displayPopularity ?? -1))
       .slice(0, 10)
-  }, [filteredArtists, timeFilter])
+  }, [filteredArtists])
 
   // Filter all concerts by artist type
   const filteredConcerts = useMemo(() => {
@@ -332,13 +328,13 @@ function Dashboard() {
                         </p>
                         <span className="text-xs font-bold ml-1 flex-shrink-0"
                           style={{ color: 'var(--accent-gold)' }}>
-                          {artist.adjustedPopularity}
+                          {artist.displayPopularity ?? '—'}
                         </span>
                       </div>
                       <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
                         <div className="h-full rounded-full transition-all duration-1000"
                           style={{
-                            width: `${artist.adjustedPopularity}%`,
+                            width: `${artist.displayPopularity ?? 0}%`,
                             background: i === 0
                               ? 'linear-gradient(90deg, #F59E0B, #FBBF24)'
                               : i <= 2
@@ -348,12 +344,12 @@ function Dashboard() {
                       </div>
                     </div>
 
-                    {/* Monthly streams */}
+                    {/* Total followers (real; monthly-stream data is not available) */}
                     <div className="text-right flex-shrink-0 w-20">
                       <p className="text-xs font-bold font-display" style={{ color: 'var(--accent-indigo)' }}>
-                        {formatNumber(artist.adjustedStreams)}
+                        {artist.totalFollowers > 0 ? formatNumber(artist.totalFollowers) : '—'}
                       </p>
-                      <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>streams</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>followers</p>
                     </div>
 
                     {/* RoG */}

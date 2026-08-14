@@ -178,16 +178,16 @@ export function useDashboardData() {
       }
 
       const totalFollowers = Number(item.totalFollowers || 0)
-      const popularity     = Number(item.compositeScore) > 0
-        ? Number(item.compositeScore)
-        : Math.min(100, Math.round(totalFollowers / 1_000_000))
-      const monthlyStreams  = Math.round(totalFollowers * 0.001)
+      // Real composite popularity only. If an artist has no score yet we return
+      // null (rendered as "—") instead of fabricating one from follower counts.
+      const compositeScore = Number(item.compositeScore)
+      const popularity     = compositeScore > 0 ? compositeScore : null
       const photo = artist.photoUrl ||
         `https://ui-avatars.com/api/?name=${encodeURIComponent(artist.artistName)}&background=6366F1&color=fff`
 
       return {
         id: artist.id, name: artist.artistName, type, genre, nationality,
-        age: 0, totalConcerts: 0, popularity, monthlyStreams, followers, rog, photo, totalFollowers,
+        age: 0, totalConcerts: 0, popularity, followers, rog, photo, totalFollowers,
       }
     }).filter(Boolean)
   }, [topArtistsData, artistTypeById])

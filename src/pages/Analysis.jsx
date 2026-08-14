@@ -176,6 +176,11 @@ function ProfitabilityPredictor({ artists, concerts }) {
     venueType: 'arena',
   })
   const pred = applyModelPrediction(fallbackPred, modelPrediction.data)
+  // Increment 2b: only a REAL ML revenue prediction may drive the revenue UI.
+  // fallbackPred/predictRevenue are kept for safety but never displayed when a
+  // real prediction is absent (no fabricated revenue shown).
+  const hasModel = Boolean(modelPrediction.data?.predicted_revenue)
+  const revenueLoading = modelPrediction.isFetching
   const growth = useMadGrowth(selectedArtist, Boolean(selectedArtist))
   const demand = useMadDemand(selectedArtist, selectedCity, Boolean(selectedArtist && selectedCity), { country: 'India', targetDate: predictionDate() })
   const popularity = useMadPopularity(selectedArtist, Boolean(selectedArtist))
@@ -309,30 +314,47 @@ function ProfitabilityPredictor({ artists, concerts }) {
               style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)' }}>
               <Zap size={13} style={{ color: 'var(--accent-indigo)' }} />
               <span className="text-xs font-semibold" style={{ color: 'var(--accent-indigo)' }}>
-                {modelPrediction.isFetching ? 'Running Model' : pred.modelSource ? 'MAD Analytics' : 'Fallback Estimate'}
+                {revenueLoading ? 'Running Model' : hasModel ? 'MAD Analytics' : 'Analytics Unavailable'}
               </span>
             </div>
           </div>
 
-          {modelPrediction.error && (
-            <div className="mb-4 rounded-xl px-4 py-3 text-xs"
-              style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', color: 'var(--accent-gold)' }}>
-              Python analytics service unavailable. Showing fallback estimate.
+          {/* Revenue: real model KPIs, a loading state, or an explicit
+              unavailable state — never the fabricated fallback numbers. */}
+          {revenueLoading ? (
+            <div className="glass-card p-6 mb-6 text-center animate-fade-up">
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Running revenue model…</p>
+            </div>
+          ) : hasModel ? (
+            /* Success — existing KPI grid, unchanged */
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+              <StatBox label="Predicted Revenue" value={formatCurrency(pred.totalRevenue, pred.currency)} color="var(--accent-gold)" delay={0} />
+              <StatBox label="Est. Tickets Sold" value={formatNumber(pred.ticketsSold)} color="var(--accent-indigo)" delay={80} />
+              <StatBox label="Avg. Ticket Price" value={formatCurrency(pred.atp, pred.currency)} color="var(--accent-green)" delay={160} />
+              <StatBox
+                label={pred.modelSource ? 'Model Confidence' : 'Projected ROI'}
+                value={pred.modelSource ? `${pred.confidence}%` : `${pred.roi.toFixed(1)}%`}
+                color={pred.modelSource || pred.roi > 50 ? 'var(--accent-green)' : 'var(--accent-gold)'}
+                delay={240}
+              />
+            </div>
+          ) : (
+            /* Unavailable — no fabricated revenue is shown */
+            <div className="glass-card p-6 mb-6 animate-fade-up"
+              style={{ border: '1px solid rgba(245,158,11,0.25)', background: 'rgba(245,158,11,0.06)' }}>
+              <div className="flex items-center gap-2 mb-1">
+                <Zap size={15} style={{ color: 'var(--accent-gold)' }} />
+                <span className="text-sm font-bold" style={{ color: 'var(--accent-gold)' }}>
+                  Revenue prediction unavailable
+                </span>
+              </div>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                The analytics model didn’t return a revenue prediction (the service may be
+                starting up, or required concert/venue inputs are missing). No estimated
+                revenue is shown. Live signals below remain available.
+              </p>
             </div>
           )}
-
-          {/* KPI Grid */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-            <StatBox label="Predicted Revenue" value={formatCurrency(pred.totalRevenue, pred.currency)} color="var(--accent-gold)" delay={0} />
-            <StatBox label="Est. Tickets Sold" value={formatNumber(pred.ticketsSold)} color="var(--accent-indigo)" delay={80} />
-            <StatBox label="Avg. Ticket Price" value={formatCurrency(pred.atp, pred.currency)} color="var(--accent-green)" delay={160} />
-            <StatBox
-              label={pred.modelSource ? 'Model Confidence' : 'Projected ROI'}
-              value={pred.modelSource ? `${pred.confidence}%` : `${pred.roi.toFixed(1)}%`}
-              color={pred.modelSource || pred.roi > 50 ? 'var(--accent-green)' : 'var(--accent-gold)'}
-              delay={240}
-            />
-          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mb-6">
             <StatBox
@@ -367,6 +389,11 @@ function ProfitabilityPredictor({ artists, concerts }) {
             />
           </div>
 
+          {/* Score bars, ROI verdict, revenue breakdown and city comparison are
+              model-derived — rendered only when a REAL revenue prediction exists.
+              (Unchanged success layout; simply gated so no fabricated revenue shows.) */}
+          {hasModel && (
+          <>
           {/* Score Bars + Revenue Breakdown */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
             <div className="glass-card p-5 animate-fade-up" style={{ animationDelay: '100ms', animationFillMode: 'both', opacity: 0 }}>
@@ -445,6 +472,8 @@ function ProfitabilityPredictor({ artists, concerts }) {
                 height={260}
               />
             </ChartContainer>
+          )}
+          </>
           )}
         </>
       )}
