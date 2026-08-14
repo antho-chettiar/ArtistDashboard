@@ -362,7 +362,7 @@ def _fetch_recent_metrics_by_artist(days: int = 120) -> dict[str, list]:
         engine = get_engine()
         with engine.connect() as conn:
             rows = conn.execute(sql_text(f"""
-                SELECT "artistId", platform, "metricDate", followers, streams, views
+                SELECT "artistId", platform, "metricDate", followers, streams, streams AS views
                 FROM platform_metrics
                 WHERE "metricDate" >= CURRENT_DATE - INTERVAL '{int(days)} days'
                 ORDER BY "artistId", "metricDate" ASC
