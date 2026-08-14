@@ -625,10 +625,18 @@ def calculate(payload: PopularityInput) -> PopularityOutput:
     # Get artist name for Google Trends lookup
     artist_name = _get_artist_name(payload.artist_id)
 
-    # Google Trends score — None if not present in DB (pytrends not yet run)
+    # Google Trends score — None if not present (pytrends not yet run).
+    # Fetch across the FULL active-artist cohort — the same population and call
+    # that calculate_all() uses — so the target's trend value is cohort-normalized
+    # identically. Querying a single name would make that lone artist both the
+    # reference AND the max in fetch_trends_scores, self-normalizing it to 100.
+    # Same data source, same normalization, same formula/weights.
     trend_score = None
     if artist_name:
-        trends_scores = _fetch_google_trends_scores([artist_name])
+        cohort_names = [a["artistName"] for a in fetch_artist_snapshots()]
+        if artist_name not in cohort_names:
+            cohort_names.append(artist_name)
+        trends_scores = _fetch_google_trends_scores(cohort_names)
         trend_score = trends_scores.get(artist_name)
 
     # Momentum = cross_platform_score (growth module / useMadGrowth) — None if unavailable
