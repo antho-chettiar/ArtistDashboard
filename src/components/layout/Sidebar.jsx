@@ -41,7 +41,7 @@ function Sidebar() {
             🎵
           </div>
           <div>
-            <h1 className="font-display font-bold text-white text-lg tracking-tight leading-none">ArtistIQ</h1>
+            <h1 className="font-display font-bold text-white text-lg tracking-tight leading-none">Artist Metrics</h1>
             <p className="text-xs mt-0.5" style={{ color: 'var(--sidebar-text)' }}>Analytics Platform</p>
           </div>
         </div>
