@@ -194,6 +194,20 @@ function ProfitabilityPredictor({ artists, concerts }) {
     suppliedCapacity: venueCapacityValue,
   })
 
+  // Validated Risk & Confidence come straight from the demand engine
+  // (demand.data.risk / demand.data.confidence). No frontend fabrication.
+  const riskLevel = demand.data?.risk?.level
+  const riskColor = riskLevel === 'High' ? 'var(--accent-red)'
+    : riskLevel === 'Medium' ? 'var(--accent-gold)'
+    : riskLevel === 'Low' ? 'var(--accent-green)'
+    : 'var(--text-muted)'
+
+  // Revenue is heuristic when the engine returns the rule-based fallback
+  // importances (no supervised model trained). Those keys never appear in a
+  // trained-model response, so they are a reliable heuristic-mode signal.
+  const revenueImportances = modelPrediction.data?.feature_importances || {}
+  const revenueIsHeuristic = hasModel && ('seasonality' in revenueImportances || 'artist_tier' in revenueImportances)
+
   // City comparison for selected artist
   const cityComparison = artist
     ? CITIES.map(c => ({
@@ -314,7 +328,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
               style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)' }}>
               <Zap size={13} style={{ color: 'var(--accent-indigo)' }} />
               <span className="text-xs font-semibold" style={{ color: 'var(--accent-indigo)' }}>
-                {revenueLoading ? 'Running Model' : hasModel ? 'MAD Analytics' : 'Analytics Unavailable'}
+                {revenueLoading ? 'Running Model' : hasModel ? (revenueIsHeuristic ? 'MAD Analytics · Heuristic Estimate' : 'MAD Analytics') : 'Analytics Unavailable'}
               </span>
             </div>
           </div>
@@ -328,7 +342,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
           ) : hasModel ? (
             /* Success — existing KPI grid, unchanged */
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-              <StatBox label="Predicted Revenue" value={formatCurrency(pred.totalRevenue, pred.currency)} color="var(--accent-gold)" delay={0} />
+              <StatBox label="Predicted Revenue" value={formatCurrency(pred.totalRevenue, pred.currency)} sub={revenueIsHeuristic ? 'Heuristic estimate' : undefined} color="var(--accent-gold)" delay={0} />
               <StatBox label="Est. Tickets Sold" value={formatNumber(pred.ticketsSold)} color="var(--accent-indigo)" delay={80} />
               <StatBox label="Avg. Ticket Price" value={formatCurrency(pred.atp, pred.currency)} color="var(--accent-green)" delay={160} />
               <StatBox
@@ -366,7 +380,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
             <StatBox
               label="Demand Score"
               value={demand.data ? `${demand.data.score?.toFixed?.(1) ?? demand.data.score}` : '—'}
-              sub={demand.data?.components ? `SV ${Math.round((demand.data.components.social_velocity || 0) * 100)}%` : 'No demand data'}
+              sub={demand.data?.components?.momentum != null ? `Momentum ${demand.data.components.momentum.toFixed?.(1) ?? demand.data.components.momentum}` : 'No demand data'}
               color="var(--accent-gold)"
             />
             <StatBox
@@ -374,6 +388,18 @@ function ProfitabilityPredictor({ artists, concerts }) {
               value={popularity.data ? `${popularity.data.popularity_score?.toFixed?.(1) ?? popularity.data.popularity_score}` : '—'}
               sub={popularity.data?.platform_weights ? 'Entropy weighted' : 'No popularity data'}
               color="var(--accent-green)"
+            />
+            <StatBox
+              label="Risk"
+              value={riskLevel ?? '—'}
+              sub={demand.data?.risk ? `Index ${Math.round((demand.data.risk.score ?? 0) * 100)} / 100` : 'No risk data'}
+              color={riskColor}
+            />
+            <StatBox
+              label="Confidence"
+              value={demand.data?.confidence ?? '—'}
+              sub={demand.data?.confidence ? 'Signal completeness' : 'No confidence data'}
+              color="var(--accent-indigo)"
             />
             <StatBox
               label="LLM Revenue"
@@ -404,7 +430,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
                 <ScoreBar label="Popularity Score" value={pred.popularityScore} color="#818CF8" />
                 <ScoreBar label="City Demand Index" value={pred.demandScore} color="#FBBF24" />
                 <ScoreBar label="Sell-Through Rate" value={Math.round(pred.sellThrough)} color="#34D399" />
-                <ScoreBar label="Revenue Confidence" value={pred.modelSource ? pred.confidence : Math.min(Math.round(pred.popularityScore * 0.85 + 10), 97)} color="#F87171" />
+                <ScoreBar label="Revenue Confidence" value={Math.round(pred.confidence ?? 0)} color="#F87171" />
               </div>
 
               {/* Verdict */}

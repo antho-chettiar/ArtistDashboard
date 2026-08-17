@@ -117,15 +117,20 @@ function Dashboard() {
   // Show only the latest 15 concerts in the dashboard list
   const recentConcerts = useMemo(() => filteredConcerts.slice(0, 10), [filteredConcerts])
 
-  // Aggregate revenue by city from filteredConcerts
-  const revenueByCity = useMemo(() => {
+  // Count concerts per city (real event counts). Revenue is NOT used here —
+  // the imported historical concerts have unknown/NULL revenue, so summing it
+  // would show fake zeros. Kept client-side over filteredConcerts so it still
+  // reacts to the artist-type filter (the /concerts/cities endpoint returns a
+  // global aggregate and cannot filter by artist type).
+  const concertsByCity = useMemo(() => {
     if (!filteredConcerts.length) return []
     const grouped = filteredConcerts.reduce((acc, c) => {
-      if (!acc[c.city]) acc[c.city] = { name: c.city, revenue: 0 }
-      acc[c.city].revenue += c.totalRevenue
+      if (!c.city) return acc
+      if (!acc[c.city]) acc[c.city] = { name: c.city, count: 0 }
+      acc[c.city].count += 1
       return acc
     }, {})
-    return Object.values(grouped).sort((a, b) => b.revenue - a.revenue)
+    return Object.values(grouped).sort((a, b) => b.count - a.count)
   }, [filteredConcerts])
 
   // Normalize chart data coming from backend so charts receive numeric values
@@ -164,19 +169,20 @@ function Dashboard() {
       delay: 80,
     },
     {
+      // Unknown ≠ zero: imported concerts carry no ticket data, so a 0 here means
+      // "not available", not real zero sales. Show a dash rather than "0".
       title: 'Tickets Sold YTD',
-      value: formatNumber(kpis?.ticketsSoldYTD || 0),
-      //subtitle: 'Year to date',
-      //rog: 0,
+      value: (kpis?.ticketsSoldYTD || 0) > 0 ? formatNumber(kpis.ticketsSoldYTD) : '—',
+      subtitle: (kpis?.ticketsSoldYTD || 0) > 0 ? undefined : 'Not available',
       icon: Ticket,
       accentColor: '#34D399',
       delay: 160,
     },
     {
+      // Unknown ≠ zero: revenue is NULL on the imported concerts. Show a dash.
       title: 'Revenue YTD',
-      value: formatCurrency(kpis?.revenueYTD || 0),
-      //subtitle: 'Year to date',
-      //rog: 0,
+      value: (kpis?.revenueYTD || 0) > 0 ? formatCurrency(kpis.revenueYTD) : '—',
+      subtitle: (kpis?.revenueYTD || 0) > 0 ? undefined : 'Not available',
       icon: DollarSign,
       accentColor: '#F87171',
       delay: 240,
@@ -364,9 +370,9 @@ function Dashboard() {
 
       {/* ── Row 2: Revenue + Age + Gender ── */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
-        <ChartContainer title="Concert Revenue by City" subtitle="Total revenue per city (INR)" delay={150}>
-          <BarChart data={revenueByCity} xKey="name" layout="horizontal"
-            bars={[{ key: 'revenue', label: 'Revenue', color: '#818CF8' }]} height={240} />
+        <ChartContainer title="Concerts by City" subtitle="Number of concerts per city" delay={150}>
+          <BarChart data={concertsByCity} xKey="name" layout="horizontal"
+            bars={[{ key: 'count', label: 'Concerts', color: '#818CF8' }]} height={240} />
         </ChartContainer>
         <ChartContainer title="Audience Age Distribution" subtitle="% of total audience" delay={230}>
           <PieChart data={ageChartData} nameKey="name" valueKey="value" innerRadius={55} height={240} />
