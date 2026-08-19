@@ -301,18 +301,31 @@ async function getTrendsScore(
 
 // ─── Main export ─────────────────────────────────────────────────────────────
 
-export async function runScorer(): Promise<void> {
+export async function runScorer(
+  opts: { limit?: number; slug?: string; skipArtistIds?: string[] } = {}
+): Promise<void> {
   const startTime = Date.now();
   console.log(`\n${'═'.repeat(60)}`);
   console.log(`Scorer (${SCORE_VERSION}) started: ${new Date().toISOString()}`);
 
+  // Artist selection only — scoring math below is unchanged. `skipArtistIds`
+  // implements the runner-level same-day snapshot guard (already-scored-today
+  // artists are excluded so no duplicate snapshot is created).
+  const where: { viberateSlug: any; active: boolean; id?: any } = {
+    viberateSlug: opts.slug ? opts.slug : { not: null },
+    active: true,
+  };
+  if (opts.skipArtistIds && opts.skipArtistIds.length > 0) {
+    where.id = { notIn: opts.skipArtistIds };
+  }
   const artists = await prisma.artist.findMany({
-    where: { viberateSlug: { not: null }, active: true },
+    where,
     select: { id: true, artistName: true },
+    ...(opts.limit && opts.limit > 0 ? { take: opts.limit } : {}),
   });
 
   if (artists.length === 0) {
-    console.warn('No artists with viberateSlug found — nothing to score.');
+    console.warn('No artists to score (all filtered out or already scored today).');
     await prisma.$disconnect();
     return;
   }

@@ -1,0 +1,41 @@
+# Render Blueprint — Viberate refresh Cron Job (Phase A).
+#
+# This declares ONLY the dedicated Viberate collection Cron Job. The existing
+# web/API and Python services are managed separately in the Render dashboard and
+# are intentionally NOT redefined here. This file is inert until connected as a
+# Blueprint in Render; it documents the reproducible Cron configuration.
+#
+# The browser collector runs ONLY here — never in the public API web service
+# (which keeps VIBERATE_SCHEDULER_ENABLED unset/false).
+#
+# One-time manual step before the first run: create a Viberate session locally
+# (`npm run db:collect` prerequisites → run login.ts headed), then provide it to
+# this job either as:
+#   - a Render Secret File mounted at /etc/secrets/viberate-session.json
+#     (set VIBERATE_SESSION_PATH=/etc/secrets/viberate-session.json), OR
+#   - VIBERATE_SESSION_B64 = base64 of the session JSON.
+# Never commit the session file.
+
+services:
+  - type: cron
+    name: viberate-refresh
+    runtime: node
+    plan: starter
+    schedule: "30 0 * * *"        # 00:30 UTC = 6:00 AM IST (existing intended cadence)
+    rootDir: backend
+    # Chromium + system libs are installed ONLY for this Cron Job runtime.
+    buildCommand: npm ci && npx prisma generate && npx playwright install --with-deps chromium
+    startCommand: npm run viberate:refresh
+    envVars:
+      - key: DATABASE_URL            # set in dashboard (secret) — Supabase pooler
+        sync: false
+      - key: DIRECT_URL              # set in dashboard (secret) — Supabase direct
+        sync: false
+      # Session provisioning — set ONE of the following in the dashboard:
+      - key: VIBERATE_SESSION_B64    # base64 of viberate-session.json (secret)
+        sync: false
+      - key: VIBERATE_SESSION_PATH   # OR path to a mounted Secret File
+        sync: false
+      # This Cron Job is the sole collector; the in-process web scheduler stays off.
+      - key: VIBERATE_SCHEDULER_ENABLED
+        value: "false"

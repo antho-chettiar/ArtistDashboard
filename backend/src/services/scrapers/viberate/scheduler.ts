@@ -40,6 +40,15 @@ interface ViberateScrapeJob {
 const viberateJobQueue = new ScrapingJobQueue<ViberateScrapeJob>('viberate');
 
 export function startViberateScheduler(): void {
+  // The browser collector must NOT run inside the public API web process
+  // (it sleeps/restarts and has no Chromium). A dedicated Render Cron Job owns
+  // it. This in-process scheduler stays OFF unless explicitly enabled, so there
+  // is exactly one active Viberate collection process.
+  if (process.env.VIBERATE_SCHEDULER_ENABLED !== 'true') {
+    console.log('[VIBERATE] in-process scheduler disabled (VIBERATE_SCHEDULER_ENABLED != true) — Cron Job owns collection');
+    return;
+  }
+
   console.log('[viberate-scheduler] Starting — will run daily at 6:00 AM IST');
 
   cron.schedule(CRON_SCHEDULE, async () => {

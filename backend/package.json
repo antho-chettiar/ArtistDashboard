@@ -16,6 +16,7 @@
     "db:collect": "tsx src/services/scrapers/viberate/collector.ts",
     "db:sync": "tsx src/services/scrapers/viberate/sync.ts",
     "db:score": "tsx src/services/scrapers/viberate/scorer.ts",
+    "viberate:refresh": "tsx scripts/run-viberate-refresh.ts",
     "db:predict": "tsx scripts/update-all-predictions-with-coords.ts",
     "db:bootstrap": "npm run db:seed && npm run db:import-artists && npm run db:assign-slugs",
     "db:studio": "prisma studio",

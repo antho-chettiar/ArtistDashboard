@@ -10,9 +10,9 @@
  */
 
 import { chromium } from 'playwright';
-import path from 'path';
+import { getSessionPath } from './session';
 
-const SESSION_PATH = path.resolve(__dirname, 'viberate-session.json');
+const SESSION_PATH = getSessionPath();
 
 async function main() {
   console.log('Launching browser for manual login...');

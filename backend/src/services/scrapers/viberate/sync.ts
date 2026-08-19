@@ -250,14 +250,15 @@ async function syncPlatformMetric(
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-export async function runSync(): Promise<void> {
+export async function runSync(opts: { limit?: number; slug?: string } = {}): Promise<void> {
   const startTime = Date.now();
   console.log(`\n${'═'.repeat(60)}`);
   console.log(`Viberate sync started: ${new Date().toISOString()}`);
 
   const artists = await prisma.artist.findMany({
-    where: { viberateSlug: { not: null } },
+    where: { viberateSlug: opts.slug ? opts.slug : { not: null } },
     select: { id: true, artistName: true },
+    ...(opts.limit && opts.limit > 0 ? { take: opts.limit } : {}),
   });
 
   if (artists.length === 0) {

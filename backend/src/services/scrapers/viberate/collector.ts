@@ -14,18 +14,17 @@
  */
 
 import { chromium, BrowserContext } from 'playwright';
-import path from 'path';
 import fs from 'fs';
 import { PrismaClient } from '@prisma/client';
 import { mapGraphResponse, ViberateGraphResponse } from './mapper';
 import { retryWithBackoff } from '../retry';
 import { RateLimiter } from '../rateLimiter';
+import { getSessionPath } from './session';
 
 const prisma = new PrismaClient();
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const SESSION_PATH = path.resolve(__dirname, 'viberate-session.json');
 const BASE_URL = 'https://api.viberate.com/api/v1';
 
 // How many days of history to fetch on each run.
@@ -291,29 +290,33 @@ async function collectArtist(
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-export async function runCollection(): Promise<void> {
+export async function runCollection(opts: { limit?: number; slug?: string } = {}): Promise<void> {
   const startTime = Date.now();
+  const sessionPath = getSessionPath();
   console.log(`\n${'═'.repeat(60)}`);
   console.log(`Viberate collection started: ${new Date().toISOString()}`);
 
   // Guard: session file must exist
-  if (!fs.existsSync(SESSION_PATH)) {
+  if (!fs.existsSync(sessionPath)) {
     throw new Error(
-      `Session file not found at ${SESSION_PATH}. Run login.ts first.`
+      `Session file not found at ${sessionPath}. Run login.ts first (or provision VIBERATE_SESSION_B64).`
     );
   }
 
-  // Load artists that have a viberateSlug set
+  // Load artists that have a viberateSlug set. Optional filters allow a small,
+  // controlled subset (single slug or a capped count) without touching metrics.
+  const where: { viberateSlug: any; active: boolean } = {
+    viberateSlug: opts.slug ? opts.slug : { not: null },
+    active: true,
+  };
   const artists = await prisma.artist.findMany({
-    where: {
-      viberateSlug: { not: null },
-      active: true,
-    },
+    where,
     select: {
       id: true,
       artistName: true,
       viberateSlug: true,
     },
+    ...(opts.limit && opts.limit > 0 ? { take: opts.limit } : {}),
   });
 
   if (artists.length === 0) {
@@ -329,7 +332,7 @@ export async function runCollection(): Promise<void> {
 
   // Launch browser with saved session
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ storageState: SESSION_PATH });
+  const context = await browser.newContext({ storageState: sessionPath });
 
   // Establish page context once — sets origin/referer for all subsequent requests
   const initPage = await context.newPage();

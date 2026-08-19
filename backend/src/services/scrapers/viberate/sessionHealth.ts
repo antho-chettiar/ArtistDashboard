@@ -14,11 +14,9 @@
  */
 
 import { chromium } from 'playwright';
-import path from 'path';
 import fs from 'fs';
 // import nodemailer from 'nodemailer';
-
-const SESSION_PATH = path.resolve(__dirname, 'viberate-session.json');
+import { getSessionPath } from './session';
 
 // Lightweight endpoint — just checks auth, minimal data returned
 // Using the user profile endpoint as it's small and always available
@@ -37,6 +35,7 @@ export interface SessionHealthResult {
 
 export async function checkSessionHealth(): Promise<SessionHealthResult> {
   const checkedAt = new Date();
+  const SESSION_PATH = getSessionPath();
 
   // Guard: session file must exist on disk
   if (!fs.existsSync(SESSION_PATH)) {
