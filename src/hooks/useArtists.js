@@ -1,6 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
 import client from '../api/client'
 
+// Derive current age from a date-of-birth (dynamic — never a stored static age).
+function computeAge(dob) {
+  if (!dob) return null
+  const d = new Date(dob)
+  if (Number.isNaN(d.getTime())) return null
+  const now = new Date()
+  let age = now.getUTCFullYear() - d.getUTCFullYear()
+  const md = (now.getUTCMonth() + 1) * 100 + now.getUTCDate()
+  const bd = (d.getUTCMonth() + 1) * 100 + d.getUTCDate()
+  if (md < bd) age -= 1
+  return age >= 0 && age < 130 ? age : null
+}
+
 export function useArtists({ search = '', genre = '', limit = 100 } = {}) {
   const params = new URLSearchParams()
   if (search) params.append('search', search)
@@ -87,7 +100,8 @@ export function useArtists({ search = '', genre = '', limit = 100 } = {}) {
       type,
       genre,
       nationality: artist.nationality || 'Unknown',
-      age: artist.age || 'N/A',
+      // Dynamic age from Wikidata date-of-birth; fall back to legacy age column.
+      age: computeAge(artist.dateOfBirth) ?? artist.age ?? 'N/A',
       totalConcerts,
       // Canonical Python popularity (null → "—"). Never the NULL Artist.popularity → 0.
       popularity: popularityById[artist.id] ?? null,

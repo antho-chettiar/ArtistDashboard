@@ -13,6 +13,8 @@ model Artist {
   artistName              String                       @unique
   displayName             String?
   age                     Int?
+  dateOfBirth             DateTime?                    @db.Date
+  wikidataId              String?
   gender                  String?
   genre                   String?
   nationality             String?
