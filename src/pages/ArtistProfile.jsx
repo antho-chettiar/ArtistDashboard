@@ -13,7 +13,14 @@ import { formatNumber, formatCurrency, formatDate } from '../utils/formatters'
 import ViberateTrends from '../components/viberate/ViberateTrends'
 import ScoreBreakdown from '../components/viberate/ScoreBreakdown'
 
-const TABS = ['Platforms', 'Growth Trends', 'Concerts', 'Viberate Trends', 'Score', 'Demographics']
+const TABS = ['Platforms', 'Growth Trends', 'Concerts', 'Platform Trends', 'Score', 'Demographics']
+
+// Real daily ranges only — history currently spans 31 days.
+const GROWTH_RANGES = [
+  { label: '7D', days: 7 },
+  { label: '15D', days: 15 },
+  { label: '30D', days: 30 },
+]
 
 const PLATFORM_META = {
   instagram: { label: 'Instagram', color: '#E1306C' },
@@ -27,10 +34,17 @@ const TREND_LINES = [
   { key: 'spotify', label: 'Spotify', color: '#1DB954' },
 ]
 
+// Growth Trends adds a Combined line (sum of the real platform series).
+const GROWTH_LINES = [
+  ...TREND_LINES,
+  { key: 'combined', label: 'Combined', color: '#A78BFA' },
+]
+
 function ArtistProfile() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [activeTab, setTab] = useState('Platforms')
+  const [growthDays, setGrowthDays] = useState(30)
 
   // Fetch artist details
   const { data: artistData, isLoading: artistLoading, error: artistError } = useQuery({
@@ -210,26 +224,32 @@ function ArtistProfile() {
     avgTicketPrice: c.avgTicketPrice,
   }))
 
-  // Transform trends: aggregate metrics by date and platform
+  // Growth Trends: aggregate real DAILY platform metrics (no month-bucketing,
+  // no multipliers). Combined = sum of the platform series for that day.
   const trendMap = new Map()
 
   allMetrics?.forEach((metric) => {
-    const dateStr = new Date(metric.metricDate).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+    const d = new Date(metric.metricDate)
+    const dayKey = d.toISOString().slice(0, 10) // YYYY-MM-DD (unique, sortable)
+    const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) // "Jul 5"
     const platform = (metric.platform || '').toLowerCase()
     const followers = Number(metric.followers) || 0
 
-    if (!trendMap.has(dateStr)) {
-      trendMap.set(dateStr, { date: dateStr, instagram: 0, youtube: 0, spotify: 0 })
+    if (!trendMap.has(dayKey)) {
+      trendMap.set(dayKey, { key: dayKey, date: label, instagram: 0, youtube: 0, spotify: 0 })
     }
-
-    const entry = trendMap.get(dateStr)
+    const entry = trendMap.get(dayKey)
     if (platform === 'instagram') entry.instagram = followers
     if (platform === 'youtube') entry.youtube = followers
     if (platform === 'spotify') entry.spotify = followers
   })
 
-  const trendData = Array.from(trendMap.values())
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+  const trendDataAll = Array.from(trendMap.values())
+    .sort((a, b) => a.key.localeCompare(b.key))
+    .map(({ key, ...rest }) => ({ ...rest, combined: rest.instagram + rest.youtube + rest.spotify }))
+
+  // Only the last N days that actually have data — never padded.
+  const trendData = trendDataAll.slice(-growthDays)
 
   // Transform demographics for pie charts (group by dimensionValue and sum absoluteCount)
   const groupDemographics = (data) => {
@@ -376,22 +396,42 @@ function ArtistProfile() {
       {activeTab === 'Growth Trends' && (
         <ChartContainer
           title="Follower Growth — All Platforms"
-          subtitle="Instagram · YouTube · Spotify monthly trend"
+          subtitle={`Instagram · YouTube · Spotify · Combined — daily, last ${growthDays} days`}
         >
-          <div className="flex gap-2 mb-4 flex-wrap">
-            {TREND_LINES.map(p => (
-              <span key={p.key}
-                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium"
-                style={{ background: `${p.color}18`, color: p.color, border: `1px solid ${p.color}30` }}>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
-                {p.label}
-              </span>
-            ))}
+          <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
+            <div className="flex gap-2 flex-wrap">
+              {GROWTH_LINES.map(p => (
+                <span key={p.key}
+                  className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium"
+                  style={{ background: `${p.color}18`, color: p.color, border: `1px solid ${p.color}30` }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
+                  {p.label}
+                </span>
+              ))}
+            </div>
+            <div className="flex gap-1 p-1 rounded-xl"
+              style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+              {GROWTH_RANGES.map(r => (
+                <button key={r.days}
+                  onClick={() => setGrowthDays(r.days)}
+                  className="text-xs px-2 py-1 rounded-lg font-semibold transition-all duration-200"
+                  style={growthDays === r.days ? {
+                    background: 'linear-gradient(135deg, #6366F1, #818CF8)', color: '#fff',
+                  } : { color: 'var(--text-muted)', background: 'transparent' }}>
+                  {r.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <LineChart data={trendData} xKey="date" lines={TREND_LINES} height={320} />
+          {trendData.length > 0 ? (
+            <LineChart data={trendData} xKey="date" lines={GROWTH_LINES} height={320}
+              yDomain={['auto', 'auto']} />
+          ) : (
+            <EmptyState title="No platform history" message="No daily platform metrics are available for this artist yet." />
+          )}
         </ChartContainer>
       )}
-{activeTab === 'Viberate Trends' && <ViberateTrends artistId={id} />}
+{activeTab === 'Platform Trends' && <ViberateTrends artistId={id} />}
 {activeTab === 'Score' && <ScoreBreakdown artistId={id} />}
       {/* ── Tab: Concerts ── */}
       {activeTab === 'Concerts' && (

@@ -19,7 +19,7 @@ function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase()
 }
 
-export function useDashboardData() {
+export function useDashboardData(trendDays = 30) {
 
   // ── KPIs ─────────────────────────────────────────────────────────────────
   const { data: kpisData, isLoading: kpisLoading, error: kpisError } = useQuery({
@@ -44,12 +44,14 @@ export function useDashboardData() {
   })
 
   // ── Platform growth trends ────────────────────────────────────────────────
-  // Backend returns: [{ date: 'Jan 2025', followers: 12345678 }, ...]
-  // Spotify: backend maps streams → followers key automatically
+  // Real DAILY platform history (no month-bucketing, no multipliers). Backend
+  // returns the last `trendDays` days that actually have data:
+  //   [{ date: 'Jul 5', followers: 12345678 }, ...]
+  // Spotify maps streams → followers key automatically (existing behavior).
   const { data: instagramTrends, isLoading: instagramLoading } = useQuery({
-    queryKey: ['analytics', 'trends', 'instagram'],
+    queryKey: ['analytics', 'trends', 'instagram', trendDays],
     queryFn: async () => {
-      const response = await client.get('/analytics/trends?platform=instagram&months=12')
+      const response = await client.get(`/analytics/trends?platform=instagram&granularity=day&days=${trendDays}`)
       return getArrayPayload(response.data, 'trends')
     },
     staleTime: 10 * 60 * 1000,
@@ -57,9 +59,9 @@ export function useDashboardData() {
   })
 
   const { data: youtubeTrends, isLoading: youtubeLoading } = useQuery({
-    queryKey: ['analytics', 'trends', 'youtube'],
+    queryKey: ['analytics', 'trends', 'youtube', trendDays],
     queryFn: async () => {
-      const response = await client.get('/analytics/trends?platform=youtube&months=12')
+      const response = await client.get(`/analytics/trends?platform=youtube&granularity=day&days=${trendDays}`)
       return getArrayPayload(response.data, 'trends')
     },
     staleTime: 10 * 60 * 1000,
@@ -67,9 +69,19 @@ export function useDashboardData() {
   })
 
   const { data: spotifyTrends, isLoading: spotifyLoading } = useQuery({
-    queryKey: ['analytics', 'trends', 'spotify'],
+    queryKey: ['analytics', 'trends', 'spotify', trendDays],
     queryFn: async () => {
-      const response = await client.get('/analytics/trends?platform=spotify&months=12')
+      const response = await client.get(`/analytics/trends?platform=spotify&granularity=day&days=${trendDays}`)
+      return getArrayPayload(response.data, 'trends')
+    },
+    staleTime: 10 * 60 * 1000,
+    enabled: !!kpisData && isAuthenticated(),
+  })
+
+  const { data: facebookTrends, isLoading: facebookLoading } = useQuery({
+    queryKey: ['analytics', 'trends', 'facebook', trendDays],
+    queryFn: async () => {
+      const response = await client.get(`/analytics/trends?platform=facebook&granularity=day&days=${trendDays}`)
       return getArrayPayload(response.data, 'trends')
     },
     staleTime: 10 * 60 * 1000,
@@ -131,7 +143,7 @@ export function useDashboardData() {
   })
 
   const isLoading = kpisLoading || topArtistsLoading || instagramLoading ||
-    youtubeLoading || spotifyLoading || genresLoading || ageLoading || genderLoading
+    youtubeLoading || spotifyLoading || facebookLoading || genresLoading || ageLoading || genderLoading
   const error = kpisError
 
   // ── Artist type map ───────────────────────────────────────────────────────
@@ -188,6 +200,9 @@ export function useDashboardData() {
       return {
         id: artist.id, name: artist.artistName, type, genre, nationality,
         age: 0, totalConcerts: 0, popularity, followers, rog, photo, totalFollowers,
+        // Real RoG from the backend (getTopArtists). null = no rog history → "—".
+        avgRogDaily: item.avgRogDaily ?? null,
+        rogScore: item.rogScore ?? null,
       }
     }).filter(Boolean)
   }, [topArtistsData, artistTypeById])
@@ -235,9 +250,9 @@ export function useDashboardData() {
     const merge = (data, platform) => {
       if (!Array.isArray(data)) return
       data.forEach((row, i) => {
-        const key = row.date                            // e.g. "Jan 2025"
+        const key = row.date                            // e.g. "Jul 5"
         if (!map[key]) {
-          map[key] = { date: key, instagram: 0, youtube: 0, spotify: 0, _order: i }
+          map[key] = { date: key, instagram: 0, youtube: 0, spotify: 0, facebook: 0, _order: i }
         }
         map[key][platform] = row.followers || 0
       })
@@ -246,11 +261,13 @@ export function useDashboardData() {
     merge(instagramTrends || [], 'instagram')
     merge(youtubeTrends   || [], 'youtube')
     merge(spotifyTrends   || [], 'spotify')
+    merge(facebookTrends  || [], 'facebook')
 
+    // Daily labels like "Jul 5" sort correctly when parsed with a year.
     return Object.values(map)
-      .sort((a, b) => new Date(a.date + ' 1').getTime() - new Date(b.date + ' 1').getTime())
+      .sort((a, b) => new Date(a.date + ' 2026').getTime() - new Date(b.date + ' 2026').getTime())
       .map(({ _order, ...rest }) => rest)              // strip internal sort key
-  }, [instagramTrends, youtubeTrends, spotifyTrends])
+  }, [instagramTrends, youtubeTrends, spotifyTrends, facebookTrends])
 
   // ── Genre transform ───────────────────────────────────────────────────────
   const genreData = useMemo(() => {

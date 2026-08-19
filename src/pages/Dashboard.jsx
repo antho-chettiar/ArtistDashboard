@@ -25,13 +25,22 @@ const TREND_LINES = [
   { key: 'instagram', label: 'Instagram', color: '#E1306C' },
   { key: 'youtube',   label: 'YouTube',   color: '#FF0000' },
   { key: 'spotify',   label: 'Spotify',   color: '#1DB954' },
+  { key: 'facebook',  label: 'Facebook',  color: '#1877F2' },
+]
+
+// Real daily ranges only — data currently spans 31 days, so no longer ranges.
+const TREND_RANGES = [
+  { label: '7D',  days: 7  },
+  { label: '15D', days: 15 },
+  { label: '30D', days: 30 },
 ]
 
 function Dashboard() {
   const { artistType } = useFilterStore()
   const [timeFilter, setTimeFilter] = useState(12)
+  const [trendDays, setTrendDays] = useState(30)
 
-  const { data, isLoading, error } = useDashboardData()
+  const { data, isLoading, error } = useDashboardData(trendDays)
 
   // if (isLoading) {
   //   return (
@@ -130,8 +139,27 @@ function Dashboard() {
       acc[c.city].count += 1
       return acc
     }, {})
-    return Object.values(grouped).sort((a, b) => b.count - a.count)
+    // Presentation-friendly: Top 10 cities by real concert count.
+    return Object.values(grouped).sort((a, b) => b.count - a.count).slice(0, 10)
   }, [filteredConcerts])
+
+  // Concert Genre Representation: count concerts by the performing artist's
+  // genre (the reliable Artist.genre string; the ArtistGenre join is empty).
+  // Artists without a usable genre are excluded — not bucketed as 0/Unknown.
+  const concertGenreData = useMemo(() => {
+    if (!filteredConcerts.length || !allArtists?.length) return []
+    const genreByArtist = {}
+    allArtists.forEach(a => { if (a?.id && a?.genre) genreByArtist[a.id] = a.genre })
+    const counts = {}
+    filteredConcerts.forEach(c => {
+      const g = genreByArtist[c.artistId]
+      if (!g) return
+      counts[g] = (counts[g] || 0) + 1
+    })
+    return Object.entries(counts)
+      .map(([genre, count]) => ({ genre, count }))
+      .sort((a, b) => b.count - a.count)
+  }, [filteredConcerts, allArtists])
 
   // Normalize chart data coming from backend so charts receive numeric values
   const ageChartData = useMemo(() => (ageData || []).map(d => ({
@@ -242,22 +270,42 @@ function Dashboard() {
         {/* Multi-line trend */}
         <ChartContainer
           title="Platform Growth Trends"
-          subtitle="Instagram · YouTube · Spotify - monthly followers / subscribers / streams over time"
+          subtitle={`Instagram · YouTube · Spotify · Facebook — daily, last ${trendDays} days`}
           delay={100}
         >
-          <div className="flex gap-2 mb-4 flex-wrap">
-            {TREND_LINES.map(p => (
-              <span key={p.key}
-                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium"
-                style={{ background: `${p.color}18`, color: p.color, border: `1px solid ${p.color}30` }}>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
-                {p.label}
-              </span>
-            ))}
+          <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
+            <div className="flex gap-2 flex-wrap">
+              {TREND_LINES.map(p => (
+                <span key={p.key}
+                  className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium"
+                  style={{ background: `${p.color}18`, color: p.color, border: `1px solid ${p.color}30` }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
+                  {p.label}
+                </span>
+              ))}
+            </div>
+            {/* Real daily range selector (7/15/30D) */}
+            <div className="flex gap-1 p-1 rounded-xl"
+              style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+              {TREND_RANGES.map(r => (
+                <button key={r.days}
+                  onClick={() => setTrendDays(r.days)}
+                  className="text-xs px-2 py-1 rounded-lg font-semibold transition-all duration-200"
+                  style={trendDays === r.days ? {
+                    background: 'linear-gradient(135deg, #6366F1, #818CF8)',
+                    color: '#fff',
+                  } : {
+                    color: 'var(--text-muted)',
+                    background: 'transparent',
+                  }}>
+                  {r.label}
+                </button>
+              ))}
+            </div>
           </div>
           <LineChart data={safeTrends} xKey="date" lines={TREND_LINES} height={260}
             margin={{ top: 10, right: 48, left: 48, bottom: 10 }}
-            yDomain={[1000000, 450000000]} />
+            yDomain={['auto', 'auto']} />
         </ChartContainer>
 
         {/* Top 10 Artists */}
@@ -302,9 +350,9 @@ function Dashboard() {
               </p>
             ) : (
               topArtistsByPopularity.map((artist, i) => {
-                const avgRoG = artist.rog
-                ? Object.values(artist.rog).reduce((a, b) => a + b, 0) / Object.values(artist.rog).length
-                : 0
+                // Real RoG from the canonical backend (getTopArtists). Not
+                // computed in the browser; null → "—" (never a hardcoded 0).
+                const avgRoG = artist.avgRogDaily
                 return (
                   <div key={artist.id}
                     className="flex items-center gap-3 p-2.5 rounded-xl transition-all duration-200 cursor-pointer"
@@ -358,8 +406,10 @@ function Dashboard() {
                       <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>followers</p>
                     </div>
 
-                    {/* RoG */}
-                    <RoGBadge value={parseFloat(avgRoG.toFixed(1))} />
+                    {/* RoG — real backend value, or "—" when no history */}
+                    {avgRoG != null
+                      ? <RoGBadge value={parseFloat(Number(avgRoG).toFixed(1))} />
+                      : <span className="text-xs flex-shrink-0" style={{ color: 'var(--text-muted)' }}>—</span>}
                   </div>
                 )
               })
@@ -370,7 +420,7 @@ function Dashboard() {
 
       {/* ── Row 2: Revenue + Age + Gender ── */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
-        <ChartContainer title="Concerts by City" subtitle="Number of concerts per city" delay={150}>
+        <ChartContainer title="Concerts by City" subtitle="Top 10 cities by concert count" delay={150}>
           <BarChart data={concertsByCity} xKey="name" layout="horizontal"
             bars={[{ key: 'count', label: 'Concerts', color: '#818CF8' }]} height={240} />
         </ChartContainer>
@@ -385,9 +435,9 @@ function Dashboard() {
 
       {/* ── Row 3: Genre + Recent Concerts ── */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <ChartContainer title="Genre Popularity" subtitle="Total streams by music genre" delay={200}>
-          <BarChart data={genreChartData} xKey="genre" layout="vertical"
-            bars={[{ key: 'streams', label: 'Streams' }]} multiColor={true} height={260} />
+        <ChartContainer title="Concert Genre Representation" subtitle="Concerts by artist genre" delay={200}>
+          <BarChart data={concertGenreData} xKey="genre" layout="vertical"
+            bars={[{ key: 'count', label: 'Concerts' }]} multiColor={true} height={260} />
         </ChartContainer>
 
         {/* Recent Concerts */}

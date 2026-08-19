@@ -1,5 +1,11 @@
 import { Request, Response } from 'express';
 import { madAnalyticsService, AnalyticsUnavailableError } from '../services/madAnalytics.service';
+import { redis } from '../utils/database';
+
+// Batch canonical popularity is heavy (full cohort). Cache it so list views are
+// cheap and don't repeatedly trigger the ~15s Python computation.
+const POPULARITY_ALL_CACHE_KEY = 'analytics:popularity:all';
+const POPULARITY_ALL_TTL = 10 * 60; // 10 minutes
 
 /**
  * Normalize errors from the canonical Python analytics engine.
@@ -95,6 +101,29 @@ export const madAnalyticsController = {
       return res.status(200).json({ success: true, data: result });
     } catch (error) {
       return handleAnalyticsError(res, error, 'saveAllPopularityScores');
+    }
+  },
+
+  // Canonical popularity for all active artists (batch). Cached so Artist-card
+  // list views are cheap. Redis is best-effort — a cache outage still serves live.
+  getAllPopularityScores: async (_req: Request, res: Response) => {
+    try {
+      try {
+        const cached = await redis.get(POPULARITY_ALL_CACHE_KEY);
+        if (cached) {
+          return res.status(200).json({ success: true, data: JSON.parse(cached), cached: true });
+        }
+      } catch { /* redis optional — fall through to live call */ }
+
+      const result = await madAnalyticsService.getAllPopularityScores();
+
+      try {
+        await redis.setex(POPULARITY_ALL_CACHE_KEY, POPULARITY_ALL_TTL, JSON.stringify(result));
+      } catch { /* ignore cache write failures */ }
+
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      return handleAnalyticsError(res, error, 'getAllPopularityScores');
     }
   },
 };

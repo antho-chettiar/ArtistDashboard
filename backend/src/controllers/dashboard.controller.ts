@@ -218,6 +218,10 @@ export const dashboardController = {
             artistId: artist.id,
             totalFollowers,
             compositeScore,
+            // No daily RoG history available in the fallback path → unavailable,
+            // not zero.
+            avgRogDaily: null,
+            rogScore: null,
             platforms: [
               { platform: 'INSTAGRAM', followers: igF },
               { platform: 'YOUTUBE', followers: ytF },
@@ -308,19 +312,27 @@ export const dashboardController = {
 
         // RoG score: normalize avg daily rog to 0-100
         const rogValues = artistRogs[item.artistId] || [];
-        const avgRog = rogValues.length > 0
+        const hasRog = rogValues.length > 0;
+        const avgRogRaw = hasRog
           ? rogValues.reduce((a: number, b: number) => a + b, 0) / rogValues.length
           : 0;
         // Log scale: rogDaily of 0.1% → ~30, 0.5% → ~62, 2% → ~92
-        const rogScore = avgRog > 0
-          ? Math.min(100, Math.round((Math.log(1 + avgRog * 40) / Math.log(81)) * 100))
+        const rogScoreValue = avgRogRaw > 0
+          ? Math.min(100, Math.round((Math.log(1 + avgRogRaw * 40) / Math.log(81)) * 100))
           : 0;
 
         const compositeScore = Math.round(
-          baseScore * 0.50 + trendsScore * 0.25 + rogScore * 0.25
+          baseScore * 0.50 + trendsScore * 0.25 + rogScoreValue * 0.25
         );
 
-        return { ...item, compositeScore };
+        // Expose real RoG so the frontend never shows a hardcoded 0. null when
+        // no rog data exists for the artist (rendered as "—", not 0).
+        return {
+          ...item,
+          compositeScore,
+          avgRogDaily: hasRog ? Number(avgRogRaw.toFixed(4)) : null,
+          rogScore: hasRog ? rogScoreValue : null,
+        };
       });
 
       // Sort by composite score (descending)

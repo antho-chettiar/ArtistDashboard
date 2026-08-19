@@ -68,6 +68,8 @@ export const analyticsController = {
         platform,
         months = '12',
         artistId,
+        granularity,
+        days = '30',
         // legacy params — kept for backwards compat but ignored in new logic
         metric,
         dateFrom,
@@ -75,6 +77,55 @@ export const analyticsController = {
       } = req.query;
 
       const useLegacyTrends = Boolean(metric || dateFrom || dateTo);
+
+      // ── Daily granularity path (real dated points, no month bucketing) ──
+      // Used by the short-range (7D/15D/30D) charts. Anchors to the LAST
+      // available days of data (not "now"), so ranges stay populated even when
+      // ingestion is a few days behind. Never pads or fabricates missing dates.
+      if (platform && !useLegacyTrends && String(granularity) === 'day') {
+        const platformUpper = String(platform).toUpperCase();
+        const dayCount = Math.min(Math.max(parseInt(days as string) || 30, 1), 400);
+
+        const cacheKey = `trends:day:${platformUpper}:${dayCount}:${artistId || 'all'}`;
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          return res.status(200).json({ success: true, data: { trends: JSON.parse(cached) }, cached: true });
+        }
+
+        const where: any = { platform: platformUpper };
+        if (artistId) where.artistId = String(artistId);
+
+        const rows = await prisma.platformMetric.findMany({
+          where,
+          orderBy: { metricDate: 'asc' },
+          select: { metricDate: true, followers: true, streams: true },
+        });
+
+        const streamPlatforms = new Set(['SPOTIFY', 'APPLE_MUSIC']);
+        const useStreams = streamPlatforms.has(platformUpper);
+
+        // Sum across artists per real calendar day (aggregate roster reach).
+        const byDay: Record<string, { total: number; date: Date }> = {};
+        for (const row of rows) {
+          const d = new Date(row.metricDate);
+          const key = d.toISOString().slice(0, 10); // YYYY-MM-DD
+          const value = Number(useStreams ? row.streams : row.followers) || 0;
+          if (!byDay[key]) byDay[key] = { total: 0, date: d };
+          byDay[key].total += value;
+        }
+
+        const allDays = Object.values(byDay)
+          .sort((a, b) => a.date.getTime() - b.date.getTime())
+          .map(({ total, date }) => ({
+            date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), // "Jul 5"
+            followers: total,
+          }));
+
+        // Only the last N days that actually have data — no padding.
+        const trends = allDays.slice(-dayCount);
+        await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(trends));
+        return res.status(200).json({ success: true, data: { trends } });
+      }
 
       // ── New aggregated path (used by Dashboard chart) ──────────────────
       if (platform && !useLegacyTrends) {

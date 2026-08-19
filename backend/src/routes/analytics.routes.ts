@@ -92,6 +92,13 @@ router.post('/ml/venue-capacity', authenticate, madAnalyticsController.getVenueC
 router.post('/ml/popularity', authenticate, madAnalyticsController.getPopularityScore);
 
 /**
+ * @route GET /api/v1/analytics/ml/popularity/all
+ * @desc Canonical popularity for all active artists (batch, cached)
+ * @access Public (authenticated)
+ */
+router.get('/ml/popularity/all', authenticate, madAnalyticsController.getAllPopularityScores);
+
+/**
  * @route POST /api/v1/analytics/ml/popularity/all/save
  * @desc Save popularity scores for all artists using ML
  * @access Public (authenticated)

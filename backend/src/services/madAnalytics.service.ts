@@ -64,6 +64,38 @@ const postAnalytics = async <T = unknown>(path: string, body?: unknown): Promise
   }
 };
 
+/**
+ * GET counterpart to postAnalytics — same timeout + error normalization.
+ * Used for read endpoints like /popularity/all (batch cohort scores).
+ */
+const getAnalytics = async <T = unknown>(path: string, timeoutMs = ANALYTICS_TIMEOUT_MS): Promise<T> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${ANALYTICS_URL}${path}`, { method: 'GET', signal: controller.signal });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new AnalyticsUnavailableError(
+        `Analytics ${path} returned ${res.status}${text ? ` ${text}` : ''}`,
+        'status',
+        res.status,
+      );
+    }
+    return (await res.json()) as T;
+  } catch (err) {
+    if (err instanceof AnalyticsUnavailableError) throw err;
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new AnalyticsUnavailableError(`Analytics ${path} timed out after ${timeoutMs}ms`, 'timeout');
+    }
+    throw new AnalyticsUnavailableError(
+      `Analytics ${path} unreachable: ${err instanceof Error ? err.message : String(err)}`,
+      'network',
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 export interface MetricRow {
   platform: string;
   metricDate?: string | Date;
@@ -627,5 +659,17 @@ export const madAnalyticsService = {
       console.error('Error saving all popularity scores via mad_analytics:', error);
       throw error;
     }
-  }
+  },
+
+  // Batch canonical popularity for the whole active cohort in ONE Python call,
+  // so list views (Artist cards) never fan out into 11 sequential requests.
+  // Longer timeout because the cohort computation is heavier than a single score.
+  getAllPopularityScores: async () => {
+    try {
+      return await getAnalytics('/popularity/all', Math.max(ANALYTICS_TIMEOUT_MS, 30_000));
+    } catch (error) {
+      console.error('Error fetching all popularity scores via mad_analytics:', error);
+      throw error;
+    }
+  },
 };

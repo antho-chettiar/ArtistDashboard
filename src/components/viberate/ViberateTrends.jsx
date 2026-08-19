@@ -60,12 +60,14 @@ const PLATFORM_GROUPS = [
   },
 ]
 
-const DAY_OPTIONS = [30, 90, 180, 365]
+// Real daily ranges only — Viberate history currently spans 31 days, so longer
+// windows (90/180/365) are intentionally not offered until enough data exists.
+const DAY_OPTIONS = [7, 15, 30]
 
 function ViberateTrends({ artistId }) {
   const [activePlatform, setPlatform] = useState(PLATFORM_GROUPS[0])
   const [selectedMetrics, setSelected] = useState([PLATFORM_GROUPS[0].metrics[0].name])
-  const [days, setDays] = useState(90)
+  const [days, setDays] = useState(30)
 
   const { data: series, isLoading, error } = useViberateMetrics(
     artistId,
