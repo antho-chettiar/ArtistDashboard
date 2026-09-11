@@ -60,24 +60,30 @@ Popularity = How big is this artist across ALL platforms, compared to everyone e
 
 **What it does:** Gives a 0-100 score for "how much demand exists" for a specific artist in a specific city on a specific date.
 
+> **Correction:** an earlier version of this document described demand as
+> "growing + past ticket sales + timing + freshness." That was never the
+> formula the system actually runs — it was leftover/unused code and has since
+> been removed. The real, live formula is signals-only (no historical ticket
+> sales) and is described below.
+
 **How it thinks:**
 
 ```
-Demand = Is the artist growing? + Did past shows sell well? + Is it a good time? + Is it fresh?
+Demand = Platform Size (how big the artist is) + Momentum (how fast they're growing)
+         + Google Trends (search interest) + City Affinity (how strong this city's market is)
 ```
 
 **Four ingredients:**
 
 | Factor | Weight | What it means |
 |--------|--------|---------------|
-| Social growth | 40% | Are followers/streams growing fast right now? |
-| Past ticket sales | 30% | Did recent concerts sell out or struggle? |
-| Timing | 20% | Summer weekend = high, Winter Monday = low |
-| Freshness | 10% | Played here last week = fatigue. Not played in 6 months = excitement |
+| Platform Size | 35% | How big is the artist's audience across Spotify/YouTube/Instagram/Facebook, relative to other artists? |
+| Momentum | 35% | Are followers/streams growing fast right now (same score used for Growth)? |
+| Google Trends | 20% | Real-time public search interest |
+| City Affinity | 10% | How strong is this city's live-music market (city tier × local market activity)? |
 
-**Example:**
-- Artist growing fast + sold out last 3 shows + Saturday in August + hasn't played here in a year = Demand 90+
-- Artist declining + last show was half-empty + Tuesday in February + played here last month = Demand 20-30
+Missing ingredients are dropped and the remaining weights are rescaled to add
+back up to 100% — a missing signal is never treated as zero.
 
 ---
 

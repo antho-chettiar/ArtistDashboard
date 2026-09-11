@@ -2,35 +2,24 @@ import { useQuery } from '@tanstack/react-query'
 import client from '../api/client'
 
 /**
- * Viberate / PopularityV2 hooks — backed by:
- *   GET /artists/leaderboard
- *   GET /artists/:id/score?history=N
+ * Viberate hooks — backed by:
+ *   GET /artists/:id/score
  *   GET /artists/:id/viberate-metrics?metric=...&days=N
+ *
+ * NOTE: the old ArtistPopularityV2 leaderboard was removed along with that
+ * scoring system (FORMULA_DECISIONS.md §2) — /artists/:id/score now returns
+ * the canonical Popularity breakdown instead.
  */
 
-export function useLeaderboard() {
+export function useArtistScore(id) {
   return useQuery({
-    queryKey: ['leaderboard'],
+    queryKey: ['artistScore', id],
     queryFn: async () => {
-      const response = await client.get('/artists/leaderboard')
-      return response.data.data // { leaderboard, unscored, scoreVersion }
-    },
-    staleTime: 5 * 60 * 1000,
-  })
-}
-
-export function useArtistScore(id, history = 60) {
-  return useQuery({
-    queryKey: ['artistScore', id, history],
-    queryFn: async () => {
-      const response = await client.get(`/artists/${id}/score?history=${history}`)
-      return response.data.data // { artistId, artistName, latest, history }
+      const response = await client.get(`/artists/${id}/score`)
+      return response.data.data // { artistId, artistName, latest }
     },
     staleTime: 5 * 60 * 1000,
     enabled: !!id,
-    // 404 just means "not scored yet" — don't hammer the API
-    retry: (failureCount, error) =>
-      error?.response?.status === 404 ? false : failureCount < 2,
   })
 }
 

@@ -95,9 +95,10 @@ def _build_snapshot_matrix(rows: list[dict[str, object]]) -> pd.DataFrame:
 
 def _entropy_weights(matrix: pd.DataFrame) -> dict[str, float]:
     """Compute entropy-based weights with Spotify priority.
-    
+
     Modifications from pure entropy:
-    - Spotify gets a minimum floor of 40% (it's the core music metric)
+    - Spotify gets a minimum floor of 45% (it's the core music metric)
+    - Instagram gets a minimum floor of 25%
     - Remaining weight distributed by entropy among other platforms
     """
     if matrix.empty:

@@ -396,9 +396,9 @@ function ProfitabilityPredictor({ artists, concerts }) {
               color={riskColor}
             />
             <StatBox
-              label="Confidence"
+              label="Signal Completeness"
               value={demand.data?.confidence ?? '—'}
-              sub={demand.data?.confidence ? 'Signal completeness' : 'No confidence data'}
+              sub={demand.data?.confidence ? 'Demand data availability' : 'No confidence data'}
               color="var(--accent-indigo)"
             />
             <StatBox

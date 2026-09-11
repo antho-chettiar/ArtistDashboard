@@ -7,6 +7,7 @@ import {
   updateArtistSchema,
 } from '../validations/zodSchemas';
 import { withCalculatedConcertRevenue } from '../utils/concertRevenue';
+import { madAnalyticsService, AnalyticsUnavailableError } from '../services/madAnalytics.service';
 
 export const artistController = {
   // List artists with pagination, search, genre filter
@@ -407,76 +408,20 @@ export const artistController = {
     }
   },
 
-  // ─── Viberate / PopularityV2 endpoints ─────────────────────────────────────
-
-  // GET /api/v1/artists/leaderboard
-  // All artists ranked by latest finalScore from ArtistPopularityV2Snapshot
-  leaderboard: async (req: any, res: Response) => {
-    try {
-      const { scoreVersion = 'v2.1-viberate' } = req.query;
-
-      const artists = await prisma.artist.findMany({
-        where: { active: true, viberateSlug: { not: null } },
-        select: {
-          id: true,
-          artistName: true,
-          displayName: true,
-          photoUrl: true,
-          imageUrl: true,
-          genre: true,
-          nationality: true,
-          popularityV2Snapshots: {
-            where: { scoreVersion: scoreVersion as string },
-            orderBy: { computedAt: 'desc' },
-            take: 1,
-          },
-        },
-      });
-
-      const leaderboard = artists
-        .filter((a) => a.popularityV2Snapshots.length > 0)
-        .map((a) => {
-          const snap = a.popularityV2Snapshots[0];
-          return {
-            artistId: a.id,
-            artistName: a.artistName,
-            displayName: a.displayName,
-            photoUrl: a.photoUrl || a.imageUrl,
-            genre: a.genre,
-            nationality: a.nationality,
-            score: {
-              finalScore: Number(snap.finalScore),
-              reachScore: Number(snap.reachScore),
-              engagementMultiplier: Number(snap.engagementMultiplier),
-              adjustedReach: Number(snap.adjustedReach),
-              trendsScore: Number(snap.trendsScore),
-              scoreVersion: snap.scoreVersion,
-              computedAt: snap.computedAt,
-            },
-          };
-        })
-        .sort((a, b) => b.score.finalScore - a.score.finalScore)
-        .map((entry, index) => ({ rank: index + 1, ...entry }));
-
-      const unscored = artists
-        .filter((a) => a.popularityV2Snapshots.length === 0)
-        .map((a) => ({ artistId: a.id, artistName: a.artistName }));
-
-      return res.status(200).json({
-        success: true,
-        data: { leaderboard, unscored, scoreVersion },
-      });
-    } catch (error) {
-      throw error;
-    }
-  },
+  // ─── Popularity Score endpoint ──────────────────────────────────────────────
+  // Canonical Popularity (Blueprint v2.0), single source of truth across the
+  // whole product — see FORMULA_DECISIONS.md §2. The previous ArtistPopularityV2
+  // (Viberate reach/engagement/trends) system has been removed; there is no
+  // "leaderboard" endpoint anymore since it existed only to rank that score.
 
   // GET /api/v1/artists/:id/score
-  // Latest score breakdown for one artist (+ optional history)
+  // Popularity breakdown for one artist: BaseEntropy / Momentum / GoogleTrends,
+  // derived from the same weighted-contribution values mad_analytics returns
+  // for /popularity (Popularity = base*0.60 + momentum*0.20 + trends*0.20,
+  // renormalized over available components).
   getScore: async (req: any, res: Response) => {
     try {
       const { id: artistId } = req.params;
-      const { scoreVersion = 'v2.1-viberate', history = '0' } = req.query;
 
       const artist = await prisma.artist.findUnique({
         where: { id: artistId },
@@ -491,34 +436,62 @@ export const artistController = {
         });
       }
 
-      const historyCount = Math.min(parseInt(history as string) || 0, 365);
+      const result = await madAnalyticsService.getPopularityScore(artistId);
+      const { popularity_score, platform_weights, platform_contributions, computed_at } =
+        result as {
+          popularity_score: number;
+          platform_weights: Record<string, number>;
+          platform_contributions: Record<string, number>;
+          computed_at: string;
+        };
 
-      const snapshots = await prisma.artistPopularityV2Snapshot.findMany({
-        where: { artistId, scoreVersion: scoreVersion as string },
-        orderBy: { computedAt: 'desc' },
-        take: Math.max(1, historyCount),
-      });
+      const BASE_KEYS = ['spotifyMonthlyListeners', 'youtubeSubscribers', 'instagramFollowers', 'facebookFollowers'];
+      const baseWeight = BASE_KEYS.reduce((sum, key) => sum + (platform_weights?.[key] || 0), 0);
+      const baseContribution = BASE_KEYS.reduce((sum, key) => sum + (platform_contributions?.[key] || 0), 0);
+      // Invert the same math calculate() applies (base_w * (5 + 95*Σcontrib_raw)):
+      // contribution stored is already scaled by base_w, so dividing it back out
+      // recovers the 0–100 base entropy score.
+      const baseScore = baseWeight > 0 ? Math.round((5 + 95 * (baseContribution / baseWeight)) * 100) / 100 : null;
 
-      if (snapshots.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'No score snapshots for this artist yet. Run the scorer first.',
-          code: 'SCORE_NOT_FOUND',
-        });
-      }
+      const momentumWeight = platform_weights?.momentum;
+      const momentumScore = momentumWeight
+        ? Math.round(((platform_contributions.momentum / momentumWeight) * 100) * 100) / 100
+        : null;
 
-      const [latest, ...rest] = snapshots;
+      const trendsWeight = platform_weights?.google_trends;
+      const trendsScore = trendsWeight
+        ? Math.round(((platform_contributions.google_trends / trendsWeight) * 100) * 100) / 100
+        : null;
 
       return res.status(200).json({
         success: true,
         data: {
           artistId: artist.id,
           artistName: artist.artistName,
-          latest,
-          history: historyCount > 0 ? [latest, ...rest] : undefined,
+          latest: {
+            finalScore: popularity_score,
+            baseScore,
+            baseWeight: Math.round(baseWeight * 10000) / 10000,
+            momentumScore,
+            momentumWeight: momentumWeight ?? null,
+            trendsScore,
+            trendsWeight: trendsWeight ?? null,
+            platformWeights: platform_weights,
+            platformContributions: platform_contributions,
+            computedAt: computed_at,
+          },
         },
       });
     } catch (error) {
+      if (error instanceof AnalyticsUnavailableError) {
+        return res.status(503).json({
+          success: false,
+          available: false,
+          code: 'ANALYTICS_UNAVAILABLE',
+          reason: error.reason,
+          message: 'Analytics service is temporarily unavailable.',
+        });
+      }
       throw error;
     }
   },

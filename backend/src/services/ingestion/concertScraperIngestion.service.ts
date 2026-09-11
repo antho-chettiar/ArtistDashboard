@@ -14,10 +14,11 @@
  *      SourceEventReference / DuplicateGroup / DuplicateGroupMember -> validate
  *      (ValidationLog), exactly as already built.
  *
- * runPredictions/persistConcerts default to false here so this phase never
- * creates Concert/PredictionOutput/FeatureSnapshot rows, but stay caller-
- * controllable (not hardcoded) so a later phase can opt back in without
- * editing this file.
+ * This phase never creates Concert rows -- it stops after CanonicalEvent /
+ * SourceEventReference / dedup / ValidationLog. (Revenue prediction was
+ * removed from concertIntelligenceService entirely -- FORMULA_DECISIONS.md
+ * §3, System 6 -- so there is no longer a runPredictions/persistConcerts
+ * option to opt into here.)
  *
  * Contains zero Prisma calls -- all persistence is delegated to the existing
  * services above.
@@ -42,8 +43,6 @@ export const AVAILABLE_SCRAPER_SOURCES: ConcertSourcePlatform[] = AVAILABLE_SCRA
 );
 
 export interface ConcertScraperIngestionOptions {
-  runPredictions?: boolean;
-  persistConcerts?: boolean;
   dryRun?: boolean;
 }
 
@@ -102,8 +101,6 @@ export async function runConcertScraperIngestion(
   const summary = await concertIntelligenceService.ingestRawEvents(rawEvents, {
     ...query,
     dryRun: options.dryRun,
-    runPredictions: options.runPredictions ?? false,
-    persistConcerts: options.persistConcerts ?? false,
   });
 
   return {

@@ -1,13 +1,16 @@
 """
 demand/scorer.py
-Composite 0–100 demand score for an artist in a given city on a given date.
+Composite 0–100 demand score for an artist in a given city on a given date
+(Formula Blueprint v2.0 — Step 4).
 
 Components
 ----------
-- social_velocity  (40%)  — how fast the artist is growing across platforms
-- ticket_velocity  (30%)  — recent sell-through rate at past concerts
-- seasonality      (20%)  — month-of-year × weekend bonus
-- recency          (10%)  — how recently the artist performed nearby
+- platform_size (35%) — cohort-relative social/streaming reach (Step 2)
+- momentum      (35%) — cross_platform_score from the growth module
+- google_trends (20%) — real-time public search interest
+- city_affinity (10%) — city tier × market activity (Step 3)
+
+Missing components are renormalized out (present weights rescaled to sum to 1.0).
 
 Input:  DemandInput
 Output: DemandOutput
@@ -25,20 +28,7 @@ from ..utils.feature_engineering import (
     metrics_to_df,
     platform_series,
     rog,
-    social_velocity,
-    ticket_velocity,
-    seasonality_factor,
 )
-
-
-# ── Component weights ─────────────────────────────────────────────────────────
-
-WEIGHTS = {
-    "social_velocity": 0.40,
-    "ticket_velocity": 0.30,
-    "seasonality":     0.20,
-    "recency":         0.10,
-}
 
 
 # ── Platform Size Score (Formula Blueprint v2.0 — Step 2) ─────────────────────
@@ -124,35 +114,6 @@ def platform_size_scores() -> dict[str, float]:
         artist_id: compute_platform_size(values, cohort_min, cohort_max)
         for artist_id, values in per_artist.items()
     }
-
-
-def _recency_score(concerts, city: str, country: str) -> float:
-    """
-    Score based on how recently the artist played in the same city/country.
-    Recent = higher novelty anticipation if > 3 months ago, else saturation risk.
-    Returns 0–1.
-    """
-    if not concerts:
-        return 0.5   # neutral — no data
-
-    now = datetime.now(timezone.utc).date()
-    nearby = [
-        c for c in concerts
-        if c.city.lower() == city.lower() or c.country.lower() == country.lower()
-    ]
-    if not nearby:
-        return 0.7   # never played here → high novelty
-
-    most_recent = max(c.date for c in nearby)
-    days_since = (now - most_recent).days
-
-    if days_since < 30:
-        return 0.2   # too soon — audience fatigue risk
-    if days_since < 90:
-        return 0.5
-    if days_since < 180:
-        return 0.8
-    return 0.9       # long absence → strong anticipation
 
 
 # ── City Affinity Score (Formula Blueprint v2.0 — Step 3) ─────────────────────

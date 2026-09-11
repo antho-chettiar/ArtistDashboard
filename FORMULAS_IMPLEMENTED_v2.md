@@ -108,18 +108,22 @@ Demand = PlatformSize × 0.35 + Momentum × 0.35 + GoogleTrends × 0.20 + CityAf
 
 ---
 
-## 6. Revenue Prediction (signals-only)
-**File:** `mad_analytics/revenue/predictor.py` → `signal_revenue`
+## 6. Revenue Prediction
+**File:** `mad_analytics/revenue/predictor.py` → `calculate()`
 
 ```
-sell_through = clamp( (demand / 100) × city_tier_factor , 0, 1 )
-tickets      = capacity × sell_through
-revenue      = tickets × avg_ticket_price
+predicted_revenue = model_prediction × 0.55 + heuristic_prediction × 0.45
 ```
 
-**Inputs / DB:** demand (§5), city_tier_factor (§4), `capacity` (`concerts.capacity` / `venues.avgCapacity` / request), `avg_ticket_price` (`concerts.avgTicketPrice` / tier prices / request). Revenue is in the concert's local currency.
+The trained GradientBoosting model (`model_prediction`) is blended with the rule-based
+`_heuristic_revenue()` fallback (`heuristic_prediction`); see `FORMULAS.md` §1–2 for
+the exact heuristic formula and blend weights.
 
-*(The trained GradientBoosting model remains the headline `predicted_revenue`; this signals-only value is returned additively as `signal_revenue`.)*
+> **Removed (FORMULA_DECISIONS.md §3, System 3):** this section previously also
+> documented a `signal_revenue` signals-only cross-check
+> (`sell_through = (demand/100) × city_tier_factor`, `revenue = capacity × sell_through × avg_ticket_price`).
+> That value was computed and transmitted in the API response but never read by
+> the frontend, and has been removed from `predictor.py` and `RevenueOutput`.
 
 ---
 

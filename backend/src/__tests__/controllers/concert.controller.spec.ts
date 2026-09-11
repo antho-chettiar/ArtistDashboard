@@ -17,15 +17,17 @@ describe('Concert Controller', () => {
   });
 
   describe('runIntelligencePipeline', () => {
-    it('should run artist scrape, validation, prediction, and concert persistence by default', async () => {
+    // NOTE: prediction/concert-persistence options (runPredictions,
+    // persistConcerts) were removed from this pipeline along with the Node
+    // "hybrid-revenue-v1" revenue system (FORMULA_DECISIONS.md §3, System 6).
+    // The pipeline now only scrapes, dedupes, normalizes, and validates.
+    it('should run artist scrape, dedup, and validation', async () => {
       const summary = {
         scrapedCount: 2,
         normalizedCount: 2,
         persistedCount: 2,
         duplicateCount: 0,
         validatedCount: 2,
-        predictedCount: 2,
-        storedConcertCount: 2,
         results: [],
         errors: [],
       };
@@ -56,8 +58,6 @@ describe('Concert Controller', () => {
           limitPerSource: 10,
           maxPages: 3,
           dryRun: false,
-          runPredictions: true,
-          persistConcerts: true,
         })
       );
       expect(mockResponse.status).toHaveBeenCalledWith(200);
@@ -65,44 +65,7 @@ describe('Concert Controller', () => {
         expect.objectContaining({
           success: true,
           data: summary,
-          message: 'Concert intelligence pipeline completed successfully',
-        })
-      );
-    });
-
-    it('should allow predictions when explicitly requested', async () => {
-      const summary = {
-        scrapedCount: 1,
-        normalizedCount: 1,
-        persistedCount: 1,
-        duplicateCount: 0,
-        validatedCount: 1,
-        predictedCount: 1,
-        storedConcertCount: 1,
-        results: [],
-        errors: [],
-      };
-
-      mockRequest.body = {
-        sources: ['GOOGLE_CSE'],
-        runPredictions: true,
-      };
-
-      const runDiscoveryPipeline = jest
-        .spyOn(concertIntelligenceService, 'runDiscoveryPipeline')
-        .mockResolvedValue(summary);
-
-      await concertController.runIntelligencePipeline(mockRequest as Request, mockResponse as Response);
-
-      expect(runDiscoveryPipeline).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sources: ['GOOGLE_CSE'],
-          runPredictions: true,
-        })
-      );
-      expect(mockResponse.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: 'Concert intelligence pipeline completed successfully',
+          message: 'Concert scraping and validation completed successfully',
         })
       );
     });

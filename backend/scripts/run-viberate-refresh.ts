@@ -8,8 +8,15 @@
  *
  * Flow:
  *   provision session → session health → chromium launch test
- *   → collector → sync → scorer (skipping artists already scored today)
+ *   → collector → sync
  *   → exit 0 on success, non-zero on failure.
+ *
+ * NOTE: the scorer step (ArtistPopularityV2) was removed as part of the
+ * Popularity-system consolidation (FORMULA_DECISIONS.md §2) — canonical
+ * Popularity now comes only from mad_analytics/popularity/calculator.py.
+ * This script still runs collector → sync so raw Viberate metrics keep
+ * flowing into ViberateMetricDaily / PlatformMetric for the "Platform Trends"
+ * tab, which is unrelated to popularity scoring.
  *
  * Flags (for controlled tests):
  *   --slug <artistSlug>   collect/sync/score only this Viberate slug
@@ -28,12 +35,10 @@
  */
 import 'dotenv/config';
 import { chromium } from 'playwright';
-import { PrismaClient } from '@prisma/client';
 import { provisionSessionFromEnv } from '../src/services/scrapers/viberate/session';
 import { checkSessionHealth } from '../src/services/scrapers/viberate/sessionHealth';
 import { runCollection } from '../src/services/scrapers/viberate/collector';
 import { runSync } from '../src/services/scrapers/viberate/sync';
-import { runScorer } from '../src/services/scrapers/viberate/scorer';
 
 const log = (msg: string) => console.log(`[VIBERATE] ${msg}`);
 const fail = (msg: string) => console.error(`[VIBERATE] run failed: ${msg}`);
@@ -46,19 +51,6 @@ function parseArgs() {
   const limitRaw = limitIdx >= 0 && a[limitIdx + 1] ? parseInt(a[limitIdx + 1], 10) : undefined;
   const limit = limitRaw && limitRaw > 0 ? limitRaw : undefined;
   return { slug, limit };
-}
-
-async function computeSkipArtistIds(prisma: PrismaClient): Promise<string[]> {
-  // Same-day guard: any artist that already has a snapshot dated today (UTC)
-  // is skipped by the scorer, so repeated runs never create duplicate snapshots.
-  const now = new Date();
-  const startOfDayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const scored = await prisma.artistPopularityV2Snapshot.findMany({
-    where: { computedAt: { gte: startOfDayUtc } },
-    select: { artistId: true },
-    distinct: ['artistId'],
-  });
-  return scored.map((s) => s.artistId);
 }
 
 async function main() {
@@ -103,21 +95,6 @@ async function main() {
     log('sync started');
     await runSync({ slug, limit });
     log('sync completed');
-
-    const guardPrisma = new PrismaClient();
-    let skipArtistIds: string[] = [];
-    try {
-      skipArtistIds = await computeSkipArtistIds(guardPrisma);
-    } finally {
-      await guardPrisma.$disconnect();
-    }
-    if (skipArtistIds.length > 0) {
-      log(`same-day guard: ${skipArtistIds.length} artist(s) already scored today — skipping those`);
-    }
-
-    log('scoring started');
-    await runScorer({ slug, limit, skipArtistIds });
-    log('scoring completed');
 
     log('run completed');
     process.exit(0);

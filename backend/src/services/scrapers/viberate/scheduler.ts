@@ -19,7 +19,6 @@ import cron from 'node-cron';
 import { randomUUID } from 'crypto';
 import { runCollection } from './collector';
 import { runSync } from './sync';
-import { runScorer } from './scorer';
 import { checkSessionHealth, sendSessionAlert } from './sessionHealth';
 import { ScrapingJobQueue } from '../jobQueue';
 
@@ -97,10 +96,8 @@ export function startViberateScheduler(): void {
       // and PlatformMetric table that the rest of the dashboard reads from
       console.log('[viberate-scheduler] Collection done — running sync');
       await runSync();
-
-      // Step 4: Recompute scores from the fresh data
-      console.log('[viberate-scheduler] Sync done — running scorer');
-      await runScorer();
+      // Scoring step removed (FORMULA_DECISIONS.md §2) — canonical Popularity
+      // now comes only from mad_analytics/popularity/calculator.py.
 
     } catch (err) {
       console.error('[viberate-scheduler] Unexpected error:', err);

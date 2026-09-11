@@ -1,9 +1,153 @@
 import { PrismaClient } from '@prisma/client';
 import { spawn } from 'child_process';
 import path from 'path';
-import { calculateArtistPopularity } from '../src/utils/artistPopularity';
 
 const prisma = new PrismaClient();
+
+// ── Inlined entropy-weighted artist popularity ──────────────────────────────
+// Previously imported from '../src/utils/artistPopularity', which was removed
+// as part of the Legacy Popularity System C cleanup (that module's only other
+// consumer, concertPipeline.service.ts, was removed in the same pass). This is
+// a minimal local copy of the same formula/behavior, kept only so this
+// standalone script continues to run unchanged; it is not used by any other
+// current-architecture code. The cohort model is now built once per run
+// (from the same `artists` list this script already fetches) instead of being
+// recomputed/Redis-cached per call, which is behaviorally equivalent for a
+// single batch run.
+
+type ArtistPopularityInput = {
+  spotifyMonthlyListeners?: unknown;
+  youtubeSubscribers?: unknown;
+  instagramFollowers?: unknown;
+  facebookFollowers?: unknown;
+  twitterFollowers?: unknown;
+};
+
+type ArtistPopularityPlatform = keyof ArtistPopularityInput;
+type ArtistPopularityWeights = Record<ArtistPopularityPlatform, number>;
+
+const ARTIST_POPULARITY_PLATFORMS: ArtistPopularityPlatform[] = [
+  'spotifyMonthlyListeners',
+  'youtubeSubscribers',
+  'instagramFollowers',
+  'facebookFollowers',
+  'twitterFollowers',
+];
+
+const DEFAULT_FALLBACK_POPULARITY = 45;
+
+type EntropyArtistPopularityModel = {
+  weights: ArtistPopularityWeights;
+  maxValues: ArtistPopularityWeights;
+  sampleSize: number;
+};
+
+function toFiniteNumber(value: unknown): number {
+  if (typeof value === 'bigint') return Number(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function transformReachValue(value: number): number {
+  return Math.log1p(Math.max(0, value));
+}
+
+function hasReachData(artist: ArtistPopularityInput): boolean {
+  return ARTIST_POPULARITY_PLATFORMS.some((platform) => toFiniteNumber(artist[platform]) > 0);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function round(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+function calculateEntropyWeights(normalizedRows: number[][]): ArtistPopularityWeights {
+  const sampleSize = normalizedRows.length;
+  const entropyFactor = sampleSize > 1 ? 1 / Math.log(sampleSize) : 0;
+
+  const diversification = ARTIST_POPULARITY_PLATFORMS.map((_, columnIndex) => {
+    const column = normalizedRows.map((row) => row[columnIndex]);
+    const columnSum = column.reduce((sum, value) => sum + value, 0);
+    if (columnSum <= 0 || entropyFactor === 0) return 0;
+
+    const entropy = -entropyFactor * column.reduce((sum, value) => {
+      if (value <= 0) return sum;
+      const probability = value / columnSum;
+      return sum + probability * Math.log(probability);
+    }, 0);
+
+    return Math.max(0, 1 - entropy);
+  });
+
+  const totalDiversification = diversification.reduce((sum, value) => sum + value, 0);
+  if (totalDiversification <= 0) {
+    return ARTIST_POPULARITY_PLATFORMS.reduce((weights, platform) => {
+      weights[platform] = 1 / ARTIST_POPULARITY_PLATFORMS.length;
+      return weights;
+    }, {} as ArtistPopularityWeights);
+  }
+
+  return ARTIST_POPULARITY_PLATFORMS.reduce((weights, platform, index) => {
+    weights[platform] = diversification[index] / totalDiversification;
+    return weights;
+  }, {} as ArtistPopularityWeights);
+}
+
+function buildEntropyArtistPopularityModel(
+  artists: ArtistPopularityInput[]
+): EntropyArtistPopularityModel {
+  const transformedRows = artists.map((artist) =>
+    ARTIST_POPULARITY_PLATFORMS.map((platform) =>
+      transformReachValue(toFiniteNumber(artist[platform]))
+    )
+  );
+
+  const maxValues = ARTIST_POPULARITY_PLATFORMS.reduce((values, platform, index) => {
+    values[platform] = Math.max(...transformedRows.map((row) => row[index]), 0);
+    return values;
+  }, {} as ArtistPopularityWeights);
+
+  const normalizedRows = transformedRows.map((row) =>
+    row.map((value, index) => {
+      const max = maxValues[ARTIST_POPULARITY_PLATFORMS[index]];
+      return max > 0 ? value / max : 0;
+    })
+  );
+
+  const weights = calculateEntropyWeights(normalizedRows);
+
+  return {
+    weights,
+    maxValues,
+    sampleSize: artists.length,
+  };
+}
+
+function calculateArtistPopularityWithModel(
+  artist: ArtistPopularityInput,
+  model: EntropyArtistPopularityModel,
+  fallback = DEFAULT_FALLBACK_POPULARITY
+): number {
+  if (!hasReachData(artist)) return fallback;
+
+  const score = ARTIST_POPULARITY_PLATFORMS.reduce((sum, platform) => {
+    const max = model.maxValues[platform] || 0;
+    const normalized = max > 0
+      ? transformReachValue(toFiniteNumber(artist[platform])) / max
+      : 0;
+    return sum + normalized * model.weights[platform];
+  }, 0);
+
+  return round(clamp(5 + score * 95, 5, 100), 2);
+}
 
 // Simple coordinates mapping for major cities (latitude, longitude)
 const cityCoordinates: Record<string, { lat: number; lng: number }> = {
@@ -152,6 +296,11 @@ async function updateAllPredictionsWithCoords() {
       }
     });
 
+    // Cohort entropy model built once from this same artist list, reused for
+    // every concert below (see the inlined-popularity note near the top of
+    // this file for why this is computed locally instead of imported).
+    const popularityModel = buildEntropyArtistPopularityModel(artists);
+
     let totalConcerts = 0;
     let processedCount = 0;
     let errorCount = 0;
@@ -161,7 +310,7 @@ async function updateAllPredictionsWithCoords() {
         totalConcerts++;
 
         const input = {
-          artist_popularity: await calculateArtistPopularity(artist),
+          artist_popularity: calculateArtistPopularityWithModel(artist, popularityModel),
           artist_city_popularity: concert.artistCityPopularity ? Number(concert.artistCityPopularity) : 50,
           venue_capacity: concert.capacity ? Number(concert.capacity) : 5000,
           city: concert.city,

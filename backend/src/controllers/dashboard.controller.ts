@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { prisma, redis } from '../utils/database';
 import { calculateConcertRevenue } from '../utils/concertRevenue';
+import { madAnalyticsService } from '../services/madAnalytics.service';
 
 const CACHE_TTL = 60 * 60; // 1 hour
 
@@ -128,7 +129,12 @@ export const dashboardController = {
     }
   },
 
-  // Top performing artists by followers
+  // Top performing artists.
+  // Popularity ("compositeScore") is the canonical MAD Analytics Popularity
+  // score (mad_analytics/popularity/calculator.py), fetched in one batch call —
+  // this endpoint no longer computes its own independent composite score.
+  // RoG (avgRogDaily/rogScore) is a separate, unrelated display stat and is
+  // still computed here from platform_metrics as before.
   getTopArtists: async (req: any, res: Response) => {
     try {
       const { limit = 10, platform } = req.query;
@@ -171,7 +177,8 @@ export const dashboardController = {
       }
       const latestMetrics = Array.from(latestMap.values());
 
-      // Track Rog values per artist (averaged across platforms)
+      // Track Rog values per artist (averaged across platforms) — display-only,
+      // unrelated to the Popularity score below.
       const artistRogs: Record<string, number[]> = {};
       for (const metric of latestMetrics) {
         if (metric.rogDaily !== null) {
@@ -180,168 +187,102 @@ export const dashboardController = {
         }
       }
 
+      // Candidate artist list with follower/platform breakdown. When no recent
+      // PlatformMetric rows exist, fall back to the Artist table's own follower
+      // columns for the breakdown (no score is computed from them either way).
+      let candidates: Array<{ artistId: string; totalFollowers: number; platforms: Array<{ platform: string; followers: number }> }>;
+
       if (latestMetrics.length === 0) {
-        // Fallback: Query artists directly and aggregate followers
         const fallbackArtists = await prisma.artist.findMany({
           where: { active: true },
-          include: {
-            genres: {
-              include: { genre: true },
-            },
-          },
+          include: { genres: { include: { genre: true } } },
         });
 
-        const fallbackScored = fallbackArtists.map(artist => {
-          const totalFollowers = 
-            Number(artist.instagramFollowers || 0) +
-            Number(artist.youtubeSubscribers || 0) +
-            Number(artist.spotifyMonthlyListeners || 0) +
-            Number(artist.facebookFollowers || 0);
-
-          // Weighted base score from artist-level fields
+        candidates = fallbackArtists.map(artist => {
           const igF = Number(artist.instagramFollowers || 0);
           const ytF = Number(artist.youtubeSubscribers || 0);
           const spF = Number(artist.spotifyMonthlyListeners || 0);
           const fbF = Number(artist.facebookFollowers || 0);
-          const maxFb = Math.max(igF, ytF, spF, fbF, 1);
-          const baseScore = (
-            (igF / maxFb) * 100 * 0.45 +
-            (ytF / maxFb) * 100 * 0.25 +
-            (spF / maxFb) * 100 * 0.20 +
-            (fbF / maxFb) * 100 * 0.10
-          );
-
-          const trendsScore = Number(artist.googleTrendsScore || 0);
-          const compositeScore = Math.round(baseScore * 0.50 + trendsScore * 0.25);
-
           return {
             artistId: artist.id,
-            totalFollowers,
-            compositeScore,
-            // No daily RoG history available in the fallback path → unavailable,
-            // not zero.
-            avgRogDaily: null,
-            rogScore: null,
+            totalFollowers: igF + ytF + spF + fbF,
             platforms: [
               { platform: 'INSTAGRAM', followers: igF },
               { platform: 'YOUTUBE', followers: ytF },
               { platform: 'SPOTIFY', followers: spF },
               { platform: 'FACEBOOK', followers: fbF },
             ],
-            artist: artist,
           };
-        }).sort((a, b) => b.compositeScore - a.compositeScore).slice(0, parseInt(limit as string));
-
-        await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(fallbackScored));
-        return res.status(200).json({
-          success: true,
-          data: { artists: fallbackScored },
         });
+      } else {
+        const artistFollowers: Record<string, { artistId: string; totalFollowers: number; platforms: Array<{ platform: string; followers: number }> }> = {};
+        for (const metric of latestMetrics) {
+          if (!artistFollowers[metric.artistId]) {
+            artistFollowers[metric.artistId] = {
+              artistId: metric.artistId,
+              totalFollowers: 0,
+              platforms: [],
+            };
+          }
+          const followers = Number(metric.followers || 0);
+          artistFollowers[metric.artistId].totalFollowers += followers;
+          artistFollowers[metric.artistId].platforms.push({ platform: metric.platform, followers });
+        }
+        candidates = Object.values(artistFollowers);
       }
 
-      // Group by artist to sum total followers across platforms
-      const artistFollowers: any = {};
-
-      for (const metric of latestMetrics) {
-        if (!artistFollowers[metric.artistId]) {
-          artistFollowers[metric.artistId] = {
-            artistId: metric.artistId,
-            totalFollowers: 0,
-            platforms: [],
-          };
+      // Canonical Popularity, batch-fetched once from the Python engine.
+      // Never fabricated: an artist absent from this map (or a service outage)
+      // gets compositeScore = null, rendered by the frontend as "—".
+      const popularityByArtist: Record<string, number> = {};
+      try {
+        const popResult = await madAnalyticsService.getAllPopularityScores();
+        const list = Array.isArray(popResult) ? popResult : [];
+        for (const p of list as Array<{ artist_id?: string; popularity_score?: number }>) {
+          if (p?.artist_id && Number.isFinite(Number(p.popularity_score))) {
+            popularityByArtist[p.artist_id] = Number(p.popularity_score);
+          }
         }
-
-        const followers = Number(metric.followers || 0);
-        artistFollowers[metric.artistId].totalFollowers += followers;
-        artistFollowers[metric.artistId].platforms.push({
-          platform: metric.platform,
-          followers: followers,
-        });
+      } catch (error) {
+        console.error('Dashboard: canonical popularity engine unavailable, showing artists without a score', error);
       }
 
-      // Fetch googleTrendsScore for composite scoring
-      const allArtistIds = Object.keys(artistFollowers);
-      const artistsWithTrends = await prisma.artist.findMany({
-        where: { id: { in: allArtistIds } },
-        select: { id: true, googleTrendsScore: true },
-      });
-      const trendsMap = artistsWithTrends.reduce((acc, a) => {
-        acc[a.id] = Number(a.googleTrendsScore || 0);
-        return acc;
-      }, {} as Record<string, number>);
-
-      // Compute composite score directly from platform metrics:
-      //   baseScore (weighted platform followers) × 0.50
-      //   + googleTrendsScore × 0.25
-      //   + rogScore (avg daily RoG normalized) × 0.25
-      const PLATFORM_WEIGHTS: Record<string, number> = {
-        INSTAGRAM: 0.45,
-        YOUTUBE: 0.25,
-        SPOTIFY: 0.20,
-        FACEBOOK: 0.10,
-      };
-
-      // Find max per-platform for normalization
-      const platformMax: Record<string, number> = {};
-      for (const item of Object.values(artistFollowers) as any[]) {
-        for (const p of item.platforms) {
-          const key = String(p.platform).toUpperCase();
-          platformMax[key] = Math.max(platformMax[key] || 0, Number(p.followers || 0));
-        }
-      }
-
-      const scored = Object.values(artistFollowers).map((item: any) => {
-        // Build platform follower map
-        const platformFollowers: Record<string, number> = {};
-        for (const p of item.platforms) {
-          platformFollowers[String(p.platform).toUpperCase()] = Number(p.followers || 0);
-        }
-
-        // Weighted base score (0-100)
-        let baseScore = 0;
-        for (const [platform, weight] of Object.entries(PLATFORM_WEIGHTS)) {
-          const followers = platformFollowers[platform] || 0;
-          const maxF = platformMax[platform] || 1;
-          const normalized = maxF > 0 ? (followers / maxF) * 100 : 0;
-          baseScore += normalized * weight;
-        }
-        baseScore = Math.min(100, Math.max(0, baseScore));
-
-        // Google Trends score (0-100)
-        const trendsScore = trendsMap[item.artistId] || 0;
-
-        // RoG score: normalize avg daily rog to 0-100
+      const scored = candidates.map(item => {
         const rogValues = artistRogs[item.artistId] || [];
         const hasRog = rogValues.length > 0;
         const avgRogRaw = hasRog
-          ? rogValues.reduce((a: number, b: number) => a + b, 0) / rogValues.length
+          ? rogValues.reduce((a, b) => a + b, 0) / rogValues.length
           : 0;
-        // Log scale: rogDaily of 0.1% → ~30, 0.5% → ~62, 2% → ~92
+        // Log scale: rogDaily of 0.1% → ~30, 0.5% → ~62, 2% → ~92 (display only)
         const rogScoreValue = avgRogRaw > 0
           ? Math.min(100, Math.round((Math.log(1 + avgRogRaw * 40) / Math.log(81)) * 100))
           : 0;
 
-        const compositeScore = Math.round(
-          baseScore * 0.50 + trendsScore * 0.25 + rogScoreValue * 0.25
-        );
+        const popularityScore = popularityByArtist[item.artistId];
 
-        // Expose real RoG so the frontend never shows a hardcoded 0. null when
-        // no rog data exists for the artist (rendered as "—", not 0).
         return {
           ...item,
-          compositeScore,
+          compositeScore: Number.isFinite(popularityScore) ? popularityScore : null,
           avgRogDaily: hasRog ? Number(avgRogRaw.toFixed(4)) : null,
           rogScore: hasRog ? rogScoreValue : null,
         };
       });
 
-      // Sort by composite score (descending)
+      // Sort artists with a real popularity score first (descending); artists
+      // without one (score engine had no data / was unavailable) sort after,
+      // ordered by total followers only for a stable list — never given a
+      // fabricated score.
       const sortedArtists = scored
-        .sort((a: any, b: any) => b.compositeScore - a.compositeScore)
+        .sort((a, b) => {
+          if (a.compositeScore != null && b.compositeScore != null) return b.compositeScore - a.compositeScore;
+          if (a.compositeScore != null) return -1;
+          if (b.compositeScore != null) return 1;
+          return b.totalFollowers - a.totalFollowers;
+        })
         .slice(0, parseInt(limit as string));
 
       // Enrich with full artist details
-      const artistIds = sortedArtists.map((a: any) => a.artistId);
+      const artistIds = sortedArtists.map((a) => a.artistId);
       const artists = await prisma.artist.findMany({
         where: { id: { in: artistIds } },
         include: {
@@ -358,7 +299,7 @@ export const dashboardController = {
         return acc;
       }, {} as any);
 
-      const enriched = sortedArtists.map((item: any) => ({
+      const enriched = sortedArtists.map((item) => ({
         ...item,
         artist: artistMap[item.artistId],
       }));

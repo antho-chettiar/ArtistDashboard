@@ -12,14 +12,6 @@ const router = Router();
 router.get('/', artistController.list);
 
 /**
- * @route GET /api/v1/artists/leaderboard
- * @desc All artists ranked by latest ArtistPopularityV2 finalScore
- * @access Public
- * NOTE: must be registered BEFORE /:id, or Express matches "leaderboard" as an id
- */
-router.get('/leaderboard', artistController.leaderboard);
-
-/**
  * @route GET /api/v1/artists/:id
  * @desc Get single artist by ID
  * @access Public
@@ -85,7 +77,7 @@ router.get('/:id/demographics', artistController.getDemographics);
 
 /**
  * @route GET /api/v1/artists/:id/score
- * @desc Latest ArtistPopularityV2 score breakdown (?history=N for trend)
+ * @desc Canonical Popularity breakdown (BaseEntropy / Momentum / GoogleTrends)
  * @access Public
  */
 router.get('/:id/score', artistController.getScore);

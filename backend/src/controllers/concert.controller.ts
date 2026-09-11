@@ -1,9 +1,7 @@
 import { Response } from 'express';
 import { prisma } from '../utils/database';
 import { CreateConcertInput, UpdateConcertInput } from '../validations/zodSchemas';
-import { concertPipelineService } from '../services/concertPipeline.service';
 import { concertIntelligenceService } from '../services/concertIntelligence.service';
-import { revenuePredictionService } from '../services/predictions/revenuePrediction.service';
 import { ConcertSourcePlatform } from '../services/scrapers/types';
 import { calculateConcertMetrics, withCalculatedConcertRevenue } from '../utils/concertRevenue';
 import {
@@ -353,68 +351,6 @@ export const concertController = {
     }
   },
 
-  // Trigger ML pipeline for an artist
-  runPipeline: async (req: any, res: Response) => {
-    try {
-      const { artistId, artistIds, startYear, endYear, maxPagesPerYear, dryRun } = req.body;
-      const selectedArtistIds = Array.isArray(artistIds)
-        ? artistIds
-        : artistId
-          ? [artistId]
-          : undefined;
-
-      const summary = await concertPipelineService.runPipeline({
-        artistIds: selectedArtistIds,
-        startYear: startYear ? Number(startYear) : undefined,
-        endYear: endYear ? Number(endYear) : undefined,
-        maxPagesPerYear: maxPagesPerYear ? Number(maxPagesPerYear) : undefined,
-        dryRun: Boolean(dryRun),
-        sources: ['SETLIST_FM'],
-      });
-
-      return res.status(200).json({
-        success: true,
-        data: summary,
-        message: dryRun
-          ? 'Concert scraping dry run completed successfully'
-          : 'Concert scraping and revenue pipeline completed successfully',
-      });
-    } catch (error: any) {
-      return res.status(500).json({
-        success: false,
-        message: error.message || 'Internal server error'
-      });
-    }
-  },
-
-  // Trigger pipeline for every active artist in the DB
-  runPipelineForAllArtists: async (req: any, res: Response) => {
-    try {
-      const { startYear, endYear, maxPagesPerYear, dryRun } = req.body;
-
-      const summary = await concertPipelineService.runPipeline({
-        startYear: startYear ? Number(startYear) : undefined,
-        endYear: endYear ? Number(endYear) : undefined,
-        maxPagesPerYear: maxPagesPerYear ? Number(maxPagesPerYear) : undefined,
-        dryRun: Boolean(dryRun),
-        sources: ['SETLIST_FM'],
-      });
-
-      return res.status(200).json({
-        success: true,
-        data: summary,
-        message: dryRun
-          ? 'All-artist concert scraping dry run completed successfully'
-          : 'All-artist concert scraping and revenue pipeline completed successfully',
-      });
-    } catch (error: any) {
-      return res.status(500).json({
-        success: false,
-        message: error.message || 'Internal server error'
-      });
-    }
-  },
-
   // Run the multi-source concert intelligence pipeline
   runIntelligencePipeline: async (req: any, res: Response) => {
     try {
@@ -428,13 +364,10 @@ export const concertController = {
         limitPerSource,
         maxPages,
         dryRun,
-        runPredictions,
-        persistConcerts,
         artistIds,
         artistLimit,
       } = req.body;
 
-      const shouldRunPredictions = runPredictions === undefined ? true : Boolean(runPredictions);
       const summary = await concertIntelligenceService.runDiscoveryPipeline({
         sources: parseSources(sources),
         artistIds: Array.isArray(artistIds) ? artistIds.map(String) : undefined,
@@ -446,8 +379,6 @@ export const concertController = {
         limitPerSource: limitPerSource ? Number(limitPerSource) : undefined,
         maxPages: maxPages ? Number(maxPages) : undefined,
         dryRun: Boolean(dryRun),
-        runPredictions: shouldRunPredictions,
-        persistConcerts: persistConcerts === undefined ? true : Boolean(persistConcerts),
         artistLimit: artistLimit ? Number(artistLimit) : undefined,
       });
 
@@ -456,9 +387,7 @@ export const concertController = {
         data: summary,
         message: dryRun
           ? 'Concert intelligence dry run completed successfully'
-          : shouldRunPredictions
-            ? 'Concert intelligence pipeline completed successfully'
-            : 'Concert scraping and validation completed successfully',
+          : 'Concert scraping and validation completed successfully',
       });
     } catch (error: any) {
       return res.status(500).json({
@@ -583,61 +512,6 @@ export const concertController = {
     }
   },
 
-  // Revenue prediction endpoint for ML-ready consumers
-  predictRevenue: async (req: any, res: Response) => {
-    try {
-      const {
-        artist,
-        artistId,
-        city,
-        country,
-        venueName,
-        venue_capacity,
-        avg_ticket_price,
-        event_date,
-        canonicalEventId,
-        concertId,
-      } = req.body;
-
-      if (!artist || !city || !venue_capacity || !avg_ticket_price || !event_date) {
-        return res.status(400).json({
-          success: false,
-          message: 'artist, city, venue_capacity, avg_ticket_price, and event_date are required',
-        });
-      }
-
-      const prediction = await revenuePredictionService.predict({
-        artist: String(artist),
-        artistId: artistId ? String(artistId) : undefined,
-        city: String(city),
-        country: country ? String(country) : undefined,
-        venueName: venueName ? String(venueName) : undefined,
-        venue_capacity: Number(venue_capacity),
-        avg_ticket_price: Number(avg_ticket_price),
-        event_date,
-        canonicalEventId: canonicalEventId ? String(canonicalEventId) : undefined,
-        concertId: concertId ? String(concertId) : undefined,
-      });
-
-      return res.status(200).json({
-        success: true,
-        data: {
-          expected_revenue: prediction.expected_revenue,
-          expected_attendance: prediction.expected_attendance,
-          sellout_probability: prediction.sellout_probability,
-          demand_score: prediction.demand_score,
-          model_version: prediction.model_version,
-          features: prediction.features,
-        },
-      });
-    } catch (error: any) {
-      return res.status(500).json({
-        success: false,
-        message: error.message || 'Internal server error',
-      });
-    }
-  },
-
   // Document currently supported concert providers
   getPipelineSources: async (_req: any, res: Response) => {
     try {
@@ -692,32 +566,6 @@ export const concertController = {
       });
     } catch (error) {
       throw error;
-    }
-  },
-
-  // Backwards-compatible alias for old callers that sent only artistId
-  runArtistPipeline: async (req: any, res: Response) => {
-    try {
-      const { artistId } = req.body;
-      if (!artistId) {
-        return res.status(400).json({ success: false, message: 'artistId is required' });
-      }
-
-      const results = await concertPipelineService.runPipelineForArtist(artistId);
-
-      return res.status(200).json({
-        success: true,
-        data: {
-          processedCount: results.length,
-          concerts: results
-        },
-        message: 'ML Pipeline executed successfully'
-      });
-    } catch (error: any) {
-      return res.status(500).json({
-        success: false,
-        message: error.message || 'Internal server error'
-      });
     }
   },
 };

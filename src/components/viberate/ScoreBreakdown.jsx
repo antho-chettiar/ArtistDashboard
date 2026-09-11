@@ -1,19 +1,19 @@
-import { useMemo } from 'react'
-import { Gauge, TrendingUp, Zap, Search } from 'lucide-react'
-import ChartContainer from '../charts/ChartContainer'
-import LineChart from '../charts/LineChart'
+import { Gauge, TrendingUp, Search } from 'lucide-react'
 import EmptyState from '../ui/EmptyState'
 import { useArtistScore } from '../../hooks/useViberate'
 
 /**
- * ScoreBreakdown — ArtistPopularityV2 (v2.1-viberate) score card.
+ * ScoreBreakdown — canonical Popularity score card (mad_analytics, Blueprint v2.0).
  *
- * Layer 1: entropy-weighted reach (0–1)
- * Layer 2: engagement multiplier (log-compressed engaged headcount, cap 2×)
- * Layer 3: Google Trends (0–1) — 70/30 blend, final scale 5–100
+ * Popularity = BaseEntropy×0.60 + Momentum×0.20 + GoogleTrends×0.20, weights
+ * renormalized over whichever components are available for this artist.
+ *
+ * This card previously showed the ArtistPopularityV2 (Viberate) breakdown
+ * (Reach / Engagement / Trends); that system was retired in favor of a single
+ * canonical Popularity formula everywhere (FORMULA_DECISIONS.md §2). There is
+ * no historical trend chart here anymore — the canonical engine keeps only
+ * the latest score per artist, not a dated snapshot history.
  */
-
-const SCORE_HISTORY_DAYS = 60
 
 function LayerRow({ icon: Icon, label, display, barPct, color, note }) {
   return (
@@ -40,36 +40,22 @@ function LayerRow({ icon: Icon, label, display, barPct, color, note }) {
 }
 
 function ScoreBreakdown({ artistId }) {
-  const { data, isLoading, error } = useArtistScore(artistId, SCORE_HISTORY_DAYS)
-
-  const historyData = useMemo(() => {
-    if (!data?.history) return []
-    return [...data.history]
-      .sort((a, b) => new Date(a.computedAt).getTime() - new Date(b.computedAt).getTime())
-      .map(snap => ({
-        date: new Date(snap.computedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }),
-        score: Number(snap.finalScore),
-      }))
-  }, [data])
+  const { data, isLoading, error } = useArtistScore(artistId)
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {[1, 2].map(i => (
-          <div key={i} className="glass-card p-5 animate-pulse">
-            <div className="h-4 rounded w-1/3 mb-4" style={{ background: 'var(--bg-secondary)' }} />
-            <div className="h-48 rounded-xl" style={{ background: 'var(--bg-secondary)' }} />
-          </div>
-        ))}
+      <div className="glass-card p-5 animate-pulse">
+        <div className="h-4 rounded w-1/3 mb-4" style={{ background: 'var(--bg-secondary)' }} />
+        <div className="h-48 rounded-xl" style={{ background: 'var(--bg-secondary)' }} />
       </div>
     )
   }
 
-  if (error?.response?.status === 404) {
+  if (error?.response?.status === 503) {
     return (
       <EmptyState
-        title="No V2 score yet"
-        subtitle="Run the scorer to generate a popularity snapshot for this artist." />
+        title="Analytics unavailable"
+        subtitle="The popularity engine is temporarily unavailable. Try again shortly." />
     )
   }
 
@@ -83,98 +69,69 @@ function ScoreBreakdown({ artistId }) {
 
   const snap = data.latest
   const finalScore = Number(snap.finalScore)
-  const reach = Number(snap.reachScore)
-  const engagement = Number(snap.engagementMultiplier)
-  const trends = Number(snap.trendsScore)
-  const trendsMissing = snap.trendsMetadata?.source === 'missing'
+  const hasBase = snap.baseScore != null
+  const hasMomentum = snap.momentumScore != null
+  const hasTrends = snap.trendsScore != null
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {/* Score card */}
-      <div className="glass-card p-5 animate-fade-up relative overflow-hidden"
-        style={{ animationFillMode: 'both', opacity: 0 }}>
-        <div className="absolute inset-0 pointer-events-none"
-          style={{ background: 'radial-gradient(circle at 100% 0%, rgba(99,102,241,0.06), transparent 60%)' }} />
+    <div className="glass-card p-5 animate-fade-up relative overflow-hidden max-w-xl"
+      style={{ animationFillMode: 'both', opacity: 0 }}>
+      <div className="absolute inset-0 pointer-events-none"
+        style={{ background: 'radial-gradient(circle at 100% 0%, rgba(99,102,241,0.06), transparent 60%)' }} />
 
-        <div className="relative z-10">
-          <div className="flex items-start justify-between mb-5">
-            <div>
-              <h3 className="font-display font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
-                Popularity Score
-              </h3>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                {snap.scoreVersion} · computed {new Date(snap.computedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-              </p>
-            </div>
-            <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-              style={{ background: 'rgba(99,102,241,0.12)', color: 'var(--accent-indigo)' }}>
-              5–100 scale
-            </span>
-          </div>
-
-          {/* Big number */}
-          <div className="mb-6">
-            <p className="font-display font-bold" style={{ color: 'var(--text-primary)', fontSize: '52px', lineHeight: 1 }}>
-              {finalScore}
+      <div className="relative z-10">
+        <div className="flex items-start justify-between mb-5">
+          <div>
+            <h3 className="font-display font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+              Popularity Score
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              computed {new Date(snap.computedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
             </p>
-            <div className="mt-3 h-2 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
-              <div className="h-full rounded-full"
-                style={{
-                  width: `${((finalScore - 5) / 95) * 100}%`,
-                  background: 'linear-gradient(135deg, #6366F1, #818CF8)',
-                }} />
-            </div>
           </div>
-
-          {/* Layer breakdown */}
-          <LayerRow icon={Gauge} label="Reach Score (entropy-weighted)"
-            display={reach.toFixed(3)}
-            barPct={reach * 100}
-            color="#818CF8" />
-
-          <LayerRow icon={Zap} label="Engagement Multiplier"
-            display={`${engagement.toFixed(3)}×`}
-            barPct={(engagement / 2) * 100}
-            color="#FBBF24"
-            note="30-day engaged headcount, log-compressed (max 2×)" />
-
-          <LayerRow icon={Search} label="Google Trends"
-            display={trendsMissing ? '—' : trends.toFixed(3)}
-            barPct={trendsMissing ? 0 : trends * 100}
-            color="#34D399"
-            note={trendsMissing
-              ? 'No Trends data — score computed from reach only'
-              : snap.trendsMetadata?.keyword
-                ? `Keyword: "${snap.trendsMetadata.keyword}" (${snap.trendsMetadata.geo || 'IN'})`
-                : undefined} />
-
-          <p className="text-xs pt-3" style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--border)' }}>
-            {trendsMissing
-              ? 'Final = normalized(reach × engagement)'
-              : 'Final = 0.70 × normalized(reach × engagement) + 0.30 × trends'}
-          </p>
+          <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+            style={{ background: 'rgba(99,102,241,0.12)', color: 'var(--accent-indigo)' }}>
+            5–100 scale
+          </span>
         </div>
-      </div>
 
-      {/* Score history */}
-      <ChartContainer
-        title="Score Trend"
-        subtitle={`Last ${historyData.length} snapshots · ${snap.scoreVersion}`}
-        delay={80}
-      >
-        {historyData.length < 2 ? (
-          <EmptyState title="Not enough history yet"
-            subtitle="The score trend appears after a few daily scorer runs." />
-        ) : (
-          <LineChart
-            data={historyData}
-            xKey="date"
-            lines={[{ key: 'score', label: 'Final Score', color: '#818CF8' }]}
-            height={320}
-            yDomain={[0, 100]}
-          />
-        )}
-      </ChartContainer>
+        {/* Big number */}
+        <div className="mb-6">
+          <p className="font-display font-bold" style={{ color: 'var(--text-primary)', fontSize: '52px', lineHeight: 1 }}>
+            {finalScore}
+          </p>
+          <div className="mt-3 h-2 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+            <div className="h-full rounded-full"
+              style={{
+                width: `${((finalScore - 5) / 95) * 100}%`,
+                background: 'linear-gradient(135deg, #6366F1, #818CF8)',
+              }} />
+          </div>
+        </div>
+
+        {/* Component breakdown */}
+        <LayerRow icon={Gauge} label="Base (Entropy-weighted followers)"
+          display={hasBase ? snap.baseScore.toFixed(1) : '—'}
+          barPct={hasBase ? snap.baseScore : 0}
+          color="#818CF8" />
+
+        <LayerRow icon={TrendingUp} label="Momentum"
+          display={hasMomentum ? snap.momentumScore.toFixed(1) : '—'}
+          barPct={hasMomentum ? snap.momentumScore : 0}
+          color="#FBBF24"
+          note={hasMomentum ? undefined : 'No platform time series yet — dropped from the blend'} />
+
+        <LayerRow icon={Search} label="Google Trends"
+          display={hasTrends ? snap.trendsScore.toFixed(1) : '—'}
+          barPct={hasTrends ? snap.trendsScore : 0}
+          color="#34D399"
+          note={hasTrends ? undefined : 'No Trends data yet — dropped from the blend'} />
+
+        <p className="text-xs pt-3" style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--border)' }}>
+          Popularity = Base×0.60 + Momentum×0.20 + Google Trends×0.20 (weights
+          renormalized over whichever components are available).
+        </p>
+      </div>
     </div>
   )
 }

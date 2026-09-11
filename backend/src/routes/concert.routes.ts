@@ -57,30 +57,6 @@ router.get('/venues', concertController.getVenues);
 router.get('/pipeline/sources', concertController.getPipelineSources);
 
 /**
- * @route POST /api/v1/concerts/pipeline
- * @desc Run concert scraping and ML pipeline for one artist or all active artists
- * @access Private (Admin)
- */
-router.post(
-  '/pipeline',
-  authenticate,
-  isAdmin,
-  concertController.runPipeline
-);
-
-/**
- * @route POST /api/v1/concerts/pipeline/all
- * @desc Run concert scraping and ML pipeline for every active artist
- * @access Private (Admin)
- */
-router.post(
-  '/pipeline/all',
-  authenticate,
-  isAdmin,
-  concertController.runPipelineForAllArtists
-);
-
-/**
  * @route POST /api/v1/concerts/intelligence
  * @desc Run multi-layer concert discovery, normalization, dedupe, validation, and prediction
  * @access Private (Admin)
@@ -116,30 +92,6 @@ router.post(
   authenticate,
   isAdmin,
   concertController.ingestFromScrapers
-);
-
-/**
- * @route POST /api/v1/concerts/predictions/revenue
- * @desc Predict concert revenue, attendance, sellout probability, and demand score
- * @access Private (Admin)
- */
-router.post(
-  '/predictions/revenue',
-  authenticate,
-  isAdmin,
-  concertController.predictRevenue
-);
-
-/**
- * @route POST /api/v1/concerts/pipeline/artist
- * @desc Backwards-compatible artist pipeline route
- * @access Private (Admin)
- */
-router.post(
-  '/pipeline/artist',
-  authenticate,
-  isAdmin,
-  concertController.runArtistPipeline
 );
 
 /**

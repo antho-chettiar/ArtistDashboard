@@ -228,76 +228,31 @@ city_popularity = global_popularity × market_multiplier × genre_affinity
 
 **File:** `mad_analytics/demand/scorer.py`
 
-### Composite Score Formula
+> **Correction (see `myFormulas.md` / `FORMULA_DECISIONS.md` §1):** this section
+> previously documented a "social velocity / ticket velocity / seasonality /
+> recency" composite. That formula was never the one `calculate()` (the live
+> entry point) computes — it existed only as dead constants/functions in the
+> same file and has since been removed from the codebase. The formula actually
+> live in production is the Blueprint v2.0 Demand score below.
+
+### Composite Score Formula (live)
 
 ```
-demand_score = (social_velocity × 0.40 + ticket_velocity × 0.30 + seasonality × 0.20 + recency × 0.10) × 100
+Demand = PlatformSize×0.35 + Momentum×0.35 + GoogleTrends×0.20 + CityAffinity×0.10
 ```
 
-Clamped to [0, 100].
+Weights are renormalized over whichever components are available (a missing
+component is dropped, not fabricated as zero). See `mad_analytics/demand/scorer.py::calculate()` /
+`_blend_demand()`, `DEMAND_WEIGHTS`. Platform Size, Momentum, Google Trends, and
+City Affinity are each documented in their own sections of `FORMULAS_IMPLEMENTED_v2.md`.
 
-### Component 1: Social Velocity (40% weight)
+### Archived idea (not implemented)
 
-```
-social_velocity = min(1.0, log1p(total_growth) / log1p(1,000,000))
-
-total_growth = sum of (latest_value - earliest_value) for each platform over last 14 days
-```
-
-| Parameter | Source |
-|-----------|--------|
-| `total_growth` | Sum of follower/stream growth across all platforms in last 14 days |
-| `1,000,000` | Normalization ceiling (asymptotes at 1M/day growth) |
-
-### Component 2: Ticket Velocity (30% weight)
-
-```
-ticket_velocity = mean(sell_through_rate for each concert in last 90 days)
-sell_through_rate = tickets_sold / venue_capacity (capped at 1.0)
-```
-
-| Parameter | Source |
-|-----------|--------|
-| `tickets_sold` | From `concerts.ticketsSold` for recent concerts |
-| `venue_capacity` | From `concerts.capacity` |
-| `90 days` | Lookback window for "recent" concerts |
-
-### Component 3: Seasonality (20% weight)
-
-```
-seasonality = month_weight + weekend_bonus
-
-weekend_bonus = 0.1 if target_date is Fri/Sat/Sun, else 0
-```
-
-| Month | Weight |
-|-------|--------|
-| January | 0.55 |
-| February | 0.50 |
-| March | 0.60 |
-| April | 0.70 |
-| May | 0.75 |
-| June | 0.90 |
-| July | 0.95 |
-| August | 1.00 (peak) |
-| September | 0.85 |
-| October | 0.80 |
-| November | 0.65 |
-| December | 0.60 |
-
-### Component 4: Recency (10% weight)
-
-```
-if never played in city/country → 0.7 (high novelty)
-if played < 30 days ago         → 0.2 (audience fatigue)
-if played 30-90 days ago        → 0.5
-if played 90-180 days ago       → 0.8
-if played > 180 days ago        → 0.9 (strong anticipation)
-```
-
-| Parameter | Source |
-|-----------|--------|
-| `days_since` | `(today - most_recent_concert_date).days` for concerts in same city/country |
+A ticket-sales-driven demand formula — `social_velocity×0.40 + ticket_velocity×0.30
++ seasonality×0.20 + recency×0.10` — was proposed and partially scaffolded but is
+**not live code**. It remains a candidate future enhancement once richer real
+ticket-sales history exists, per `FORMULA_DECISIONS.md` §1. Do not treat it as
+the current formula.
 
 ---
 
