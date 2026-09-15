@@ -80,7 +80,10 @@ function predictionDate() {
 }
 
 function applyModelPrediction(fallback, model) {
-  if (!fallback || !model?.predicted_revenue) return fallback
+  // `!= null` (not truthiness) so a genuinely valid $0 heuristic prediction
+  // is used rather than silently discarded in favour of the client-side
+  // fallback estimate.
+  if (!fallback || model?.predicted_revenue == null) return fallback
 
   const capacity = Number(model.inputs?.venue_capacity || fallback.adjustedCap || 0)
   const atp = Number(model.inputs?.avg_ticket_price || fallback.atp || 0)
@@ -110,6 +113,12 @@ function applyModelPrediction(fallback, model) {
     currency: model.currency || 'INR',
     totalRevenueUsd: Number(model.predicted_revenue_usd || 0),
     exchangeRate: Number(model.exchange_rate || 1),
+    // Input provenance — never displayed as if this were historical/actual
+    // revenue; used only to label the estimate appropriately (see the
+    // "Revenue Potential" card below).
+    dataQuality: model.data_quality || 'estimated',
+    capacityIsEstimated: Boolean(model.capacity_is_estimated),
+    ticketPriceIsEstimated: Boolean(model.ticket_price_is_estimated),
   }
 }
 
@@ -166,21 +175,41 @@ function ProfitabilityPredictor({ artists, concerts }) {
   const fallbackPred = predictRevenue(artist, city, artistConcerts, selectedVenueData?.capacity)
   const venueName = selectedVenue || (city ? `${city.name} Arena` : '')
   const venueCapacityValue = selectedVenueData?.capacity || fallbackPred?.adjustedCap
+  // Real, event-specific values ONLY — fallbackPred.adjustedCap/atp are this
+  // component's own synthetic local guesses (see predictRevenue() above) and
+  // must never be sent to the canonical revenue model as if they were real
+  // historical data. When there's no genuinely real value, send nothing and
+  // let the backend's own resolver (known venue / venues database / default
+  // estimate) fill the gap and mark the result as an estimate.
+  const realVenueCapacity = selectedVenueData?.capacity > 0 ? selectedVenueData.capacity : undefined
+  const realAvgTicketPrice = selectedVenueData?.avgTicketPrice > 0 ? selectedVenueData.avgTicketPrice : undefined
 
-  const modelPrediction = useAutoPredict(selectedArtist, selectedCity, venueCapacityValue, Boolean(selectedArtist && selectedCity), {
+  const modelPrediction = useAutoPredict(selectedArtist, selectedCity, realVenueCapacity, Boolean(selectedArtist && selectedCity), {
     artistName: artist?.name,
     country: 'India',
-    avgTicketPrice: fallbackPred?.atp,
+    avgTicketPrice: realAvgTicketPrice,
     eventDate: predictionDate(),
     venueName,
     venueType: 'arena',
   })
   const pred = applyModelPrediction(fallbackPred, modelPrediction.data)
-  // Increment 2b: only a REAL ML revenue prediction may drive the revenue UI.
-  // fallbackPred/predictRevenue are kept for safety but never displayed when a
-  // real prediction is absent (no fabricated revenue shown).
-  const hasModel = Boolean(modelPrediction.data?.predicted_revenue)
+  // Heuristic Revenue Model is the canonical/primary predictor (the backend
+  // always computes and returns it first — see mad_analytics/revenue/predictor.py).
+  // `!= null` (not truthiness) so a genuinely valid $0 prediction still counts
+  // as present. fallbackPred/predictRevenue are kept for safety but never
+  // displayed when a real prediction is absent (no fabricated revenue shown).
+  const hasModel = modelPrediction.data?.predicted_revenue != null
   const revenueLoading = modelPrediction.isFetching
+  // Plain-language note about which inputs are assumed rather than real,
+  // so the estimate is never mistaken for historical/actual revenue.
+  const estimatedInputsNote = (() => {
+    if (!hasModel || pred.dataQuality === 'full') return null
+    const parts = []
+    if (pred.capacityIsEstimated) parts.push('venue capacity')
+    if (pred.ticketPriceIsEstimated) parts.push('ticket pricing')
+    if (!parts.length) return null
+    return `Assumed ${parts.join(' and ')} used — not historical/actual data for this concert.`
+  })()
   const growth = useMadGrowth(selectedArtist, Boolean(selectedArtist))
   const demand = useMadDemand(selectedArtist, selectedCity, Boolean(selectedArtist && selectedCity), { country: 'India', targetDate: predictionDate() })
   const popularity = useMadPopularity(selectedArtist, Boolean(selectedArtist))
@@ -202,11 +231,10 @@ function ProfitabilityPredictor({ artists, concerts }) {
     : riskLevel === 'Low' ? 'var(--accent-green)'
     : 'var(--text-muted)'
 
-  // Revenue is heuristic when the engine returns the rule-based fallback
-  // importances (no supervised model trained). Those keys never appear in a
-  // trained-model response, so they are a reliable heuristic-mode signal.
-  const revenueImportances = modelPrediction.data?.feature_importances || {}
-  const revenueIsHeuristic = hasModel && ('seasonality' in revenueImportances || 'artist_tier' in revenueImportances)
+  // The backend explicitly labels which model produced the primary result
+  // (always "heuristic" today — the Heuristic Revenue Model is canonical/
+  // primary; the ML model is optional/secondary and never overrides it).
+  const revenueIsHeuristic = hasModel && modelPrediction.data?.model_type === 'heuristic'
 
   // City comparison for selected artist
   const cityComparison = artist
@@ -340,9 +368,11 @@ function ProfitabilityPredictor({ artists, concerts }) {
               <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Running revenue model…</p>
             </div>
           ) : hasModel ? (
-            /* Success — existing KPI grid, unchanged */
+            /* Success — existing KPI grid, relabeled so a heuristic estimate
+               is never described as historical/actual revenue. */
+            <>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-              <StatBox label="Predicted Revenue" value={formatCurrency(pred.totalRevenue, pred.currency)} sub={revenueIsHeuristic ? 'Heuristic estimate' : undefined} color="var(--accent-gold)" delay={0} />
+              <StatBox label="Revenue Potential" value={formatCurrency(pred.totalRevenue, pred.currency)} sub={revenueIsHeuristic ? (pred.dataQuality === 'full' ? 'Heuristic estimate' : 'Heuristic estimate · assumed inputs') : undefined} color="var(--accent-gold)" delay={0} />
               <StatBox label="Est. Tickets Sold" value={formatNumber(pred.ticketsSold)} color="var(--accent-indigo)" delay={80} />
               <StatBox label="Avg. Ticket Price" value={formatCurrency(pred.atp, pred.currency)} color="var(--accent-green)" delay={160} />
               <StatBox
@@ -352,6 +382,12 @@ function ProfitabilityPredictor({ artists, concerts }) {
                 delay={240}
               />
             </div>
+            {estimatedInputsNote && (
+              <p className="text-xs mb-6 -mt-3" style={{ color: 'var(--text-muted)' }}>
+                {estimatedInputsNote}
+              </p>
+            )}
+            </>
           ) : (
             /* Unavailable — no fabricated revenue is shown */
             <div className="glass-card p-6 mb-6 animate-fade-up"
@@ -363,9 +399,10 @@ function ProfitabilityPredictor({ artists, concerts }) {
                 </span>
               </div>
               <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                The analytics model didn’t return a revenue prediction (the service may be
-                starting up, or required concert/venue inputs are missing). No estimated
-                revenue is shown. Live signals below remain available.
+                The Heuristic Revenue Model couldn’t produce a result — required concert
+                or venue inputs (capacity, ticket price, or demand data) are missing or
+                unavailable. No estimated revenue is shown. Live signals below remain
+                available.
               </p>
             </div>
           )}

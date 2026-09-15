@@ -115,9 +115,18 @@ interface AnalyticsConcertPayload {
   country: string;
   venue_name?: string;
   venue_type?: string;
-  venue_capacity: number;
-  ticket_price_min: number;
-  ticket_price_max: number;
+  // Nullable/omittable: only populate with a genuine, event-specific value.
+  // When real data isn't available, leave unset — the analytics engine
+  // resolves a fallback itself (known-venue lookup, venues database, then a
+  // reasonable default) and marks the result as an estimate rather than
+  // have Node invent a number here that would be indistinguishable from
+  // real data downstream.
+  venue_capacity?: number | null;
+  ticket_price_min?: number | null;
+  ticket_price_max?: number | null;
+  // True when ticket_price_min/max above are a fallback/default rather than
+  // a real recorded price for this concert.
+  ticket_price_is_estimated?: boolean;
   date: string;
   actual_revenue?: number;
   tickets_sold?: number;
@@ -467,6 +476,12 @@ const buildDemandPayload = async (payload: DemandPayload) => {
   };
 };
 
+// Reasonable default average ticket price (INR), used only when neither a
+// real event-specific price nor a real per-artist-city historical average
+// is available. Mirrors mad_analytics/utils/feature_engineering.py's
+// DEFAULT_AVG_TICKET_PRICE_INR — keep the two in sync if this changes.
+const DEFAULT_AVG_TICKET_PRICE_INR = 1_250;
+
 const buildRevenuePayload = async (payload: RevenuePayload): Promise<AnalyticsRevenuePayload> => {
   if (payload.concert && payload.platform_metrics?.length) {
     return {
@@ -493,22 +508,46 @@ const buildRevenuePayload = async (payload: RevenuePayload): Promise<AnalyticsRe
   });
 
   const eventDate = new Date(payload.event_date || payload.date || defaultEventDate());
-  const venueCapacity = Math.round(
-    toFiniteNumber(
-      payload.venue_capacity,
-      toFiniteNumber(payload.capacity, average(historicalConcerts.map((concert) => toFiniteNumber(concert.capacity)), 5_000))
-    )
-  );
-  const avgTicketPrice = toFiniteNumber(
-    payload.avg_ticket_price,
-    toFiniteNumber(
-      payload.ticket_price,
-      average(historicalConcerts.map((concert) => toFiniteNumber(concert.avgTicketPrice)), 1_250)
-    )
-  );
+
+  // ── Capacity: real, event-specific value only. A caller-supplied
+  // payload.venue_capacity/payload.capacity is trusted as real (it was
+  // explicitly provided, not guessed by Node). Otherwise leave it unset —
+  // the analytics engine's existing resolver (known-venue lookup, venues
+  // database, then a heuristic default) fills the gap and marks the result
+  // as an estimate. We deliberately do NOT also average historicalConcerts'
+  // capacity here: that would be a second, competing fallback mechanism
+  // duplicating what the resolver already does more completely.
+  const realCapacity = toFiniteNumber(payload.venue_capacity, toFiniteNumber(payload.capacity, 0));
+  const venueCapacity = realCapacity > 0 ? Math.round(realCapacity) : null;
+
+  // ── Ticket price: real event-specific value, else a real historical
+  // per-artist-per-city average (still real recorded prices, just not this
+  // exact concert's own), else the existing reasonable default ATP.
+  const realAvgPrice = toFiniteNumber(payload.avg_ticket_price, toFiniteNumber(payload.ticket_price, 0));
   const historicalMin = average(historicalConcerts.map((concert) => toFiniteNumber(concert.ticketPriceTier3)), 0);
   const historicalMax = average(historicalConcerts.map((concert) => toFiniteNumber(concert.ticketPriceVip)), 0);
-  const fallbackRange = ticketRangeFromAverage(avgTicketPrice);
+  const hasRealHistoricalRange = historicalMin > 0 && historicalMax > historicalMin;
+
+  let ticketPriceMin: number;
+  let ticketPriceMax: number;
+  let ticketPriceIsEstimated: boolean;
+
+  if (realAvgPrice > 0) {
+    const range = ticketRangeFromAverage(realAvgPrice);
+    ticketPriceMin = range.min;
+    ticketPriceMax = range.max;
+    ticketPriceIsEstimated = false;
+  } else if (hasRealHistoricalRange) {
+    ticketPriceMin = historicalMin;
+    ticketPriceMax = historicalMax;
+    ticketPriceIsEstimated = false;
+  } else {
+    const range = ticketRangeFromAverage(DEFAULT_AVG_TICKET_PRICE_INR);
+    ticketPriceMin = range.min;
+    ticketPriceMax = range.max;
+    ticketPriceIsEstimated = true;
+  }
+
   const platformMetrics = buildPlatformMetrics(artist, payload, eventDate);
 
   return {
@@ -519,9 +558,10 @@ const buildRevenuePayload = async (payload: RevenuePayload): Promise<AnalyticsRe
       country: payload.country || DEFAULT_COUNTRY,
       venue_name: payload.venue_name,
       venue_type: payload.venue_type,
-      venue_capacity: Math.max(100, venueCapacity),
-      ticket_price_min: historicalMin || fallbackRange.min,
-      ticket_price_max: historicalMax || fallbackRange.max,
+      venue_capacity: venueCapacity,
+      ticket_price_min: ticketPriceMin,
+      ticket_price_max: ticketPriceMax,
+      ticket_price_is_estimated: ticketPriceIsEstimated,
       date: eventDate.toISOString().slice(0, 10),
     },
     platform_metrics: platformMetrics,
@@ -538,16 +578,29 @@ export const madAnalyticsService = {
         ...prediction,
         model_source: 'mad_analytics.revenue.predictor',
         inputs: {
-          venue_capacity: analyticsPayload.concert.venue_capacity,
+          // Sourced from the analytics engine's ACTUAL resolved values
+          // (prediction.resolved_*), not the raw request — the request's
+          // venue_capacity/ticket_price fields are often null when real data
+          // isn't available, and the engine is what fills that gap (known
+          // venue / venues database / default estimate). Falling back to the
+          // request fields only covers the rare case where the engine
+          // response is missing them (e.g. an older analytics deployment).
+          venue_capacity: prediction.resolved_venue_capacity ?? analyticsPayload.concert.venue_capacity,
           avg_ticket_price:
-            analyticsPayload.concert.ticket_price_min +
-            (analyticsPayload.concert.ticket_price_max - analyticsPayload.concert.ticket_price_min) * 0.235,
+            prediction.resolved_avg_ticket_price ??
+            (analyticsPayload.concert.ticket_price_min != null && analyticsPayload.concert.ticket_price_max != null
+              ? analyticsPayload.concert.ticket_price_min +
+                (analyticsPayload.concert.ticket_price_max - analyticsPayload.concert.ticket_price_min) * 0.235
+              : null),
           city: analyticsPayload.concert.city,
           country: analyticsPayload.concert.country,
           event_date: analyticsPayload.concert.date,
         },
         // Currency fields are now included from the Python response:
         // currency, predicted_revenue_usd, lower_bound_usd, upper_bound_usd, exchange_rate
+        // Input provenance (capacity_source, ticket_price_source,
+        // capacity_is_estimated, ticket_price_is_estimated, data_quality) is
+        // already included via the ...prediction spread above.
       };
     } catch (error) {
       console.error('Error fetching revenue prediction from mad_analytics:', error);

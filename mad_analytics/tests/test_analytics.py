@@ -17,6 +17,7 @@ from mad_analytics.utils.schemas import (
 from mad_analytics.growth.rog_calculator import calculate as growth_calc
 from mad_analytics.demand.scorer import calculate as demand_calc
 from mad_analytics.revenue.predictor import calculate as revenue_calc
+import mad_analytics.revenue.predictor as revenue_predictor
 from mad_analytics.popularity import calculate as popularity_calc, calculate_all as popularity_calc_all
 import mad_analytics.popularity.calculator as popularity_calculator
 from mad_analytics.utils.db import persist_popularity_scores, fetch_saved_popularity
@@ -281,6 +282,267 @@ class TestRevenuePredictor:
         payload = RevenueInput(concert=concert, platform_metrics=metrics, demand_score=75.0)
         out = revenue_calc(payload)
         assert out.demand_score_used == 75.0
+
+
+class TestHeuristicIsPrimaryRevenueModel:
+    """Heuristic Revenue Model is the canonical PRIMARY predictor
+    (production MVP stabilization). The ML model is optional/secondary and
+    must never block, replace, or hide the primary heuristic result."""
+
+    def _payload(self, capacity=5000, avg_price=1500, demand_score=None):
+        metrics = make_metrics(90, "spotify") + make_metrics(90, "instagram")
+        concert = ConcertRow(
+            concert_id="c1", artist_id="a1",
+            city="Mumbai", country="India",
+            venue_capacity=capacity,
+            ticket_price_min=avg_price * 0.5,
+            ticket_price_max=avg_price * 1.5,
+            date=date.today() + timedelta(days=60),
+        )
+        return RevenueInput(concert=concert, platform_metrics=metrics, demand_score=demand_score)
+
+    # ── Test A — heuristic succeeds, ML unavailable ───────────────────────
+    def test_heuristic_succeeds_when_no_model_files_exist(self, monkeypatch):
+        monkeypatch.setattr(revenue_predictor.model_store, "exists", lambda name: False)
+
+        out = revenue_calc(self._payload())
+
+        assert out.predicted_revenue is not None
+        assert out.predicted_revenue >= 0
+        assert out.model_type == "heuristic"
+        assert out.ml_available is False
+        assert out.ml_predicted_revenue is None
+
+    def test_heuristic_succeeds_when_ml_model_raises_on_load(self, monkeypatch):
+        """Reproduces the real-world failure mode (e.g. an incompatible/
+        corrupted model artifact): model_store.exists() is True but
+        model_store.load() raises. The primary heuristic result must still
+        be returned -- this must NOT surface as 'Analytics Unavailable'."""
+        monkeypatch.setattr(revenue_predictor.model_store, "exists", lambda name: True)
+
+        def _raise_load(name):
+            raise ModuleNotFoundError("No module named '_loss'")
+
+        monkeypatch.setattr(revenue_predictor.model_store, "load", _raise_load)
+
+        out = revenue_calc(self._payload())
+
+        assert out.predicted_revenue is not None
+        assert out.predicted_revenue >= 0
+        assert out.model_type == "heuristic"
+        assert out.ml_available is False
+        assert out.ml_predicted_revenue is None
+
+    # ── Test B — heuristic succeeds, ML succeeds ──────────────────────────
+    def test_heuristic_remains_primary_when_ml_also_succeeds(self, monkeypatch):
+        """Even when the ML model loads and predicts successfully, the
+        primary predicted_revenue must be the heuristic value, unchanged --
+        ML must not be blended in or replace it."""
+        payload = self._payload()
+
+        # What the heuristic alone produces for this exact payload, computed
+        # directly (not via a prior revenue_calc() call, since this sandbox
+        # may have real model files on disk that would otherwise be hit).
+        feature_dict = revenue_predictor._build_feature_row(payload)
+        expected_heuristic = round(
+            max(0.0, revenue_predictor._heuristic_revenue(feature_dict)), 2
+        )
+
+        class _FakePreprocessor:
+            def transform(self, row_df):
+                return row_df
+
+        class _FakeModel:
+            def predict(self, X):
+                # Deliberately very different from the heuristic value, so a
+                # blend or override would be trivially detectable.
+                return [expected_heuristic * 50 + 1_000_000]
+
+        monkeypatch.setattr(revenue_predictor.model_store, "exists", lambda name: True)
+        monkeypatch.setattr(
+            revenue_predictor.model_store,
+            "load",
+            lambda name: _FakeModel() if name == "revenue_model" else _FakePreprocessor(),
+        )
+
+        out = revenue_calc(payload)
+
+        assert out.model_type == "heuristic"
+        assert out.ml_available is True
+        assert out.ml_predicted_revenue == pytest.approx(expected_heuristic * 50 + 1_000_000, rel=1e-6)
+        # The primary value must equal the pure heuristic result, not a blend.
+        assert out.predicted_revenue == pytest.approx(expected_heuristic, rel=1e-6)
+        assert out.predicted_revenue != out.ml_predicted_revenue
+
+    # ── Test C — heuristic fails (genuinely missing/invalid required inputs) ──
+    def test_unavailable_when_heuristic_inputs_cannot_be_computed(self, monkeypatch):
+        """When a real prerequisite for the heuristic formula itself cannot
+        be computed, the request should fail -- and the error must describe
+        the HEURISTIC calculation failing, not blame the ML model."""
+
+        def _raise_demand(payload):
+            raise RuntimeError("simulated: demand score unavailable")
+
+        monkeypatch.setattr(revenue_predictor, "demand_calculate", _raise_demand)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            revenue_calc(self._payload(demand_score=None))
+
+        message = str(excinfo.value).lower()
+        assert "heuristic" in message
+        assert "ml" not in message
+        assert "model" not in message
+
+    # ── Test D — zero/low but valid revenue must not look like "missing" ──
+    def test_low_valid_revenue_is_not_treated_as_missing(self, monkeypatch):
+        monkeypatch.setattr(revenue_predictor.model_store, "exists", lambda name: False)
+
+        # Smallest capacity/price combination the schema allows -> a very
+        # small but still valid (non-negative, non-null) predicted_revenue.
+        out = revenue_calc(self._payload(capacity=1, avg_price=1, demand_score=10.0))
+
+        assert out.predicted_revenue is not None
+        assert out.predicted_revenue >= 0
+        # A valid low number, not Python/JSON null and not silently coerced away.
+        assert isinstance(out.predicted_revenue, float)
+
+
+class TestRevenueInputRobustness:
+    """Missing historical venue capacity / ticket pricing must never block a
+    prediction, never be silently invented as if real, and must always be
+    labeled with where the value actually came from. Canonical heuristic
+    formula (demand_factor / base_sell_through / venue_factor / sell_through /
+    predicted_revenue) is untouched by any of this -- only the INPUTS feeding
+    it are made robust."""
+
+    def _payload(self, *, capacity=None, price_min=None, price_max=None,
+                 ticket_price_is_estimated=False, venue_name=None, city="Mumbai",
+                 demand_score=50.0):
+        metrics = make_metrics(90, "spotify") + make_metrics(90, "instagram")
+        concert = ConcertRow(
+            concert_id="c1", artist_id="a1",
+            city=city, country="India",
+            venue_name=venue_name,
+            venue_capacity=capacity,
+            ticket_price_min=price_min,
+            ticket_price_max=price_max,
+            ticket_price_is_estimated=ticket_price_is_estimated,
+            date=date.today() + timedelta(days=60),
+        )
+        return RevenueInput(concert=concert, platform_metrics=metrics, demand_score=demand_score)
+
+    def test_missing_capacity_does_not_raise_and_is_marked_estimated(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        out = revenue_calc(self._payload(capacity=None, price_min=500, price_max=2000))
+
+        assert out.predicted_revenue is not None
+        assert out.predicted_revenue >= 0
+        assert out.model_type == "heuristic"
+        assert out.capacity_is_estimated is True
+        assert out.capacity_source in {"known_venue", "venue_database", "default_estimate"}
+        assert out.resolved_venue_capacity is not None and out.resolved_venue_capacity > 0
+        # A real ticket price was supplied, so only capacity is estimated.
+        assert out.ticket_price_is_estimated is False
+        assert out.data_quality == "partial"
+
+    def test_missing_ticket_price_does_not_raise_and_is_marked_estimated(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        out = revenue_calc(self._payload(capacity=5000, price_min=None, price_max=None))
+
+        assert out.predicted_revenue is not None
+        assert out.predicted_revenue >= 0
+        assert out.ticket_price_is_estimated is True
+        assert out.ticket_price_source == "default_estimate"
+        assert out.resolved_avg_ticket_price is not None and out.resolved_avg_ticket_price > 0
+        assert out.capacity_is_estimated is False
+        assert out.data_quality == "partial"
+
+    def test_missing_capacity_and_price_together_is_fully_estimated(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        out = revenue_calc(self._payload(capacity=None, price_min=None, price_max=None))
+
+        assert out.predicted_revenue is not None
+        assert out.predicted_revenue >= 0
+        assert out.capacity_is_estimated is True
+        assert out.ticket_price_is_estimated is True
+        assert out.data_quality == "estimated"
+
+    def test_real_event_specific_inputs_are_not_marked_estimated(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        out = revenue_calc(self._payload(capacity=8000, price_min=1000, price_max=3000))
+
+        assert out.capacity_is_estimated is False
+        assert out.capacity_source == "event_specific"
+        assert out.ticket_price_is_estimated is False
+        assert out.ticket_price_source == "event_specific"
+        assert out.data_quality == "full"
+        assert out.resolved_venue_capacity == 8000
+
+    def test_known_curated_venue_capacity_is_used_and_labeled(self, monkeypatch):
+        """A real, historically-established venue in the curated known-venues
+        list must resolve to its curated capacity (not a generic default) when
+        no event-specific capacity was supplied -- and be labeled with its
+        actual source ('known_venue', not 'event_specific'). A curated,
+        validated reference value is high-confidence real data, so it is
+        NOT flagged as an estimate the way a generic default/heuristic guess
+        is (that distinction is what capacity_source is for)."""
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        out = revenue_calc(self._payload(
+            capacity=None, price_min=500, price_max=2000,
+            venue_name="Jawaharlal Nehru Stadium", city="New Delhi",
+        ))
+
+        assert out.capacity_source == "known_venue"
+        assert out.capacity_is_estimated is False
+        assert out.resolved_venue_capacity == 60000
+
+    def test_missing_inputs_never_trigger_web_search(self, monkeypatch):
+        """A routine revenue calculation must never perform an outbound web
+        search, even when SERPAPI_KEY is configured and capacity is missing."""
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setenv("SERPAPI_KEY", "test-key-should-never-be-used")
+
+        def _fail_if_called(*args, **kwargs):
+            raise AssertionError("search_venue_capacity must not be called during revenue calculation")
+
+        import mad_analytics.venue_capacity.web_search as web_search_module
+        monkeypatch.setattr(web_search_module, "search_venue_capacity", _fail_if_called)
+
+        out = revenue_calc(self._payload(capacity=None, price_min=None, price_max=None,
+                                          venue_name="Some Obscure Unlisted Venue"))
+        assert out.predicted_revenue is not None
+
+    def test_deterministic_for_identical_inputs(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        payload_kwargs = dict(capacity=None, price_min=None, price_max=None,
+                               venue_name="Some Obscure Unlisted Venue", city="Mumbai")
+
+        out1 = revenue_calc(self._payload(**payload_kwargs))
+        out2 = revenue_calc(self._payload(**payload_kwargs))
+
+        assert out1.predicted_revenue == out2.predicted_revenue
+        assert out1.resolved_venue_capacity == out2.resolved_venue_capacity
+        assert out1.resolved_avg_ticket_price == out2.resolved_avg_ticket_price
+        assert out1.data_quality == out2.data_quality == "estimated"
+
+    def test_ml_secondary_failure_never_affects_estimated_primary_result(self, monkeypatch):
+        """Combining the two robustness concerns: missing historical inputs
+        AND a broken ML artifact must still produce a clean heuristic result,
+        never a 5xx / 'Analytics Unavailable'."""
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setattr(revenue_predictor.model_store, "exists", lambda name: True)
+
+        def _raise_load(name):
+            raise ModuleNotFoundError("No module named '_loss'")
+
+        monkeypatch.setattr(revenue_predictor.model_store, "load", _raise_load)
+
+        out = revenue_calc(self._payload(capacity=None, price_min=None, price_max=None))
+
+        assert out.predicted_revenue is not None
+        assert out.model_type == "heuristic"
+        assert out.ml_available is False
+        assert out.data_quality == "estimated"
 
 
 class TestArtistPopularity:

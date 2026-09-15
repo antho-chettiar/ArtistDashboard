@@ -145,18 +145,37 @@ SEASON_MAP = {12: "winter", 1: "winter", 2: "winter",
 WEEKEND_DAYS = {4, 5, 6}   # Fri, Sat, Sun (weekday() indices)
 
 
+#: Reasonable default average ticket price (INR) used only when neither a
+#: real event-specific price nor a caller-supplied fallback is available.
+#: Mirrors the existing Node-side default (backend/src/services/madAnalytics.service.ts).
+DEFAULT_AVG_TICKET_PRICE_INR = 1250.0
+
+
 def concert_base_features(concert: ConcertRow) -> dict:
-    """Numeric / categorical features derived from a single concert record."""
-    # LLM Processor tier distribution: VIP (10%), Tier1 (20%), Tier2 (40%), Tier3 (30%)
-    # This evaluates to a weighted average of min + 23.5% of the price range
-    price_range = concert.ticket_price_max - concert.ticket_price_min
-    avg_price = concert.ticket_price_min + (price_range * 0.235)
-    
+    """Numeric / categorical features derived from a single concert record.
+
+    venue_capacity / ticket price are optional on ConcertRow. When present,
+    the same existing formula is used unchanged. When absent, a null-safe
+    placeholder is used here — callers that need the fully-resolved,
+    provenance-aware capacity/price (e.g. the revenue predictor) overwrite
+    these afterwards via resolve_venue_capacity() and their own price logic.
+    """
+    if concert.ticket_price_min is not None and concert.ticket_price_max is not None:
+        # LLM Processor tier distribution: VIP (10%), Tier1 (20%), Tier2 (40%), Tier3 (30%)
+        # This evaluates to a weighted average of min + 23.5% of the price range
+        price_range = concert.ticket_price_max - concert.ticket_price_min
+        avg_price = concert.ticket_price_min + (price_range * 0.235)
+    else:
+        price_range = 0.0
+        avg_price = DEFAULT_AVG_TICKET_PRICE_INR
+
+    capacity = concert.venue_capacity if concert.venue_capacity is not None else 0
+
     return {
-        "venue_capacity":    concert.venue_capacity,
+        "venue_capacity":    capacity,
         "avg_ticket_price":  avg_price,
         "price_range":       price_range,
-        "max_revenue_naive": concert.venue_capacity * avg_price,
+        "max_revenue_naive": capacity * avg_price,
         "is_weekend":        int(concert.date.weekday() in WEEKEND_DAYS),
         "month":             concert.date.month,
         "season":            SEASON_MAP[concert.date.month],
@@ -268,6 +287,7 @@ def resolve_venue_capacity(
     supplied_capacity: Optional[int] = None,
     source_texts: Optional[list[str]] = None,
     db_url: Optional[str] = None,
+    enable_web_search: bool = True,
 ):
     """Resolve venue capacity with extraction, DB lookup, validation, and fallback estimation."""
     from ..venue_capacity.resolver import resolve_venue_capacity as _resolve_venue_capacity
@@ -283,6 +303,7 @@ def resolve_venue_capacity(
             supplied_capacity=supplied_capacity,
             source_texts=source_texts or [],
             db_url=db_url,
+            enable_web_search=enable_web_search,
         )
     )
 
