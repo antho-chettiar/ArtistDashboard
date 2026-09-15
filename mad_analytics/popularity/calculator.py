@@ -573,55 +573,50 @@ def calculate_all() -> list[PopularityOutput]:
 def calculate(payload: PopularityInput) -> PopularityOutput:
     """
     Compute an artist popularity score using the blended formula.
-    
-    If platform_metrics are provided, uses them for the base entropy score.
-    Otherwise, falls back to the snapshot-based approach.
-    
-    Google Trends and RoG are always fetched from stored data.
+
+    Base entropy score is ALWAYS computed cohort-relatively, via the same
+    _calculate_base_entropy_score() basis calculate_all() uses (each active
+    artist's platform value normalized against the cohort's max), so a
+    single-artist /popularity call agrees with /popularity/all for the same
+    artist.
+
+    NOTE: `payload.platform_metrics` (a caller-supplied time series) is
+    intentionally NOT used for the base score, even when provided. Normalizing
+    an artist's latest value against their own historical max makes
+    latest_relative == 1.0 for every platform whenever the artist's counts are
+    non-decreasing (true for almost any real artist), which forced base_score
+    to ~100 regardless of true relative popularity — this was the root cause
+    of single-artist /popularity calls returning ~100 for artists with real
+    history. Momentum already draws on genuine time-series data via the
+    growth module (_compute_momentum_scores), so no signal is lost by not
+    also using platform_metrics here.
+
+    Google Trends and Momentum are always fetched from stored/live data.
     """
-    if payload.platform_metrics:
-        df = metrics_to_df(payload.platform_metrics)
-        matrix = _build_platform_matrix(df)
-        if matrix.empty:
-            platform_weights_dict = {}
-            platform_contributions = {}
-            base_score = 5.0
-        else:
-            weights = _entropy_weights(matrix)
-            transformed = np.log1p(matrix)
-            latest_relative = _normalize_vector(transformed).iloc[-1]
-
-            platform_contributions = {
-                platform: round(float(latest_relative.get(platform, 0.0) * weights.get(platform, 0.0)), 4)
-                for platform in transformed.columns
-            }
-            platform_weights_dict = {platform: round(weights.get(platform, 0.0), 4) for platform in transformed.columns}
-            base_score = round(min(100.0, max(0.0, 5.0 + 95.0 * sum(platform_contributions.values()))), 2)
-    else:
-        artists = fetch_artist_snapshots()
-        if not artists:
-            return PopularityOutput(
-                artist_id=payload.artist_id,
-                popularity_score=5.0,
-                platform_weights={},
-                platform_contributions={},
-                computed_at=datetime.now(timezone.utc).isoformat(),
-            )
-
-        matrix = _build_snapshot_matrix(artists)
-        if matrix.empty:
-            return PopularityOutput(
-                artist_id=payload.artist_id,
-                popularity_score=5.0,
-                platform_weights={},
-                platform_contributions={},
-                computed_at=datetime.now(timezone.utc).isoformat(),
-            )
-
-        weights = _entropy_weights(matrix)
-        base_score, platform_weights_dict, platform_contributions = _calculate_base_entropy_score(
-            payload.artist_id, artists, matrix, weights
+    artists = fetch_artist_snapshots()
+    if not artists:
+        return PopularityOutput(
+            artist_id=payload.artist_id,
+            popularity_score=5.0,
+            platform_weights={},
+            platform_contributions={},
+            computed_at=datetime.now(timezone.utc).isoformat(),
         )
+
+    matrix = _build_snapshot_matrix(artists)
+    if matrix.empty:
+        return PopularityOutput(
+            artist_id=payload.artist_id,
+            popularity_score=5.0,
+            platform_weights={},
+            platform_contributions={},
+            computed_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    weights = _entropy_weights(matrix)
+    base_score, platform_weights_dict, platform_contributions = _calculate_base_entropy_score(
+        payload.artist_id, artists, matrix, weights
+    )
 
     # Get artist name for Google Trends lookup
     artist_name = _get_artist_name(payload.artist_id)

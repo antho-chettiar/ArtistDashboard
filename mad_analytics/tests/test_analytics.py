@@ -284,29 +284,113 @@ class TestRevenuePredictor:
 
 
 class TestArtistPopularity:
-    def _payload(self):
-        metrics = make_metrics(90, "spotify") + make_metrics(90, "instagram")
-        return PopularityInput(artist_id="artist_001", platform_metrics=metrics)
+    # Base entropy score is ALWAYS cohort-relative now (see calculate()'s
+    # docstring) — every test in this class exercises the single-artist path
+    # against a mocked fetch_artist_snapshots() cohort, never a real DB.
 
-    def test_popularity_schema(self):
-        out = popularity_calc(self._payload())
+    def _two_artist_cohort(self, target_values: dict) -> list[dict]:
+        peer = {
+            "artist_id": "artist_002",
+            "artistName": "Peer Artist",
+            "spotifyMonthlyListeners": 50000,
+            "youtubeSubscribers": 30000,
+            "instagramFollowers": 40000,
+            "facebookFollowers": 10000,
+            "twitterFollowers": 5000,
+        }
+        target = {"artist_id": "artist_001", "artistName": "Test Artist", **target_values}
+        return [target, peer]
+
+    def test_popularity_schema(self, monkeypatch):
+        snapshot_rows = self._two_artist_cohort({
+            "spotifyMonthlyListeners": 100000,
+            "youtubeSubscribers": 50000,
+            "instagramFollowers": 80000,
+            "facebookFollowers": 20000,
+            "twitterFollowers": 15000,
+        })
+        monkeypatch.setattr(popularity_calculator, "fetch_artist_snapshots", lambda: snapshot_rows)
+
+        out = popularity_calc(PopularityInput(artist_id="artist_001"))
         assert out.artist_id == "artist_001"
         assert 0 <= out.popularity_score <= 100
         assert abs(sum(out.platform_weights.values()) - 1.0) < 0.01
         assert set(out.platform_weights) == set(out.platform_contributions)
 
-    def test_more_platforms_increase_score(self):
-        base_payload = PopularityInput(
-            artist_id="artist_001",
-            platform_metrics=make_metrics(90, "spotify"),
+    def test_larger_cohort_relative_reach_increases_score(self, monkeypatch):
+        """An artist with a bigger footprint relative to the same cohort peer
+        must score at least as high as a smaller one. Base score is always
+        cohort-relative (never driven by a caller-supplied platform_metrics
+        time series — see calculate()'s docstring)."""
+        small_rows = self._two_artist_cohort({
+            "spotifyMonthlyListeners": 5000,
+            "youtubeSubscribers": 2000,
+            "instagramFollowers": 3000,
+            "facebookFollowers": 1000,
+            "twitterFollowers": 500,
+        })
+        big_rows = self._two_artist_cohort({
+            "spotifyMonthlyListeners": 100000,
+            "youtubeSubscribers": 50000,
+            "instagramFollowers": 80000,
+            "facebookFollowers": 20000,
+            "twitterFollowers": 15000,
+        })
+
+        monkeypatch.setattr(popularity_calculator, "fetch_artist_snapshots", lambda: small_rows)
+        small = popularity_calc(PopularityInput(artist_id="artist_001"))
+
+        monkeypatch.setattr(popularity_calculator, "fetch_artist_snapshots", lambda: big_rows)
+        big = popularity_calc(PopularityInput(artist_id="artist_001"))
+
+        assert big.popularity_score >= small.popularity_score
+
+    def test_platform_metrics_time_series_does_not_self_normalize_to_100(self, monkeypatch):
+        """Regression test for the Analysis-page bug where single-artist
+        /popularity returned exactly 100.0: a caller-supplied platform_metrics
+        time series that is monotonically increasing (so the artist's latest
+        value equals its own historical max on every platform) must NOT force
+        the score to ~100 purely because of that self-relative shape. The
+        score must reflect the artist's current snapshot value relative to
+        the active-artist cohort, exactly like /popularity/all — a modest
+        artist dwarfed by a much larger cohort peer must score well below 100
+        even though its own history only ever went up.
+        """
+        snapshot_rows = self._two_artist_cohort({
+            "spotifyMonthlyListeners": 10000,
+            "youtubeSubscribers": 5000,
+            "instagramFollowers": 8000,
+            "facebookFollowers": 2000,
+            "twitterFollowers": 1000,
+        })
+        # Override the peer to be a much larger superstar for this test.
+        snapshot_rows[1] = {
+            "artist_id": "artist_002",
+            "artistName": "Superstar Peer",
+            "spotifyMonthlyListeners": 50_000_000,
+            "youtubeSubscribers": 20_000_000,
+            "instagramFollowers": 30_000_000,
+            "facebookFollowers": 5_000_000,
+            "twitterFollowers": 2_000_000,
+        }
+        monkeypatch.setattr(popularity_calculator, "fetch_artist_snapshots", lambda: snapshot_rows)
+
+        # Monotonically increasing -> latest value == historical max on every
+        # platform. Under the old buggy branch this alone forced base_score
+        # (and, absent momentum/trends, the final score) to ~100.
+        monotonic_metrics = (
+            make_metrics(90, "spotify", start=1000, daily_growth=50)
+            + make_metrics(90, "instagram", start=500, daily_growth=30)
         )
-        multi_payload = PopularityInput(
-            artist_id="artist_001",
-            platform_metrics=make_metrics(90, "spotify") + make_metrics(90, "instagram"),
-        )
-        base = popularity_calc(base_payload)
-        multi = popularity_calc(multi_payload)
-        assert multi.popularity_score >= base.popularity_score
+
+        payload = PopularityInput(artist_id="artist_001", platform_metrics=monotonic_metrics)
+        out = popularity_calc(payload)
+
+        assert out.artist_id == "artist_001"
+        # log1p compresses the 10K-vs-50M gap, so this isn't near-zero — the
+        # point is it's nowhere near the ~100 the old self-normalizing branch
+        # would have produced for this same monotonic time series.
+        assert out.popularity_score < 90
 
     def test_snapshot_artist_popularity_with_db_fetch(self, monkeypatch):
         snapshot_rows = [
