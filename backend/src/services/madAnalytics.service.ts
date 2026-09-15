@@ -3,6 +3,13 @@ import { prisma } from '../utils/database';
 const ANALYTICS_URL = process.env.ANALYTICS_URL ?? 'http://localhost:8001';
 const DEFAULT_COUNTRY = 'India';
 const ANALYTICS_TIMEOUT_MS = Number(process.env.ANALYTICS_TIMEOUT_MS) || 12_000;
+// Growth/demand/revenue/popularity all do genuine DB + (for popularity) live
+// Google Trends work and reliably exceed the default timeout under a real
+// Analysis-page load (verified live: single-artist /popularity ~17-22s;
+// /demand and /revenue can each exceed 12s too). Reuses the same extended
+// timeout already established for the batch popularity endpoint below,
+// rather than introducing a new value.
+const ANALYTICS_EXTENDED_TIMEOUT_MS = Math.max(ANALYTICS_TIMEOUT_MS, 30_000);
 
 /**
  * Raised when the Python analytics service (ANALYTICS_URL) cannot produce a
@@ -28,9 +35,9 @@ export class AnalyticsUnavailableError extends Error {
  * AnalyticsUnavailableError. This is the ONLY way this module talks to the
  * analytics service — we deliberately keep one engine, not two.
  */
-const postAnalytics = async <T = unknown>(path: string, body?: unknown): Promise<T> => {
+const postAnalytics = async <T = unknown>(path: string, body?: unknown, timeoutMs = ANALYTICS_TIMEOUT_MS): Promise<T> => {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ANALYTICS_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${ANALYTICS_URL}${path}`, {
       method: 'POST',
@@ -51,7 +58,7 @@ const postAnalytics = async <T = unknown>(path: string, body?: unknown): Promise
     if (err instanceof AnalyticsUnavailableError) throw err;
     if (err instanceof Error && err.name === 'AbortError') {
       throw new AnalyticsUnavailableError(
-        `Analytics ${path} timed out after ${ANALYTICS_TIMEOUT_MS}ms`,
+        `Analytics ${path} timed out after ${timeoutMs}ms`,
         'timeout',
       );
     }
@@ -573,7 +580,7 @@ export const madAnalyticsService = {
   getRevenuePrediction: async (payload: RevenuePayload) => {
     try {
       const analyticsPayload = await buildRevenuePayload(payload);
-      const prediction = await postAnalytics<Record<string, unknown>>('/revenue', analyticsPayload);
+      const prediction = await postAnalytics<Record<string, unknown>>('/revenue', analyticsPayload, ANALYTICS_EXTENDED_TIMEOUT_MS);
       return {
         ...prediction,
         model_source: 'mad_analytics.revenue.predictor',
@@ -648,7 +655,7 @@ export const madAnalyticsService = {
       return await postAnalytics('/growth', {
         artist_id: artist?.id || artistId,
         metrics: bodyMetrics,
-      });
+      }, ANALYTICS_EXTENDED_TIMEOUT_MS);
     } catch (error) {
       console.error('Error fetching growth forecast from mad_analytics:', error);
       throw error;
@@ -658,7 +665,7 @@ export const madAnalyticsService = {
   getDemandScore: async (payload: DemandPayload) => {
     try {
       const analyticsPayload = await buildDemandPayload(payload);
-      return await postAnalytics('/demand', analyticsPayload);
+      return await postAnalytics('/demand', analyticsPayload, ANALYTICS_EXTENDED_TIMEOUT_MS);
     } catch (error) {
       console.error('Error fetching demand score from mad_analytics:', error);
       throw error;
@@ -676,7 +683,11 @@ export const madAnalyticsService = {
           ? platformMetrics.map(toAnalyticsMetric)
           : realPlatformMetrics(artist),
       };
-      return await postAnalytics('/popularity', body);
+      // Same extended timeout as getAllPopularityScores below: a single-artist
+      // score still fetches Google Trends live across the full active-artist
+      // cohort (needed so it agrees with /popularity/all), which reliably
+      // takes longer than the default analytics timeout.
+      return await postAnalytics('/popularity', body, ANALYTICS_EXTENDED_TIMEOUT_MS);
     } catch (error) {
       console.error('Error fetching popularity score from mad_analytics:', error);
       throw error;
@@ -719,7 +730,7 @@ export const madAnalyticsService = {
   // Longer timeout because the cohort computation is heavier than a single score.
   getAllPopularityScores: async () => {
     try {
-      return await getAnalytics('/popularity/all', Math.max(ANALYTICS_TIMEOUT_MS, 30_000));
+      return await getAnalytics('/popularity/all', ANALYTICS_EXTENDED_TIMEOUT_MS);
     } catch (error) {
       console.error('Error fetching all popularity scores via mad_analytics:', error);
       throw error;

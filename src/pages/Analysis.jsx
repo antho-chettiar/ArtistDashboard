@@ -18,7 +18,6 @@ import {
   useMadDemand,
   useMadPopularity,
   useMadLlmPrediction,
-  useMadVenueCapacity,
 } from '../hooks/usePredictions'
 
 const TABS = ['Profitability Predictor', 'Artist Comparison']
@@ -119,6 +118,12 @@ function applyModelPrediction(fallback, model) {
     dataQuality: model.data_quality || 'estimated',
     capacityIsEstimated: Boolean(model.capacity_is_estimated),
     ticketPriceIsEstimated: Boolean(model.ticket_price_is_estimated),
+    // Where the capacity actually came from ("event_specific" | "known_venue" |
+    // "venue_database" | "default_estimate") — used to label the Venue
+    // Capacity stat with its real provenance instead of the resolver's own
+    // independent "validated"/"estimated" status (see the Venue Capacity
+    // StatBox below, which no longer makes its own separate resolver call).
+    capacitySource: model.capacity_source || null,
   }
 }
 
@@ -218,10 +223,13 @@ function ProfitabilityPredictor({ artists, concerts }) {
     venueName,
     venueType: 'arena',
   })
-  const venueCapacity = useMadVenueCapacity(venueName, selectedCity, Boolean(selectedCity), {
-    venueType: 'arena',
-    suppliedCapacity: venueCapacityValue,
-  })
+  // NOTE: the "Venue Capacity" stat below is sourced from `pred` (the same
+  // canonical revenue call above), not a separate resolver call — a separate
+  // useMadVenueCapacity call here previously passed the client-side synthetic
+  // fallback (venueCapacityValue) as if it were a real supplied capacity,
+  // which the resolver then validated as "validated" even though the number
+  // was never real. Removing the redundant call also removes an unnecessary
+  // concurrent request against the shared analytics service.
 
   // Validated Risk & Confidence come straight from the demand engine
   // (demand.data.risk / demand.data.confidence). No frontend fabrication.
@@ -446,8 +454,12 @@ function ProfitabilityPredictor({ artists, concerts }) {
             />
             <StatBox
               label="Venue Capacity"
-              value={venueCapacity.data ? formatNumber(venueCapacity.data.capacity) : '—'}
-              sub={venueCapacity.data ? venueCapacity.data.status : 'No venue data'}
+              value={hasModel ? formatNumber(pred.adjustedCap) : '—'}
+              sub={hasModel
+                ? (pred.capacityIsEstimated
+                  ? `Estimated${pred.capacitySource ? ` · ${pred.capacitySource.replace(/_/g, ' ')}` : ''}`
+                  : 'Event-specific')
+                : 'No venue data'}
               color="var(--accent-indigo)"
             />
           </div>
