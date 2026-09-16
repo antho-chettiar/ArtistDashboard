@@ -409,19 +409,18 @@ function Dashboard() {
         </div>
       </div>
 
-      {/* ── Row 2: Concerts by City ── */}
+      {/* ── Row 2: Concerts by City + Genre Representation + Recent Concerts ── */}
       {/* NOTE: Audience Age Distribution / Gender Distribution charts hidden
           by product decision (Demographics is out of scope for the current
-          Artist Analytics product). Data-fetch in useDashboardData() unchanged. */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
+          Artist Analytics product). Data-fetch in useDashboardData() unchanged.
+          The three remaining cards below share one row (previously "Concerts
+          by City" sat alone in a 3-column grid, leaving two columns empty). */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <ChartContainer title="Concerts by City" subtitle="Top 10 cities by concert count" delay={150}>
           <BarChart data={concertsByCity} xKey="name" layout="horizontal"
-            bars={[{ key: 'count', label: 'Concerts', color: '#818CF8' }]} height={240} />
+            bars={[{ key: 'count', label: 'Concerts', color: '#818CF8' }]} height={260} />
         </ChartContainer>
-      </div>
 
-      {/* ── Row 3: Genre + Recent Concerts ── */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <ChartContainer title="Concert Genre Representation" subtitle="Concerts by artist genre" delay={200}>
           <BarChart data={concertGenreData} xKey="genre" layout="vertical"
             bars={[{ key: 'count', label: 'Concerts' }]} multiColor={true} height={260} />
