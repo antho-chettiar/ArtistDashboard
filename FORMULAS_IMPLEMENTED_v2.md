@@ -20,15 +20,15 @@ Code lives in `mad_analytics/` (Python). Score ranges are 0–100 unless noted.
 | YouTube subscribers | Viberate / Excel | `artists.youtubeSubscribers` | Popularity (base), Platform Size |
 | Instagram followers | Viberate / Excel | `artists.instagramFollowers` | Popularity (base), Platform Size |
 | Facebook followers | Viberate / Excel | `artists.facebookFollowers` | Popularity (base), Platform Size |
-| Twitter followers | Viberate / Excel | `artists.twitterFollowers` | Risk (volatility, optional) |
-| Google Trends score (0–100) | pytrends job | `artists.googleTrendsScore` (or `DemandInput.google_trends_score`) | Popularity, Demand, Risk, Confidence |
-| Per-platform time series | scrapers | `platform_metrics.{followers, streams, views, metricDate, platform}` | Momentum, Risk (volatility) |
+| Twitter followers | Viberate / Excel | `artists.twitterFollowers` | — (legacy Risk only, see §10) |
+| Google Trends score (0–100) | pytrends job | `artists.googleTrendsScore` (or `DemandInput.google_trends_score`) | Popularity, Demand, Confidence |
+| Per-platform time series | scrapers | `platform_metrics.{followers, streams, views, metricDate, platform}` | Momentum |
 | Stored RoG | ingestion | `platform_metrics.{rogDaily, rogWeekly, rogMonthly}` | (alt momentum input) |
 | Momentum (`cross_platform_score`) | derived (growth module) | — | Popularity, Demand |
 | City tier factor | static table (below) | — | City Affinity, Revenue |
 | Market activity index | NCCS (primary) / concerts (fallback) | `mad_analytics/data/nccs.json` (`nccs_a`,`nccs_b`) · `concerts.{city, concertDate}` | City Affinity |
 | NCCS A / B / C, population | NCCS reference | `mad_analytics/data/nccs.json` | City Affinity |
-| Concerts in city (90d / 12m) | concerts | `concerts.{city, concertDate}` | Risk (saturation), City Affinity (fallback) |
+| Concerts in city (90d / 12m) | concerts | `concerts.{city, concertDate}` | City Affinity (fallback) |
 | Venue capacity | input / venue DB / resolver | `concerts.capacity` · `venues.avgCapacity` · request input | Revenue |
 | Avg ticket price | input / concerts | `concerts.avgTicketPrice` (or tier prices) · request input | Revenue |
 | Platform Size (derived) | Step 2 | — | Demand |
@@ -127,19 +127,16 @@ the exact heuristic formula and blend weights.
 
 ---
 
-## 7. Risk & Confidence
-**File:** `mad_analytics/demand/scorer.py` → `compute_risk`, `compute_confidence`
+## 7. Confidence
+**File:** `mad_analytics/demand/scorer.py` → `compute_confidence`
 
-### Risk Score (0–1)
-```
-Risk = average( market_saturation, momentum_volatility, trends_recency_gap )   # over available flags
-  market_saturation   = clamp(concerts_city_90d / 20, 0, 1)
-  momentum_volatility = clamp( STDDEV(rog[spotify, youtube, instagram, facebook]), 0, 1 )
-  trends_recency_gap  = 1.0 if google_trends_score < 30 else 0.0
-```
-Level: **Low** < 0.33 · **Medium** 0.33–0.66 · **High** > 0.66.
-
-**Inputs / DB:** `concerts.{city, concertDate}` (90-day count), per-platform RoG from `platform_metrics`, `artists.googleTrendsScore`.
+> **Removed (product decision — Risk is out of scope for the current Artist
+> Analytics product):** this section previously also documented a Risk Score
+> (`compute_risk`, Blueprint v2.0 Step 6), computed inside `calculate()` and
+> exposed as `DemandOutput.risk` / the Analysis page's "Risk" stat. It has been
+> removed from the active demand pipeline, the response schema, and the
+> frontend. The original formula and implementation are preserved unchanged —
+> see **§10 Legacy — Retired Metrics** below.
 
 ### Confidence tier
 ```
@@ -183,5 +180,25 @@ Windows: 7 / 30 / 90 days. Returns 0 if insufficient data or non-positive baseli
 | City Affinity | NCCS data for the city (or concert history) |
 | Demand | Platform Size + at least one of momentum / city affinity |
 | Revenue | demand + city + venue capacity + avg ticket price |
-| Risk | any of: city concert count / multi-platform RoG / Trends |
 | Confidence | (always computes — grades what's present) |
+
+---
+
+## 10. Legacy — Retired Metrics
+
+### LEGACY — Risk Score
+**Status:** Retired from active dashboard.
+**Reason:** Removed from current product scope (product decision — not a bug or formula defect).
+**Preserved implementation:** `mad_analytics/legacy/risk_score.py` (verbatim copy of `compute_risk` and its helpers, unchanged). Not imported by any active endpoint, service, or route.
+
+```
+Risk = average( market_saturation, momentum_volatility, trends_recency_gap )   # over available flags
+  market_saturation   = clamp(concerts_city_90d / 20, 0, 1)
+  momentum_volatility = clamp( STDDEV(rog[spotify, youtube, instagram, facebook]), 0, 1 )
+  trends_recency_gap  = 1.0 if google_trends_score < 30 else 0.0
+```
+Level: **Low** < 0.33 · **Medium** 0.33–0.66 · **High** > 0.66.
+
+**Inputs / DB (as originally implemented):** `concerts.{city, concertDate}` (90-day count), per-platform RoG from `platform_metrics`, `artists.googleTrendsScore`.
+
+This formula/implementation is unchanged from its last active version; it is documented here only so it remains recoverable for possible future reuse.

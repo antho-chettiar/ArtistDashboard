@@ -157,10 +157,9 @@ class DemandOutput(BaseModel):
     score: float = Field(..., ge=0, le=100)
     components: dict[str, float]    # platform_size, momentum, google_trends, city_affinity
     computed_at: str
-    # Blueprint v2.0 Risk Score (Step 6): {score: 0-1, level: Low|Medium|High,
-    # flags: {market_saturation, momentum_volatility, trends_recency_gap}}.
-    # None when no flag is computable (inputs unavailable). Additive / non-breaking.
-    risk: Optional[dict] = None
+    # NOTE: Risk Score (Blueprint v2.0 Step 6) was removed from this schema by
+    # product decision (retired from the active dashboard). The original
+    # implementation is preserved in mad_analytics/legacy/risk_score.py.
     # Blueprint v2.0 Confidence tier (Step 7): "High" | "Medium" | "Low" |
     # "Insufficient", based on availability of platform / Google-Trends / city signals.
     confidence: Optional[str] = None

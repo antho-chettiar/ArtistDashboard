@@ -231,13 +231,9 @@ function ProfitabilityPredictor({ artists, concerts }) {
   // was never real. Removing the redundant call also removes an unnecessary
   // concurrent request against the shared analytics service.
 
-  // Validated Risk & Confidence come straight from the demand engine
-  // (demand.data.risk / demand.data.confidence). No frontend fabrication.
-  const riskLevel = demand.data?.risk?.level
-  const riskColor = riskLevel === 'High' ? 'var(--accent-red)'
-    : riskLevel === 'Medium' ? 'var(--accent-gold)'
-    : riskLevel === 'Low' ? 'var(--accent-green)'
-    : 'var(--text-muted)'
+  // NOTE: Risk was removed from the active dashboard by product decision
+  // (see mad_analytics/legacy/risk_score.py for the preserved implementation).
+  // Confidence still comes straight from the demand engine (demand.data.confidence).
 
   // The backend explicitly labels which model produced the primary result
   // (always "heuristic" today — the Heuristic Revenue Model is canonical/
@@ -433,12 +429,6 @@ function ProfitabilityPredictor({ artists, concerts }) {
               value={popularity.data ? `${popularity.data.popularity_score?.toFixed?.(1) ?? popularity.data.popularity_score}` : '—'}
               sub={popularity.data?.platform_weights ? 'Entropy weighted' : 'No popularity data'}
               color="var(--accent-green)"
-            />
-            <StatBox
-              label="Risk"
-              value={riskLevel ?? '—'}
-              sub={demand.data?.risk ? `Index ${Math.round((demand.data.risk.score ?? 0) * 100)} / 100` : 'No risk data'}
-              color={riskColor}
             />
             <StatBox
               label="Signal Completeness"
