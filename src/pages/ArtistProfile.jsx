@@ -6,14 +6,17 @@ import PageHeader from '../components/ui/PageHeader'
 import RoGBadge from '../components/ui/RoGBadge'
 import ChartContainer from '../components/charts/ChartContainer'
 import LineChart from '../components/charts/LineChart'
-import PieChart from '../components/charts/PieChart'
 import EmptyState from '../components/ui/EmptyState'
 import client from '../api/client'
 import { formatNumber, formatCurrency, formatDate } from '../utils/formatters'
 import ViberateTrends from '../components/viberate/ViberateTrends'
 import ScoreBreakdown from '../components/viberate/ScoreBreakdown'
 
-const TABS = ['Platforms', 'Growth Trends', 'Concerts', 'Platform Trends', 'Score', 'Demographics']
+// NOTE: 'Demographics' tab hidden by product decision (Demographics is out of
+// scope for the current Artist Analytics product). The underlying data-fetch
+// and backend implementation are untouched; only this page's UI entry point
+// was removed. See git history for the exact removed tab markup if reinstating.
+const TABS = ['Platforms', 'Growth Trends', 'Concerts', 'Platform Trends', 'Score']
 
 // Real daily ranges only — history currently spans 31 days.
 const GROWTH_RANGES = [
@@ -79,27 +82,6 @@ function ArtistProfile() {
     enabled: !!id,
   })
 
-  // Fetch demographics (age)
-  const { data: ageDemographics } = useQuery({
-    queryKey: ['artistDemographicsAge', id],
-    queryFn: async () => {
-      const response = await client.get(`/artists/${id}/demographics?dimension=age`)
-      return response.data.data.demographics
-    },
-    staleTime: 5 * 60 * 1000,
-    enabled: !!id,
-  })
-
-  // Fetch demographics (gender)
-  const { data: genderDemographics } = useQuery({
-    queryKey: ['artistDemographicsGender', id],
-    queryFn: async () => {
-      const response = await client.get(`/artists/${id}/demographics?dimension=gender`)
-      return response.data.data.demographics
-    },
-    staleTime: 5 * 60 * 1000,
-    enabled: !!id,
-  })
 
   const isLoading = artistLoading || concertsLoading
   const error = artistError
@@ -250,20 +232,6 @@ function ArtistProfile() {
 
   // Only the last N days that actually have data — never padded.
   const trendData = trendDataAll.slice(-growthDays)
-
-  // Transform demographics for pie charts (group by dimensionValue and sum absoluteCount)
-  const groupDemographics = (data) => {
-    const map = new Map()
-    data?.forEach(d => {
-      const key = d.dimensionValue || 'Unknown'
-      const count = d.absoluteCount != null ? d.absoluteCount : 0
-      map.set(key, (map.get(key) || 0) + count)
-    })
-    return Array.from(map.entries()).map(([name, value]) => ({ name, value }))
-  }
-
-  const ageData = groupDemographics(ageDemographics)
-  const genderData = groupDemographics(genderDemographics)
 
   return (
     <div className="relative">
@@ -468,17 +436,6 @@ function ArtistProfile() {
         )
       )}
 
-      {/* ── Tab: Demographics ── */}
-      {activeTab === 'Demographics' && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <ChartContainer title="Audience Age Distribution" subtitle="% by age group">
-            <PieChart data={ageData.length > 0 ? ageData : [{ name: 'No data', value: 1 }]} nameKey="name" valueKey="value" innerRadius={55} height={260} />
-          </ChartContainer>
-          <ChartContainer title="Gender Distribution" subtitle="% by gender">
-            <PieChart data={genderData.length > 0 ? genderData : [{ name: 'No data', value: 1 }]} nameKey="name" valueKey="value" innerRadius={55} height={260} />
-          </ChartContainer>
-        </div>
-      )}
     </div>
   )
 }

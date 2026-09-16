@@ -7,7 +7,6 @@ import KpiCard from '../components/ui/KpiCard'
 import ChartContainer from '../components/charts/ChartContainer'
 import LineChart from '../components/charts/LineChart'
 import BarChart from '../components/charts/BarChart'
-import PieChart from '../components/charts/PieChart'
 import RoGBadge from '../components/ui/RoGBadge'
 import useFilterStore from '../store/useFilterStore'
 import { useDashboardData } from '../hooks/useDashboardData'
@@ -78,8 +77,6 @@ function Dashboard() {
         allArtists = [],
         followerTrends = [],
         genres: genreData = [],
-        ageData = [],
-        genderData = [],
         artistIdToType = {},
       } = data || {}
 
@@ -161,16 +158,10 @@ function Dashboard() {
       .sort((a, b) => b.count - a.count)
   }, [filteredConcerts, allArtists])
 
-  // Normalize chart data coming from backend so charts receive numeric values
-  const ageChartData = useMemo(() => (ageData || []).map(d => ({
-    name: d.name ?? d.label ?? d.age ?? 'Unknown',
-    value: Number(d.value ?? d.count ?? d.percentage ?? 0)
-  })), [ageData])
-
-  const genderChartData = useMemo(() => (genderData || []).map(d => ({
-    name: d.name ?? d.label ?? d.gender ?? 'Unknown',
-    value: Number(d.value ?? d.count ?? d.percentage ?? 0)
-  })), [genderData])
+  // NOTE: Demographics (age/gender) charts hidden by product decision
+  // (Demographics is out of scope for the current Artist Analytics product).
+  // useDashboardData() still fetches ageData/genderData internally — only
+  // this page's rendering of them was removed.
 
   const genreChartData = useMemo(() => (genreData || []).map(d => ({
     genre: d.genre ?? d.name ?? 'Unknown',
@@ -418,19 +409,15 @@ function Dashboard() {
         </div>
       </div>
 
-      {/* ── Row 2: Revenue + Age + Gender ── */}
+      {/* ── Row 2: Concerts by City ── */}
+      {/* NOTE: Audience Age Distribution / Gender Distribution charts hidden
+          by product decision (Demographics is out of scope for the current
+          Artist Analytics product). Data-fetch in useDashboardData() unchanged. */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
         <ChartContainer title="Concerts by City" subtitle="Top 10 cities by concert count" delay={150}>
           <BarChart data={concertsByCity} xKey="name" layout="horizontal"
             bars={[{ key: 'count', label: 'Concerts', color: '#818CF8' }]} height={240} />
         </ChartContainer>
-        <ChartContainer title="Audience Age Distribution" subtitle="% of total audience" delay={230}>
-          <PieChart data={ageChartData} nameKey="name" valueKey="value" innerRadius={55} height={240} />
-        </ChartContainer>
-        <ChartContainer title="Gender Distribution" subtitle="% of total audience" delay={310}>
-          <PieChart data={genderChartData} nameKey="name" valueKey="value" innerRadius={55} height={240} />
-        </ChartContainer>
-    
       </div>
 
       {/* ── Row 3: Genre + Recent Concerts ── */}
