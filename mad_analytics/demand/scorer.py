@@ -1,14 +1,20 @@
 """
 demand/scorer.py
 Composite 0–100 demand score for an artist in a given city on a given date
-(Formula Blueprint v2.0 — Step 4).
+(Formula Blueprint v2.1 — Growth/RoG retired, 2026-09).
 
 Components
 ----------
-- platform_size (35%) — cohort-relative social/streaming reach (Step 2)
-- momentum      (35%) — cross_platform_score from the growth module
-- google_trends (20%) — real-time public search interest
-- city_affinity (10%) — city tier × market activity (Step 3)
+- platform_size (55%) — cohort-relative social/streaming reach (Step 2)
+- google_trends (30%) — real-time public search interest
+- city_affinity (15%) — city tier × market activity (Step 3)
+
+Momentum (cross_platform_score from the growth/RoG module) was dropped by
+product decision — Growth/RoG has been archived (preserved, unchanged, in
+mad_analytics/legacy/growth_calculator.py) because it added complexity without
+a proportional accuracy gain for V1. Its 35% weight was redistributed to
+Platform Size (35% -> 55%) and Google Trends (20% -> 30%), with City Affinity
+picking up the remainder (10% -> 15%).
 
 Missing components are renormalized out (present weights rescaled to sum to 1.0).
 
@@ -278,25 +284,24 @@ def city_affinity_for_city(
     return city_affinity_score(city, activity[key])
 
 
-# ── Demand Score (Formula Blueprint v2.0 — Step 4) ────────────────────────────
+# ── Demand Score (Formula Blueprint v2.1 — Growth/RoG retired, 2026-09) ───────
 #
-#   Demand = PlatformSize*0.35 + Momentum*0.35 + GoogleTrends*0.20 + CityAffinity*0.10
+#   Demand = PlatformSize*0.55 + GoogleTrends*0.30 + CityAffinity*0.15
 #
-# All four components are 0–100. Missing components are renormalized out (present
+# All three components are 0–100. Missing components are renormalized out (present
 # weights rescaled to sum to 1.0) so a missing Google-Trends or city-affinity
 # signal never silently zeroes the score and no value is fabricated.
+# Momentum (35%) was removed and redistributed to these three — see module docstring.
 
 DEMAND_WEIGHTS = {
-    "platform_size": 0.35,
-    "momentum":      0.35,   # cross_platform_score (growth module / useMadGrowth)
-    "google_trends": 0.20,
-    "city_affinity": 0.10,
+    "platform_size": 0.55,
+    "google_trends": 0.30,
+    "city_affinity": 0.15,
 }
 
 
 def _blend_demand(
     platform_size: Optional[float],
-    momentum: Optional[float],
     google_trends: Optional[float],
     city_affinity: Optional[float],
 ) -> tuple[float, dict[str, float], dict[str, float]]:
@@ -307,7 +312,6 @@ def _blend_demand(
     """
     spec = [
         ("platform_size", platform_size),
-        ("momentum", momentum),
         ("google_trends", google_trends),
         ("city_affinity", city_affinity),
     ]
@@ -321,17 +325,10 @@ def _blend_demand(
     return score, components, effective
 
 
-def _artist_momentum_from_metrics(artist_id: str, metrics) -> Optional[float]:
-    """Momentum = cross_platform_score from the growth module (useMadGrowth),
-    computed from the payload's platform_metrics. None if it can't be computed."""
-    try:
-        from ..growth.rog_calculator import calculate as growth_calculate
-        from ..utils.schemas import GrowthInput
-        result = growth_calculate(GrowthInput(artist_id=artist_id, metrics=metrics))
-        return result.cross_platform_score
-    except Exception as e:
-        logger.warning(f"[Demand] Momentum calc failed for {artist_id}: {e}")
-        return None
+# NOTE: this file used to have an _artist_momentum_from_metrics() helper that
+# called into the growth module (cross_platform_score) to produce Momentum for
+# the blend above. Removed when Growth/RoG was archived as a product decision —
+# the preserved implementation lives in mad_analytics/legacy/growth_calculator.py.
 
 
 def _google_trends_for_artist(artist_id: str) -> Optional[float]:
@@ -384,18 +381,15 @@ def compute_confidence(
 
 def calculate(payload: DemandInput) -> DemandOutput:
     """
-    Compute the composite demand score (Formula Blueprint v2.0):
+    Compute the composite demand score (Formula Blueprint v2.1):
 
-        Demand = PlatformSize*0.35 + Momentum*0.35 + GoogleTrends*0.20 + CityAffinity*0.10
+        Demand = PlatformSize*0.55 + GoogleTrends*0.30 + CityAffinity*0.15
 
     Each component is 0–100. Weights are renormalized over whichever components are
     available. The returned `components` dict reports only the present components.
     """
     # Platform Size (Step 2) — needs the artist cohort, so computed over snapshots.
     platform_size = platform_size_scores().get(payload.artist_id)
-
-    # Momentum = cross_platform_score (growth module / useMadGrowth) from payload metrics.
-    momentum = _artist_momentum_from_metrics(payload.artist_id, payload.platform_metrics)
 
     # Google Trends — explicit input > stored DB score > unavailable.
     google_trends = payload.google_trends_score
@@ -406,11 +400,11 @@ def calculate(payload: DemandInput) -> DemandOutput:
     city_affinity = city_affinity_for_city(payload.city)
 
     score, components, _effective = _blend_demand(
-        platform_size, momentum, google_trends, city_affinity
+        platform_size, google_trends, city_affinity
     )
 
     # Confidence tier (Step 7) — signal completeness across platform / trends / city.
-    platform_present = platform_size is not None or momentum is not None
+    platform_present = platform_size is not None
     confidence = compute_confidence(
         platform_present,
         google_trends is not None,

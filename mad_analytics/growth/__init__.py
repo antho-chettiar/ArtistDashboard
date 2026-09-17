@@ -1,1 +1,0 @@
-from .rog_calculator import calculate

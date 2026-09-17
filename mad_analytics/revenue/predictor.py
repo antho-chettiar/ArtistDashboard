@@ -24,14 +24,17 @@ import pandas as pd
 from ..utils.schemas import RevenueInput, RevenueOutput
 from ..utils import model_store
 from ..utils.feature_engineering import (
-    metrics_to_df, concert_base_features, infer_artist_tier,
-    resolve_venue_capacity, rog, platform_series, PLATFORM_PRIMARY_METRIC,
-    DEFAULT_AVG_TICKET_PRICE_INR,
+    concert_base_features, infer_artist_tier,
+    resolve_venue_capacity, DEFAULT_AVG_TICKET_PRICE_INR,
 )
 from ..demand.scorer import calculate as demand_calculate
 from ..utils.schemas import DemandInput
-from ..growth.rog_calculator import calculate as growth_calculate
-from ..utils.schemas import GrowthInput
+# NOTE: this file used to import the growth module (growth_calculate/GrowthInput)
+# to populate best_rog_30d/cross_platform_score below. Removed when Growth/RoG
+# was archived — those two fields were never read by the PRIMARY heuristic
+# formula (_heuristic_revenue), only by the currently-dormant SECONDARY ML
+# model's feature row, so this is pure cleanup with zero effect on the live
+# Revenue number. See mad_analytics/legacy/growth_calculator.py.
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +57,6 @@ def _build_feature_row(payload: RevenueInput) -> dict:
     """
     concert = payload.concert
     metrics = payload.platform_metrics
-    df = metrics_to_df(metrics)
 
     # Base concert features (venue_capacity/avg_ticket_price placeholders here
     # are always overwritten below with the fully-resolved, provenance-aware
@@ -126,22 +128,13 @@ def _build_feature_row(payload: RevenueInput) -> dict:
 
     features["demand_score"] = demand_score
 
-    # Best-platform 30d RoG
-    best_rog = 0.0
-    for platform in PLATFORM_PRIMARY_METRIC:
-        series = platform_series(df, platform)
-        if not series.empty:
-            r = rog(series, 30)
-            if r > best_rog:
-                best_rog = r
-    features["best_rog_30d"] = best_rog
-
-    # Cross-platform score
-    growth_out = growth_calculate(GrowthInput(
-        artist_id=concert.artist_id,
-        metrics=metrics,
-    ))
-    features["cross_platform_score"] = growth_out.cross_platform_score
+    # best_rog_30d / cross_platform_score (growth/RoG-derived features) removed
+    # here — see the NOTE by the imports above. If the dormant secondary ML
+    # model is ever retrained (Phase 4 milestone, ~100+ logged concerts),
+    # training/train_revenue.py's own NUMERIC_COLS still lists these two
+    # columns; that script is untouched by this cleanup (it's an offline,
+    # not-currently-invoked script) and should be reconciled with this feature
+    # row's shape at that time.
 
     return features
 
@@ -163,10 +156,16 @@ def _capacity_source_label(resolver_source: str) -> str:
 
 # ── Inference ──────────────────────────────────────────────────────────────────
 
+# NOTE: not referenced elsewhere in this file today (feature_dict is passed to
+# the ML preprocessor as a full row, not filtered through these lists) — kept
+# as documentation of the expected column shape. best_rog_30d/cross_platform_score
+# were dropped from feature_dict above when Growth/RoG was archived; a
+# train_revenue.py copy of these constants still includes them (see the NOTE
+# in _build_feature_row above).
 CATEGORICAL_COLS = ["season", "city", "country", "artist_tier"]
 NUMERIC_COLS = [
     "venue_capacity", "avg_ticket_price", "price_range", "max_revenue_naive",
-    "is_weekend", "month", "demand_score", "best_rog_30d", "cross_platform_score",
+    "is_weekend", "month", "demand_score",
 ]
 
 

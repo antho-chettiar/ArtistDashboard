@@ -6,7 +6,6 @@ Python ML calculation layer for the MAD (Music Artist Dashboard) platform.
 
 | Module | Input | Output |
 |--------|-------|--------|
-| `growth.rog_calculator` | Artist platform metrics (60–90d) | Per-platform RoG, 30/90/180d forecasts, cross-platform score |
 | `demand.scorer` | Platform metrics + past concerts + target city/date | Composite 0–100 demand score |
 | `revenue.predictor` | Concert details + platform metrics (+ optional demand score) | Predicted revenue with confidence interval + SHAP importances |
 | `popularity.calculator` | Platform history across social/video channels or backend artist snapshot | Entropy-weighted artist popularity score + platform weights |
@@ -160,7 +159,6 @@ This produces reasonable ballpark figures until the ML model is trained.
 
 ```
 PostgreSQL
-  └── PlatformMetrics ──→ growth.rog_calculator ──→ GrowthOutput
   └── PlatformMetrics ──→ demand.scorer ──────────→ DemandOutput
   └── Concerts + above ─→ revenue.predictor ──────→ RevenueOutput
                                                         ↑
@@ -168,6 +166,11 @@ PostgreSQL
                                               from demand.scorer if
                                               not pre-computed
 ```
+
+`legacy.growth_calculator` (retired 2026-09, preserved unchanged) still backs
+the `/growth` endpoint directly, but nothing in the diagram above depends on
+it — Popularity and Demand were rebalanced to no longer need it. See
+`FORMULAS_IMPLEMENTED_v2.md` §10 for the full retirement writeup.
 
 ## Adding docker-compose service
 

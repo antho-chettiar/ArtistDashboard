@@ -8,17 +8,19 @@ import PageHeader from '../components/ui/PageHeader'
 import ChartContainer from '../components/charts/ChartContainer'
 import BarChart from '../components/charts/BarChart'
 import LineChart from '../components/charts/LineChart'
-import RoGBadge from '../components/ui/RoGBadge'
 import { formatNumber, formatCurrency } from '../utils/formatters'
 import { useArtists } from '../hooks/useArtists'
 import { useConcerts } from '../hooks/useConcerts'
 import {
   useAutoPredict,
-  useMadGrowth,
   useMadDemand,
   useMadPopularity,
   useMadLlmPrediction,
 } from '../hooks/usePredictions'
+// NOTE: useMadGrowth (Growth/RoG) is intentionally no longer imported here — the
+// Growth Score tile was removed from this screen by product decision (RoG is
+// archived, not deleted; see mad_analytics/legacy/growth_calculator.py). The
+// hook itself is left intact in usePredictions.js in case it's needed again.
 
 const TABS = ['Profitability Predictor', 'Artist Comparison']
 
@@ -215,7 +217,6 @@ function ProfitabilityPredictor({ artists, concerts }) {
     if (!parts.length) return null
     return `Assumed ${parts.join(' and ')} used — not historical/actual data for this concert.`
   })()
-  const growth = useMadGrowth(selectedArtist, Boolean(selectedArtist))
   const demand = useMadDemand(selectedArtist, selectedCity, Boolean(selectedArtist && selectedCity), { country: 'India', targetDate: predictionDate() })
   const popularity = useMadPopularity(selectedArtist, Boolean(selectedArtist))
   const llmPrediction = useMadLlmPrediction(selectedArtist, selectedCity, venueCapacityValue, Boolean(selectedArtist && selectedCity), {
@@ -411,17 +412,15 @@ function ProfitabilityPredictor({ artists, concerts }) {
             </div>
           )}
 
+          {/* Growth Score tile removed — Growth/RoG was archived by product decision
+              (not deleted; see mad_analytics/legacy/growth_calculator.py). Its weight
+              was folded into Popularity and Demand, so it no longer has its own
+              number to show on this screen. */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mb-6">
-            <StatBox
-              label="Growth Score"
-              value={growth.data ? `${growth.data.cross_platform_score?.toFixed?.(1) ?? growth.data.cross_platform_score}` : '—'}
-              sub={growth.data?.platforms?.[0] ? `${growth.data.platforms[0].platform} ${growth.data.platforms[0].rog_30d?.toFixed?.(1) ?? growth.data.platforms[0].rog_30d}%` : 'No growth data'}
-              color="var(--accent-indigo)"
-            />
             <StatBox
               label="Demand Score"
               value={demand.data ? `${demand.data.score?.toFixed?.(1) ?? demand.data.score}` : '—'}
-              sub={demand.data?.components?.momentum != null ? `Momentum ${demand.data.components.momentum.toFixed?.(1) ?? demand.data.components.momentum}` : 'No demand data'}
+              sub={demand.data?.components?.platform_size != null ? `Platform size ${demand.data.components.platform_size.toFixed?.(1) ?? demand.data.components.platform_size}` : 'No demand data'}
               color="var(--accent-gold)"
             />
             <StatBox
@@ -430,8 +429,11 @@ function ProfitabilityPredictor({ artists, concerts }) {
               sub={popularity.data?.platform_weights ? 'Entropy weighted' : 'No popularity data'}
               color="var(--accent-green)"
             />
+            {/* Renamed from "Signal Completeness" — same High/Medium/Low logic
+                underneath (compute_confidence in demand/scorer.py), just a label a
+                stakeholder reads more naturally as "how much data backed this score." */}
             <StatBox
-              label="Signal Completeness"
+              label="Data Confidence"
               value={demand.data?.confidence ?? '—'}
               sub={demand.data?.confidence ? 'Demand data availability' : 'No confidence data'}
               color="var(--accent-indigo)"

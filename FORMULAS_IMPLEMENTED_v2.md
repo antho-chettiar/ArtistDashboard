@@ -20,11 +20,11 @@ Code lives in `mad_analytics/` (Python). Score ranges are 0–100 unless noted.
 | YouTube subscribers | Viberate / Excel | `artists.youtubeSubscribers` | Popularity (base), Platform Size |
 | Instagram followers | Viberate / Excel | `artists.instagramFollowers` | Popularity (base), Platform Size |
 | Facebook followers | Viberate / Excel | `artists.facebookFollowers` | Popularity (base), Platform Size |
-| Twitter followers | Viberate / Excel | `artists.twitterFollowers` | — (legacy Risk only, see §10) |
+| Twitter followers | Viberate / Excel | `artists.twitterFollowers` | — (legacy Risk/Growth only, see §10) |
 | Google Trends score (0–100) | pytrends job | `artists.googleTrendsScore` (or `DemandInput.google_trends_score`) | Popularity, Demand, Confidence |
-| Per-platform time series | scrapers | `platform_metrics.{followers, streams, views, metricDate, platform}` | Momentum |
-| Stored RoG | ingestion | `platform_metrics.{rogDaily, rogWeekly, rogMonthly}` | (alt momentum input) |
-| Momentum (`cross_platform_score`) | derived (growth module) | — | Popularity, Demand |
+| Per-platform time series | scrapers | `platform_metrics.{followers, streams, views, metricDate, platform}` | — (legacy Momentum only, see §10) |
+| Stored RoG | ingestion | `platform_metrics.{rogDaily, rogWeekly, rogMonthly}` | — (unused) |
+| Momentum (`cross_platform_score`) | derived (growth module) | — | — (legacy only, see §10) |
 | City tier factor | static table (below) | — | City Affinity, Revenue |
 | Market activity index | NCCS (primary) / concerts (fallback) | `mad_analytics/data/nccs.json` (`nccs_a`,`nccs_b`) · `concerts.{city, concertDate}` | City Affinity |
 | NCCS A / B / C, population | NCCS reference | `mad_analytics/data/nccs.json` | City Affinity |
@@ -41,18 +41,22 @@ Code lives in `mad_analytics/` (Python). Score ranges are 0–100 unless noted.
 **File:** `mad_analytics/popularity/calculator.py`
 
 ```
-Popularity = BaseEntropy × 0.60 + Momentum × 0.20 + GoogleTrends × 0.20
+Popularity = BaseEntropy × 0.75 + GoogleTrends × 0.25
 ```
 (weights renormalized over available components)
+
+> **Changed (product decision, 2026-09):** Momentum (`cross_platform_score`, weight
+> 0.20) was removed — Growth/RoG was archived (see **§10 Legacy — Retired
+> Metrics**). Its weight was redistributed to BaseEntropy (0.60 → 0.75) and
+> GoogleTrends (0.20 → 0.25).
 
 - **BaseEntropy (0–100):** `5 + 95 × Σ(normalized_value[p] × entropy_weight[p])` over
   p ∈ {spotify, youtube, instagram, facebook}.
   - `normalized_value[p] = log1p(value) / max(log1p(value)) across cohort`
   - `entropy_weight[p]` = Shannon-entropy diversification weight, with floors **Spotify ≥ 0.45**, **Instagram ≥ 0.25**.
-- **Momentum (0–100):** `cross_platform_score` (see §8). Needs a platform-metrics time series.
 - **GoogleTrends (0–100):** `artists.googleTrendsScore` (else omitted).
 
-**Inputs / DB:** `artists.{spotifyMonthlyListeners, youtubeSubscribers, instagramFollowers, facebookFollowers, googleTrendsScore}`, `platform_metrics` time series (momentum).
+**Inputs / DB:** `artists.{spotifyMonthlyListeners, youtubeSubscribers, instagramFollowers, facebookFollowers, googleTrendsScore}`.
 
 ---
 
@@ -100,11 +104,16 @@ CityAffinity = city_tier_factor × market_activity_index × 100
 **File:** `mad_analytics/demand/scorer.py` → `calculate` / `_blend_demand`
 
 ```
-Demand = PlatformSize × 0.35 + Momentum × 0.35 + GoogleTrends × 0.20 + CityAffinity × 0.10
+Demand = PlatformSize × 0.55 + GoogleTrends × 0.30 + CityAffinity × 0.15
 ```
 (renormalized over available components)
 
-**Inputs:** PlatformSize (§3), Momentum = `cross_platform_score` (§8), GoogleTrends (`artists.googleTrendsScore`), CityAffinity (§4).
+> **Changed (product decision, 2026-09):** Momentum (`cross_platform_score`, weight
+> 0.35) was removed — Growth/RoG was archived (see **§10 Legacy — Retired
+> Metrics**). Its weight was redistributed to PlatformSize (0.35 → 0.55),
+> GoogleTrends (0.20 → 0.30), and CityAffinity (0.10 → 0.15).
+
+**Inputs:** PlatformSize (§3), GoogleTrends (`artists.googleTrendsScore`), CityAffinity (§4).
 
 ---
 
@@ -138,6 +147,13 @@ the exact heuristic formula and blend weights.
 > frontend. The original formula and implementation are preserved unchanged —
 > see **§10 Legacy — Retired Metrics** below.
 
+> **Renamed (product decision, 2026-09):** the Analysis page's tile for this
+> value was labeled "Signal Completeness" — a stakeholder reads that as jargon.
+> It is now labeled **"Data Confidence"**. The underlying tier logic
+> (`compute_confidence`, High/Medium/Low/Insufficient) and the backend field
+> name (`DemandOutput.confidence`) are unchanged — this is a display-label
+> change only, in `src/pages/Analysis.jsx`.
+
 ### Confidence tier
 ```
 High         = platform metrics + Google Trends + city data all present
@@ -150,23 +166,11 @@ Insufficient = no platform data
 
 ## 8. Supporting computations
 
-### Momentum — `cross_platform_score`
-**File:** `mad_analytics/growth/rog_calculator.py`
-```
-per platform:  score = 50 + 50 × tanh(rog_30d / 20)          # 0% growth → 50 (neutral)
-cross_platform_score = Σ(weight[p] × score[p]) / Σ(weight[p])
-weights: spotify 0.25, youtube 0.20, instagram 0.20, apple_music 0.15, twitter 0.10, facebook 0.10
-```
-
-### Rate of Growth (RoG)
-```
-rog(window) = (latest_value − value_window_days_ago) / value_window_days_ago × 100
-```
-Windows: 7 / 30 / 90 days. Returns 0 if insufficient data or non-positive baseline.
-**Input:** `platform_metrics` primary metric per platform (Spotify/Apple = streams, YouTube = views, others = followers).
+> **Momentum / `cross_platform_score` / Rate of Growth (RoG) have been retired**
+> from Popularity and Demand (product decision, 2026-09) — see **§10 Legacy —
+> Retired Metrics** for the preserved formula and implementation location.
 
 ### Notes
-- **Momentum needs a time series** (multiple dated `platform_metrics` rows). With only a current snapshot it is unavailable → renormalized out (Demand/Popularity still compute from the other components).
 - **Google Trends** requires the pytrends job to have populated `artists.googleTrendsScore`; until then it is unavailable → renormalized out, and Confidence drops a tier.
 
 ---
@@ -175,12 +179,12 @@ Windows: 7 / 30 / 90 days. Returns 0 if insufficient data or non-positive baseli
 
 | Formula | Needs (minimum for a real number) |
 |---|---|
-| Popularity | artist follower columns (Trends & momentum optional) |
+| Popularity | artist follower columns (Trends optional) |
 | Platform Size | artist follower columns |
 | City Affinity | NCCS data for the city (or concert history) |
-| Demand | Platform Size + at least one of momentum / city affinity |
+| Demand | Platform Size + at least one of Google Trends / city affinity |
 | Revenue | demand + city + venue capacity + avg ticket price |
-| Confidence | (always computes — grades what's present) |
+| Confidence (shown on the Analysis page as **Data Confidence**) | (always computes — grades what's present) |
 
 ---
 
@@ -200,5 +204,27 @@ Risk = average( market_saturation, momentum_volatility, trends_recency_gap )   #
 Level: **Low** < 0.33 · **Medium** 0.33–0.66 · **High** > 0.66.
 
 **Inputs / DB (as originally implemented):** `concerts.{city, concertDate}` (90-day count), per-platform RoG from `platform_metrics`, `artists.googleTrendsScore`.
+
+This formula/implementation is unchanged from its last active version; it is documented here only so it remains recoverable for possible future reuse.
+
+### LEGACY — Growth / RoG (Momentum / `cross_platform_score`)
+**Status:** Retired from Popularity and Demand.
+**Reason:** Product decision (2026-09) — Growth/RoG added complexity without a proportional accuracy gain for V1; the freed-up weight was judged better spent on the more reliable remaining signals. Not a bug or formula defect.
+**Preserved implementation:** `mad_analytics/legacy/growth_calculator.py` (verbatim copy of `calculate`, `_cross_platform_score`, and their helpers, unchanged). The `/growth` endpoint (`server.py`) still points at this preserved module, so it keeps returning a result for any external caller — it is simply no longer read by Popularity or Demand.
+
+```
+per platform:  score = 50 + 50 × tanh(rog_30d / 20)          # 0% growth → 50 (neutral)
+cross_platform_score = Σ(weight[p] × score[p]) / Σ(weight[p])
+weights: spotify 0.25, youtube 0.20, instagram 0.20, apple_music 0.15, twitter 0.10, facebook 0.10
+
+rog(window) = (latest_value − value_window_days_ago) / value_window_days_ago × 100
+```
+Windows: 7 / 30 / 90 days. Returns 0 if insufficient data or non-positive baseline.
+**Inputs / DB (as originally implemented):** `platform_metrics` primary metric per platform (Spotify/Apple = streams, YouTube = views, others = followers) — needs multiple dated rows (a time series), not just a current snapshot.
+
+**Where its weight went:**
+- Popularity: BaseEntropy 0.60 → **0.75**, GoogleTrends 0.20 → **0.25** (Momentum's 0.20 split between them).
+- Demand: PlatformSize 0.35 → **0.55**, GoogleTrends 0.20 → **0.30**, CityAffinity 0.10 → **0.15** (Momentum's 0.35 split between them).
+- Revenue: `best_rog_30d` / `cross_platform_score` were removed from the feature row assembled in `revenue/predictor.py` — they were never read by the primary heuristic formula, only by the (still-dormant) secondary ML model's feature row.
 
 This formula/implementation is unchanged from its last active version; it is documented here only so it remains recoverable for possible future reuse.

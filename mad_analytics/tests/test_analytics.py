@@ -14,7 +14,11 @@ from mad_analytics.utils.schemas import (
     PlatformMetricRow, ConcertRow,
     GrowthInput, DemandInput, RevenueInput, PopularityInput, PopularityOutput,
 )
-from mad_analytics.growth.rog_calculator import calculate as growth_calc
+# Growth/RoG was archived (moved to mad_analytics/legacy/growth_calculator.py) —
+# these tests still exercise the preserved implementation directly to make sure
+# archiving it didn't silently break its math, even though Popularity/Demand no
+# longer call it.
+from mad_analytics.legacy.growth_calculator import calculate as growth_calc
 from mad_analytics.demand.scorer import calculate as demand_calc
 from mad_analytics.revenue.predictor import calculate as revenue_calc
 import mad_analytics.revenue.predictor as revenue_predictor
@@ -176,13 +180,14 @@ class TestDemandScorer:
         assert 0 <= out.score <= 100
 
     def test_components_present(self):
-        # Blueprint v2.0 demand components: platform_size, momentum, google_trends,
-        # city_affinity. Only *available* components are reported; momentum is
-        # computable from the payload metrics alone (no DB), so it is always present.
+        # Blueprint v2.1 demand components: platform_size, google_trends,
+        # city_affinity (momentum was removed when Growth/RoG was archived — see
+        # demand/scorer.py's module docstring). Only *available* components are
+        # reported; none of the three is guaranteed present without DB fixtures,
+        # so this just checks nothing unexpected leaks into the output.
         out = demand_calc(self._payload())
-        valid = {"platform_size", "momentum", "google_trends", "city_affinity"}
+        valid = {"platform_size", "google_trends", "city_affinity"}
         assert set(out.components).issubset(valid)
-        assert "momentum" in out.components
 
     def test_high_ticket_velocity_raises_score(self):
         base_out = demand_calc(self._payload())
@@ -639,7 +644,7 @@ class TestArtistPopularity:
 
         # Monotonically increasing -> latest value == historical max on every
         # platform. Under the old buggy branch this alone forced base_score
-        # (and, absent momentum/trends, the final score) to ~100.
+        # (and, absent trends, the final score) to ~100.
         monotonic_metrics = (
             make_metrics(90, "spotify", start=1000, daily_growth=50)
             + make_metrics(90, "instagram", start=500, daily_growth=30)

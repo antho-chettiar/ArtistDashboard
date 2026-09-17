@@ -1,21 +1,24 @@
 """
-Popularity model — Formula Blueprint v2.0 (Prediction_Formula v1.1):
+Popularity model — Formula Blueprint v2.1 (Growth/RoG retired, 2026-09):
 
-    Popularity = BaseEntropy * 0.60 + Momentum * 0.20 + GoogleTrends * 0.20
+    Popularity = BaseEntropy * 0.75 + GoogleTrends * 0.25
 
-  - 60% Base entropy score (Spotify, YouTube, Instagram, Facebook follower counts)
-  - 20% Momentum = cross_platform_score from the growth module (useMadGrowth) —
-        the same tanh-normalized weighted RoG value the /growth endpoint returns
-        (0 growth => 50, i.e. momentum is neutral-centred, not zero-centred).
-  - 20% Google Trends score (real-time public search interest)
+  - 75% Base entropy score (Spotify, YouTube, Instagram, Facebook follower counts)
+  - 25% Google Trends score (real-time public search interest)
 
 The base entropy model uses information-entropy weighting across artist platform
 snapshots to compute relative popularity from follower/listener counts.
 
+Momentum (cross_platform_score from the growth/RoG module) was dropped as an
+input by product decision — Growth/RoG has been archived (see
+mad_analytics/legacy/growth_calculator.py) because the business decided it
+added complexity without a proportional accuracy gain for V1. Its 20% weight
+was redistributed to Base (60% -> 75%) and Google Trends (20% -> 25%) so the
+two remaining, more reliable signals do more of the work.
+
 Missing components are renormalized out: if Google Trends (pytrends not yet run)
-or Momentum (insufficient time series) is unavailable for an artist, the present
-component weights are rescaled to sum to 1.0 so the score is never silently zeroed
-and no value is fabricated.
+is unavailable for an artist, the full weight falls on the base entropy score so
+the score is never silently zeroed and no value is fabricated.
 """
 from __future__ import annotations
 from datetime import datetime, timezone
@@ -27,23 +30,19 @@ import pandas as pd
 
 from ..utils.db import fetch_artist_snapshots, get_engine
 from ..utils.schemas import PopularityInput, PopularityOutput
-from ..utils.feature_engineering import metrics_to_df, platform_series, rog
+from ..utils.feature_engineering import platform_series
 
 logger = logging.getLogger(__name__)
 
 # ── Weight Configuration ───────────────────────────────────────────────────────
 
-# Final blended formula weights — Formula Blueprint v2.0 (Popularity):
-#   Popularity = BaseEntropy * 0.60 + Momentum * 0.20 + GoogleTrends * 0.20
-# Momentum = cross_platform_score from the growth module (useMadGrowth).
-# Weights are renormalized over whichever components are available (see _blend_popularity).
-WEIGHT_BASE = 0.60           # Entropy-weighted platform followers
-WEIGHT_MOMENTUM = 0.20       # cross_platform_score (growth module / useMadGrowth)
-WEIGHT_GOOGLE_TRENDS = 0.20  # Google Trends search interest
-
-# Retained for backward compatibility with any external caller / legacy path.
-# The blueprint replaces the raw-RoG momentum with cross_platform_score.
-WEIGHT_ROG = 0.20
+# Final blended formula weights — Formula Blueprint v2.1 (Popularity):
+#   Popularity = BaseEntropy * 0.75 + GoogleTrends * 0.25
+# Growth/RoG's Momentum was retired (see module docstring) and its 20% folded
+# into these two remaining components. Weights are renormalized over whichever
+# components are actually available (see _blend_popularity).
+WEIGHT_BASE = 0.75           # Entropy-weighted platform followers
+WEIGHT_GOOGLE_TRENDS = 0.25  # Google Trends search interest
 
 # Base model platforms
 SNAPSHOT_PLATFORMS = [
@@ -347,106 +346,32 @@ def _normalize_rog_scores(raw_rog: dict[str, float]) -> dict[str, float]:
     return normalized
 
 
-# ── Momentum (cross_platform_score) Integration ───────────────────────────────
-
-def _fetch_recent_metrics_by_artist(days: int = 120) -> dict[str, list]:
-    """Load recent platform_metrics for all active artists, grouped by artist_id,
-    as PlatformMetricRow lists suitable for the growth module.
-
-    Returns {} on any failure so momentum degrades to "unavailable" (renormalized
-    out) rather than raising — matching the blueprint's null-fallback guidance.
-    """
-    import os
-    from ..utils.schemas import PlatformMetricRow
-    try:
-        from sqlalchemy import text as sql_text
-        engine = get_engine()
-        with engine.connect() as conn:
-            rows = conn.execute(sql_text(f"""
-                SELECT "artistId", platform, "metricDate", followers, streams, streams AS views
-                FROM platform_metrics
-                WHERE "metricDate" >= CURRENT_DATE - INTERVAL '{int(days)} days'
-                ORDER BY "artistId", "metricDate" ASC
-            """)).mappings().all()
-    except Exception as e:
-        logger.warning(f"[Popularity] Failed to fetch recent metrics for momentum: {e}")
-        return {}
-
-    by_artist: dict[str, list] = {}
-    for row in rows:
-        try:
-            metric = PlatformMetricRow(
-                date=row["metricDate"],
-                platform=str(row["platform"]),
-                followers=row.get("followers"),
-                streams=row.get("streams"),
-                views=row.get("views"),
-            )
-        except Exception:
-            continue
-        by_artist.setdefault(row["artistId"], []).append(metric)
-    return by_artist
-
-
-def _compute_momentum_scores(days: int = 120) -> dict[str, float]:
-    """Momentum per artist = cross_platform_score from the growth module.
-
-    Reuses growth.rog_calculator._cross_platform_score so the value is identical
-    to what the /growth endpoint (useMadGrowth) returns. Artists without enough
-    time series are omitted -> treated as "momentum unavailable" downstream.
-    """
-    from ..growth.rog_calculator import _cross_platform_score
-    from ..utils.schemas import PlatformForecast
-
-    by_artist = _fetch_recent_metrics_by_artist(days)
-    scores: dict[str, float] = {}
-    for artist_id, metrics in by_artist.items():
-        if len(metrics) < 2:
-            continue
-        try:
-            df = metrics_to_df(metrics)
-            forecasts: list[PlatformForecast] = []
-            for platform in sorted({p for p in df["platform"].unique() if p}):
-                series = platform_series(df, platform)
-                if series.empty or len(series) < 2:
-                    continue
-                forecasts.append(PlatformForecast(
-                    platform=platform,
-                    current_value=float(series.iloc[-1]),
-                    rog_7d=rog(series, 7),
-                    rog_30d=rog(series, 30),
-                    rog_90d=rog(series, 90),
-                    forecast_30d=0.0,
-                    forecast_90d=0.0,
-                    forecast_180d=0.0,
-                    trend="",
-                    anomaly_detected=False,
-                ))
-            if forecasts:
-                scores[artist_id] = _cross_platform_score(forecasts)
-        except Exception as e:
-            logger.warning(f"[Popularity] Momentum calc failed for {artist_id}: {e}")
-            continue
-    return scores
+# NOTE: this file used to have a "Momentum (cross_platform_score) Integration"
+# section here (_fetch_recent_metrics_by_artist) that fed the growth module for
+# the Momentum component. Removed along with Momentum itself when Growth/RoG
+# was archived — see the module docstring and mad_analytics/legacy/growth_calculator.py.
 
 
 # ── Blended score with renormalization ────────────────────────────────────────
+# NOTE: Momentum (Growth/RoG's cross_platform_score) used to be computed here via
+# a _compute_momentum_scores() helper that re-ran the growth module over each
+# artist's recent metrics. That helper was removed when Growth/RoG was archived
+# as a product decision (see module docstring) — the preserved implementation
+# lives in mad_analytics/legacy/growth_calculator.py if it's ever needed again.
 
 def _blend_popularity(
     base_score: float,
-    momentum: Optional[float],
     trends: Optional[float],
 ) -> tuple[float, dict[str, float]]:
-    """Apply Popularity = base*0.60 + momentum*0.20 + trends*0.20, renormalizing
+    """Apply Popularity = base*0.75 + trends*0.25, renormalizing
     over whichever components are actually available.
 
-    base_score is always present. momentum / trends are None when unavailable.
+    base_score is always present. trends is None when unavailable (pytrends not
+    yet run for this artist).
     Returns (final_score_0_100, effective_weights) where effective_weights are the
     renormalized weights actually used (for transparency in the response).
     """
     components: list[tuple[str, float, float]] = [("base", base_score, WEIGHT_BASE)]
-    if momentum is not None:
-        components.append(("momentum", momentum, WEIGHT_MOMENTUM))
     if trends is not None:
         components.append(("google_trends", trends, WEIGHT_GOOGLE_TRENDS))
 
@@ -502,7 +427,7 @@ def _calculate_base_entropy_score(artist_id: str, artists: list[dict], matrix: p
 def calculate_all() -> list[PopularityOutput]:
     """
     Compute popularity scores for all active artists using the blended formula:
-      Popularity = base × 0.60 + momentum × 0.20 + google_trends × 0.20
+      Popularity = base × 0.75 + google_trends × 0.25
     (weights renormalized over available components).
     """
     artists = fetch_artist_snapshots()
@@ -521,9 +446,6 @@ def calculate_all() -> list[PopularityOutput]:
     artist_names = [a["artistName"] for a in artists]
     trends_scores = _fetch_google_trends_scores(artist_names)
 
-    # Momentum = cross_platform_score per artist (growth module / useMadGrowth)
-    momentum_scores = _compute_momentum_scores()
-
     outputs: list[PopularityOutput] = []
     for idx, row in normalized.iterrows():
         artist = artists[idx]
@@ -538,23 +460,17 @@ def calculate_all() -> list[PopularityOutput]:
         platform_weights_dict = {platform: round(weights.get(platform, 0.0), 4) for platform in matrix.columns}
         base_score = round(min(100.0, max(0.0, 5.0 + 95.0 * sum(platform_contributions.values()))), 2)
 
-        # Momentum (0–100, cross_platform_score) — None if unavailable
-        momentum = momentum_scores.get(artist_id)
-
         # Google Trends (0–100) — None if not present in DB (pytrends not yet run)
         trend_score = trends_scores.get(artist_name)
 
         # Blended final score, renormalized over available components
-        final_score, effective_weights = _blend_popularity(base_score, momentum, trend_score)
+        final_score, effective_weights = _blend_popularity(base_score, trend_score)
 
         # Transparency: platform breakdown scaled by the (effective) base weight,
-        # plus momentum / trends at their effective weights when present.
+        # plus trends at its effective weight when present.
         base_w = effective_weights.get("base", 0.0)
         all_contributions = {k: round(v * base_w, 4) for k, v in platform_contributions.items()}
         all_weights = {k: round(v * base_w, 4) for k, v in platform_weights_dict.items()}
-        if momentum is not None:
-            all_contributions["momentum"] = round(momentum * effective_weights.get("momentum", 0.0) / 100.0, 4)
-            all_weights["momentum"] = effective_weights.get("momentum", 0.0)
         if trend_score is not None:
             all_contributions["google_trends"] = round(trend_score * effective_weights.get("google_trends", 0.0) / 100.0, 4)
             all_weights["google_trends"] = effective_weights.get("google_trends", 0.0)
@@ -587,11 +503,9 @@ def calculate(payload: PopularityInput) -> PopularityOutput:
     non-decreasing (true for almost any real artist), which forced base_score
     to ~100 regardless of true relative popularity — this was the root cause
     of single-artist /popularity calls returning ~100 for artists with real
-    history. Momentum already draws on genuine time-series data via the
-    growth module (_compute_momentum_scores), so no signal is lost by not
-    also using platform_metrics here.
+    history.
 
-    Google Trends and Momentum are always fetched from stored/live data.
+    Google Trends is always fetched from stored/live data.
     """
     artists = fetch_artist_snapshots()
     if not artists:
@@ -635,20 +549,13 @@ def calculate(payload: PopularityInput) -> PopularityOutput:
         trends_scores = _fetch_google_trends_scores(cohort_names)
         trend_score = trends_scores.get(artist_name)
 
-    # Momentum = cross_platform_score (growth module / useMadGrowth) — None if unavailable
-    momentum_scores = _compute_momentum_scores()
-    momentum = momentum_scores.get(payload.artist_id)
-
     # Blended final score, renormalized over available components
-    final_score, effective_weights = _blend_popularity(base_score, momentum, trend_score)
+    final_score, effective_weights = _blend_popularity(base_score, trend_score)
 
     # Merge all contributions at their effective (renormalized) weights
     base_w = effective_weights.get("base", 0.0)
     all_contributions = {k: round(v * base_w, 4) for k, v in platform_contributions.items()}
     all_weights = {k: round(v * base_w, 4) for k, v in platform_weights_dict.items()}
-    if momentum is not None:
-        all_contributions["momentum"] = round(momentum * effective_weights.get("momentum", 0.0) / 100.0, 4)
-        all_weights["momentum"] = effective_weights.get("momentum", 0.0)
     if trend_score is not None:
         all_contributions["google_trends"] = round(trend_score * effective_weights.get("google_trends", 0.0) / 100.0, 4)
         all_weights["google_trends"] = effective_weights.get("google_trends", 0.0)

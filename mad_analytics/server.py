@@ -44,7 +44,12 @@ from .utils.schemas import (
     LlmPredictorInput,
     VenueCapacityInput,
 )
-from .growth.rog_calculator import calculate as growth_calc
+# Growth/RoG was archived by product decision (2026-09) — Popularity and Demand
+# no longer depend on it (see their own module docstrings for the rebalanced
+# weights). The /growth endpoint below is kept technically functional (so any
+# existing external caller of useMadGrowth doesn't break), pointed at the
+# preserved legacy implementation rather than the removed active module.
+from .legacy.growth_calculator import calculate as growth_calc
 from .demand.scorer import calculate as demand_calc
 from .revenue.predictor import calculate as revenue_calc
 from .revenue.llm_model import calculate as llm_calc

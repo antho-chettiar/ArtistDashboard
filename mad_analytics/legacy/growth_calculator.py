@@ -1,9 +1,34 @@
 """
-growth/rog_calculator.py
-Rate-of-Growth calculator + multi-horizon forecast for every platform.
+LEGACY — Growth / RoG (Rate of Growth) Calculator
 
-Input:  GrowthInput  (artist_id + list[PlatformMetricRow])
-Output: GrowthOutput (per-platform forecasts + cross-platform score)
+Status: Retired from the active formulas (removed by product decision, 2026-09).
+Reason: Growth/RoG (as its own "Momentum" input into Popularity and Demand)
+added complexity without a proportional accuracy gain for V1 — the business
+decided the freed-up weight is better spent on the more reliable Base-entropy /
+Google Trends / Platform Size / City Affinity signals. Not a bug or formula
+defect.
+
+This module is preserved VERBATIM from mad_analytics/growth/rog_calculator.py
+at the point of removal, for possible future reuse (e.g. a v2 that reintroduces
+Growth as its own tracked metric). It is no longer imported by
+Popularity (mad_analytics/popularity/calculator.py) or Demand
+(mad_analytics/demand/scorer.py) — both formulas were rebalanced to no longer
+depend on Momentum:
+
+    Popularity = BaseEntropy*0.75 + GoogleTrends*0.25        (was 0.60/0.20/0.20)
+    Demand     = PlatformSize*0.55 + GoogleTrends*0.30 + CityAffinity*0.15
+                 (was 0.35/0.35/0.20/0.10)
+
+Revenue (mad_analytics/revenue/predictor.py) also no longer computes
+best_rog_30d / cross_platform_score in its feature row — those were unused by
+the primary heuristic formula and only fed the (still-dormant) secondary ML
+model.
+
+server.py's /growth endpoint still imports `calculate` from this module, so
+the endpoint itself keeps working (any external caller isn't broken) even
+though nothing in the active Popularity/Demand/Revenue formulas depends on it
+anymore. Do not wire this back into Popularity/Demand without a separate,
+explicit decision.
 """
 from __future__ import annotations
 import math
