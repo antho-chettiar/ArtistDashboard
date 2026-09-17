@@ -18,6 +18,12 @@ picking up the remainder (10% -> 15%).
 
 Missing components are renormalized out (present weights rescaled to sum to 1.0).
 
+Platform Size's own per-platform weights are tilted per-artist by a curated
+genre-style tag (Phase 3, Day 6 — see feature_engineering.ARTIST_GENRE_STYLE),
+shared with Popularity's identical tilt: a regional/folk artist's real fanbase
+shows up more on YouTube than Spotify, so treating every artist under the same
+weights under- or over-counts them.
+
 Input:  DemandInput
 Output: DemandOutput
 """
@@ -27,6 +33,8 @@ import logging
 import os
 from datetime import datetime, timezone, timedelta
 from typing import Callable, Optional
+
+from ..utils.feature_engineering import genre_style_for_artist_name, apply_genre_tilt
 
 from ..utils.schemas import DemandInput, DemandOutput
 from ..utils.db import fetch_artist_snapshots
@@ -68,13 +76,19 @@ def compute_platform_size(
     artist_values: dict[str, float],
     cohort_min: dict[str, float],
     cohort_max: dict[str, float],
+    genre_style: Optional[str] = None,
 ) -> float:
     """Platform Size Score (0–100) for one artist given the cohort min/max.
 
+    `genre_style` (Phase 3, Day 6) tilts PLATFORM_SIZE_WEIGHTS per-artist
+    before use — see feature_engineering.apply_genre_tilt. None (the default)
+    leaves the weights untouched, exactly the old behavior.
+
     Pure function — no DB — so it is unit-testable offline.
     """
+    weights = apply_genre_tilt(PLATFORM_SIZE_WEIGHTS, genre_style)
     total = 0.0
-    for platform, weight in PLATFORM_SIZE_WEIGHTS.items():
+    for platform, weight in weights.items():
         norm = _minmax(
             float(artist_values.get(platform, 0.0) or 0.0),
             float(cohort_min.get(platform, 0.0) or 0.0),
@@ -100,19 +114,22 @@ def platform_size_scores() -> dict[str, float]:
 
     cohort_values: dict[str, list[float]] = {p: [] for p in PLATFORM_SIZE_WEIGHTS}
     per_artist: dict[str, dict[str, float]] = {}
+    per_artist_genre: dict[str, Optional[str]] = {}
     for row in artists:
         values: dict[str, float] = {}
         for platform, field in PLATFORM_SIZE_FIELD.items():
             v = float(row.get(field) or 0.0)
             values[platform] = v
             cohort_values[platform].append(v)
-        per_artist[str(row["artist_id"])] = values
+        artist_id = str(row["artist_id"])
+        per_artist[artist_id] = values
+        per_artist_genre[artist_id] = genre_style_for_artist_name(row.get("artistName"))
 
     cohort_min = {p: (min(vs) if vs else 0.0) for p, vs in cohort_values.items()}
     cohort_max = {p: (max(vs) if vs else 0.0) for p, vs in cohort_values.items()}
 
     return {
-        artist_id: compute_platform_size(values, cohort_min, cohort_max)
+        artist_id: compute_platform_size(values, cohort_min, cohort_max, per_artist_genre[artist_id])
         for artist_id, values in per_artist.items()
     }
 
@@ -248,6 +265,45 @@ def nccs_market_activity() -> dict[str, float]:
     hi = max(ab.values()) if ab else 0.0
     _nccs_cache = {c: min(1.0, v / hi) for c, v in ab.items()} if hi > 0 else {}
     return _nccs_cache
+
+
+_nccs_affluence_ratio_cache: Optional[dict[str, float]] = None
+
+
+def city_affluence_ratio() -> dict[str, float]:
+    """Per-capita affluence proxy for each city, from the same NCCS reference
+    data as nccs_market_activity() above: (NCCS_A + NCCS_B) / population — the
+    fraction of a city's population in the affluent/upper-middle consumer
+    classes, i.e. the segment realistically buying concert tickets. This is
+    NOT a real income figure (no free/paid income-data source is wired in);
+    it's a defensible proxy built from data this product already trusts for
+    City Affinity, reused here for Revenue's price-vs-city-income friction
+    penalty (Phase 3, Day 7) — see revenue/predictor.py.
+
+    Keyed by normalized city name, roughly in [0, 1]. Returns {} if the
+    reference file is missing.
+    """
+    global _nccs_affluence_ratio_cache
+    if _nccs_affluence_ratio_cache is not None:
+        return _nccs_affluence_ratio_cache
+    try:
+        with open(_NCCS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        logger.warning(f"[Demand] NCCS data unavailable for affluence ratio: {e}")
+        _nccs_affluence_ratio_cache = {}
+        return _nccs_affluence_ratio_cache
+
+    ratios: dict[str, float] = {}
+    for r in data:
+        city = r.get("city")
+        population = float(r.get("population", 0) or 0)
+        if not city or population <= 0:
+            continue
+        affluent = float(r.get("nccs_a", 0) or 0) + float(r.get("nccs_b", 0) or 0)
+        ratios[_normalize_city_key(city)] = min(1.0, affluent / population)
+    _nccs_affluence_ratio_cache = ratios
+    return _nccs_affluence_ratio_cache
 
 
 def _default_market_activity() -> dict[str, float]:

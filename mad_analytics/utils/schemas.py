@@ -224,6 +224,24 @@ class RevenueOutput(BaseModel):
     ticket_price_is_estimated: bool = False
     # "full" (both real) | "partial" (one estimated) | "estimated" (both estimated)
     data_quality: str = "full"
+    # Language-match multiplier actually applied to sell-through (Phase 3, Day 5
+    # accuracy upgrade) — 1.20 = artist/city language match, 0.80 = mismatch,
+    # 1.00 = neutral (artist not in the roster language table, or multi-lingual).
+    # Surfaced here so the frontend/stakeholder can see this adjustment applied,
+    # the same way capacity_source/ticket_price_source show their work above.
+    language_affinity_factor: float = 1.0
+    # Price-vs-city-income friction multiplier applied to sell-through (Phase 3,
+    # Day 7) — 1.00 = price at/below what's locally affordable or city unknown,
+    # <1.00 (floor 0.50) = priced above the city's affordability reference.
+    price_income_friction_factor: float = 1.0
+    # Weekend ticket-price premium applied to the revenue total (Phase 3, Day 7)
+    # — true when the concert date is a Friday/Saturday and the 1.08x premium
+    # (see revenue/predictor.WEEKEND_PREMIUM_FACTOR) was applied.
+    weekend_premium_applied: bool = False
+    # Weather/season risk multiplier applied to sell-through (Phase 3, Day 8) —
+    # 1.00 = indoor venue, unrecognized venue type, or a non-monsoon month;
+    # 0.55 = outdoor venue during the monsoon window (June-September).
+    weather_season_factor: float = 1.0
 
 
 class PopularityInput(BaseModel):

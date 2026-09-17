@@ -20,6 +20,7 @@ from mad_analytics.utils.schemas import (
 # longer call it.
 from mad_analytics.legacy.growth_calculator import calculate as growth_calc
 from mad_analytics.demand.scorer import calculate as demand_calc
+import mad_analytics.demand.scorer as demand_scorer
 from mad_analytics.revenue.predictor import calculate as revenue_calc
 import mad_analytics.revenue.predictor as revenue_predictor
 from mad_analytics.popularity import calculate as popularity_calc, calculate_all as popularity_calc_all
@@ -28,6 +29,7 @@ from mad_analytics.utils.db import persist_popularity_scores, fetch_saved_popula
 from mad_analytics.utils.feature_engineering import (
     rog, exponential_smooth, seasonality_factor,
     social_velocity, ticket_velocity, infer_artist_tier, metrics_to_df,
+    apply_genre_tilt, genre_style_for_artist_name,
 )
 
 
@@ -120,6 +122,39 @@ class TestArtistTier:
     def test_major(self):
         metrics = make_metrics(30, start=1_000_000, daily_growth=1000)
         assert infer_artist_tier(metrics) in ("major", "superstar")
+
+
+# ── Genre-style platform tilt (Popularity + Demand accuracy upgrade — Phase 3, Day 6) ──
+
+class TestGenreStyleTilt:
+    """Pure, offline-testable: apply_genre_tilt/genre_style_for_artist_name never touch the DB."""
+
+    def test_regional_folk_shifts_weight_toward_youtube(self):
+        weights = {"spotify": 0.40, "youtube": 0.25, "instagram": 0.25, "facebook": 0.10}
+        tilted = apply_genre_tilt(weights, "regional_folk")
+        assert tilted["youtube"] > weights["youtube"]
+        assert tilted["spotify"] < weights["spotify"]
+        # Renormalized back to the same total -- still a valid weight set.
+        assert abs(sum(tilted.values()) - sum(weights.values())) < 1e-9
+
+    def test_untagged_genre_style_is_unchanged(self):
+        weights = {"spotify": 0.40, "youtube": 0.25, "instagram": 0.25, "facebook": 0.10}
+        assert apply_genre_tilt(weights, None) == weights
+        # mainstream_bollywood/modern_pop_crossover have no tilt entry for V1 (see module docstring).
+        assert apply_genre_tilt(weights, "mainstream_bollywood") == weights
+        assert apply_genre_tilt(weights, "a_future_tag_not_in_the_table") == weights
+
+    def test_curated_roster_resolves_expected_styles(self):
+        assert genre_style_for_artist_name("Arijit Singh") == "mainstream_bollywood"
+        assert genre_style_for_artist_name("Hansraj Raghuwanshi") == "regional_folk"
+        assert genre_style_for_artist_name("Neeraj Shridhar") == "pop_remix"
+        assert genre_style_for_artist_name("Armaan Malik") == "modern_pop_crossover"
+
+    def test_unknown_artist_name_is_neutral(self):
+        """An artist outside the locked 11-artist roster must never be
+        guessed into a tag -- None, same as any other missing signal."""
+        assert genre_style_for_artist_name("Some Future Artist") is None
+        assert genre_style_for_artist_name(None) is None
 
 
 # ── Growth module ──────────────────────────────────────────────────────────────
@@ -238,6 +273,43 @@ class TestDemandScorer:
         assert demand_calc(with_recent).score == demand_calc(without).score
 
 
+class TestDemandGenreTilt:
+    """Genre-style platform tilt (Phase 3, Day 6) applied to Platform Size."""
+
+    def test_tagged_artist_platform_size_shifts_with_youtube_strength(self, monkeypatch):
+        # Folk Artist is YouTube-heavy / Spotify-light -- the regional_folk
+        # tilt (toward YouTube) has something real to bite on here.
+        rows = [
+            {"artist_id": "artist_001", "artistName": "Folk Artist",
+             "spotifyMonthlyListeners": 5000, "youtubeSubscribers": 500000,
+             "instagramFollowers": 20000, "facebookFollowers": 10000},
+            {"artist_id": "artist_002", "artistName": "Peer Artist",
+             "spotifyMonthlyListeners": 50000, "youtubeSubscribers": 30000,
+             "instagramFollowers": 40000, "facebookFollowers": 10000},
+        ]
+        monkeypatch.setattr(demand_scorer, "fetch_artist_snapshots", lambda: rows)
+
+        monkeypatch.setattr(demand_scorer, "genre_style_for_artist_name", lambda name: None)
+        untagged = demand_scorer.platform_size_scores()
+
+        monkeypatch.setattr(
+            demand_scorer, "genre_style_for_artist_name",
+            lambda name: "regional_folk" if name == "Folk Artist" else None,
+        )
+        tagged = demand_scorer.platform_size_scores()
+
+        assert tagged["artist_001"] > untagged["artist_001"]
+        assert tagged["artist_002"] == untagged["artist_002"]  # peer is untagged in both runs
+
+    def test_untagged_artist_unaffected(self):
+        weights = demand_scorer.PLATFORM_SIZE_WEIGHTS
+        artist_values = {"spotify": 10000.0, "youtube": 20000.0, "instagram": 5000.0, "facebook": 1000.0}
+        cohort_min = {p: 0.0 for p in weights}
+        cohort_max = {p: v * 2 for p, v in artist_values.items()}
+        assert demand_scorer.compute_platform_size(artist_values, cohort_min, cohort_max, genre_style=None) == \
+            demand_scorer.compute_platform_size(artist_values, cohort_min, cohort_max)
+
+
 # ── Revenue module ─────────────────────────────────────────────────────────────
 
 class TestRevenuePredictor:
@@ -287,6 +359,231 @@ class TestRevenuePredictor:
         payload = RevenueInput(concert=concert, platform_metrics=metrics, demand_score=75.0)
         out = revenue_calc(payload)
         assert out.demand_score_used == 75.0
+
+
+# ── Language Affinity (Revenue accuracy upgrade — Phase 3, Day 5) ─────────────
+
+class TestLanguageAffinityFactor:
+    """Pure, offline-testable: _language_affinity_factor never touches the DB."""
+
+    def test_perfect_match(self):
+        factor = revenue_predictor._language_affinity_factor(frozenset({"hindi"}), "Mumbai")
+        assert factor == revenue_predictor.LANGUAGE_MATCH_FACTOR
+
+    def test_mismatch(self):
+        factor = revenue_predictor._language_affinity_factor(frozenset({"hindi"}), "Chennai")
+        assert factor == revenue_predictor.LANGUAGE_MISMATCH_FACTOR
+
+    def test_multilingual_artist_always_matches(self):
+        multilingual = frozenset({revenue_predictor._ANY_LANGUAGE})
+        assert revenue_predictor._language_affinity_factor(multilingual, "Chennai") == revenue_predictor.LANGUAGE_MATCH_FACTOR
+        assert revenue_predictor._language_affinity_factor(multilingual, "Kolkata") == revenue_predictor.LANGUAGE_MATCH_FACTOR
+
+    def test_unknown_artist_is_neutral_not_penalized(self):
+        """An artist outside the locked 11-artist roster table must never be
+        guessed into a penalty -- neutral 1.0x, same as any other missing signal."""
+        assert revenue_predictor._language_affinity_factor(None, "Chennai") == revenue_predictor.LANGUAGE_NEUTRAL_FACTOR
+
+    def test_unlisted_city_defaults_to_hindi(self):
+        # Guwahati isn't in CITY_DOMINANT_LANGUAGE -> defaults to Hindi -> a
+        # Hindi-singing artist still gets a match there, not a guessed penalty.
+        factor = revenue_predictor._language_affinity_factor(frozenset({"hindi"}), "Guwahati")
+        assert factor == revenue_predictor.LANGUAGE_MATCH_FACTOR
+
+
+class TestRevenueLanguageAffinityIntegration:
+    def _payload(self, city):
+        """demand_score is pre-computed and fixed here on purpose: city also
+        feeds the internally-computed demand score via city-tier affinity, so
+        leaving demand_score unset would let city move revenue through THAT
+        channel too and confound these tests. Fixing it isolates language
+        affinity as the only thing that can differ between two cities below.
+        """
+        metrics = make_metrics(90, "spotify") + make_metrics(90, "instagram")
+        concert = ConcertRow(
+            concert_id="c1", artist_id="a1",
+            city=city, country="India",
+            venue_capacity=5000,
+            ticket_price_min=1000, ticket_price_max=2000,
+            date=date.today() + timedelta(days=60),
+        )
+        return RevenueInput(concert=concert, platform_metrics=metrics, demand_score=75.0)
+
+    def test_language_mismatch_lowers_predicted_revenue(self, monkeypatch):
+        """Same artist, same venue/price/demand -- only the city's dominant
+        language differs. A mismatch must predict strictly less revenue than
+        a match, all else equal."""
+        monkeypatch.setattr(
+            revenue_predictor, "_artist_languages_for", lambda artist_id: frozenset({"hindi"})
+        )
+        match = revenue_calc(self._payload("Mumbai"))       # Hindi artist x Hindi-dominant city
+        mismatch = revenue_calc(self._payload("Chennai"))   # Hindi artist x Tamil-dominant city
+        assert mismatch.predicted_revenue < match.predicted_revenue
+
+    def test_unresolvable_artist_does_not_change_revenue(self, monkeypatch):
+        """An artist_id that can't be resolved to a name (not in the roster
+        table, or DB lookup fails) must fall back to neutral -- city alone
+        must not move predicted revenue THROUGH THE LANGUAGE CHANNEL when
+        language affinity is unknown. Price-vs-income friction (Day 7) is
+        also city-dependent but is a separate channel -- neutralized here so
+        this test isolates language affinity specifically."""
+        monkeypatch.setattr(revenue_predictor, "_artist_languages_for", lambda artist_id: None)
+        monkeypatch.setattr(revenue_predictor, "_price_income_friction_factor", lambda price, city: 1.0)
+        mumbai = revenue_calc(self._payload("Mumbai"))
+        chennai = revenue_calc(self._payload("Chennai"))
+        assert mumbai.predicted_revenue == chennai.predicted_revenue
+
+
+# ── Price-vs-City-Income Friction (Revenue accuracy upgrade — Phase 3, Day 7) ──
+
+class TestPriceIncomeFrictionFactor:
+    """Pure, offline-testable: _price_income_friction_factor never touches the DB
+    (city_affluence_ratio() reads a static bundled JSON file, not a live DB call)."""
+
+    def test_price_within_affordable_reference_is_neutral(self):
+        # Mumbai's affluence ratio (~0.515) x the 2500 reference -> ~1288.
+        # A price well below that must never be rewarded, only penalties apply.
+        factor = revenue_predictor._price_income_friction_factor(1000.0, "Mumbai")
+        assert factor == 1.0
+
+    def test_price_above_affordable_reference_is_penalized(self):
+        factor = revenue_predictor._price_income_friction_factor(6000.0, "Mumbai")
+        assert factor < 1.0
+
+    def test_penalty_floors_at_minimum(self):
+        factor = revenue_predictor._price_income_friction_factor(100_000.0, "Mumbai")
+        assert factor == revenue_predictor.MIN_FRICTION_FACTOR
+
+    def test_lower_income_city_is_penalized_more_at_same_price(self):
+        """Same price, same everything else -- a lower-affluence city must
+        show a strictly lower (or equal, if both floor out) friction factor."""
+        price = 2000.0
+        mumbai = revenue_predictor._price_income_friction_factor(price, "Mumbai")     # higher affluence ratio
+        kolkata = revenue_predictor._price_income_friction_factor(price, "Kolkata")   # lower affluence ratio
+        assert kolkata <= mumbai
+
+    def test_city_without_nccs_data_is_neutral_not_penalized(self):
+        """A city with no NCCS entry must never be guessed into a penalty."""
+        factor = revenue_predictor._price_income_friction_factor(10_000.0, "Atlantis")
+        assert factor == 1.0
+
+
+class TestRevenuePriceIncomeFrictionIntegration:
+    def _payload(self, city, avg_price):
+        metrics = make_metrics(90, "spotify") + make_metrics(90, "instagram")
+        concert = ConcertRow(
+            concert_id="c1", artist_id="a1",
+            city=city, country="India",
+            venue_capacity=5000,
+            ticket_price_min=avg_price, ticket_price_max=avg_price,
+            date=date.today() + timedelta(days=60),
+        )
+        return RevenueInput(concert=concert, platform_metrics=metrics, demand_score=75.0)
+
+    def test_expensive_ticket_in_lower_income_city_predicts_less_revenue(self, monkeypatch):
+        """Same artist/venue/price/demand -- only the city differs. An
+        expensive ticket in a lower-affluence city must predict strictly
+        less revenue than the same ticket in a higher-affluence city.
+        1800 is chosen so neither city's friction factor has hit the 0.5
+        floor yet (a much higher price would floor both out to the same
+        0.5x, hiding the difference this test is checking for)."""
+        monkeypatch.setattr(revenue_predictor, "_artist_languages_for", lambda artist_id: None)
+        mumbai = revenue_calc(self._payload("Mumbai", 1800.0))
+        kolkata = revenue_calc(self._payload("Kolkata", 1800.0))
+        assert kolkata.predicted_revenue < mumbai.predicted_revenue
+
+
+# ── Weekend Ticket-Price Premium (Revenue accuracy upgrade — Phase 3, Day 7) ───
+
+class TestWeekendPremium:
+    def _payload(self, concert_date):
+        metrics = make_metrics(90, "spotify") + make_metrics(90, "instagram")
+        concert = ConcertRow(
+            concert_id="c1", artist_id="a1",
+            city="Mumbai", country="India",
+            venue_capacity=5000,
+            ticket_price_min=1500, ticket_price_max=1500,
+            date=concert_date,
+        )
+        return RevenueInput(concert=concert, platform_metrics=metrics, demand_score=75.0)
+
+    def test_saturday_show_predicts_more_revenue_than_weekday(self, monkeypatch):
+        monkeypatch.setattr(revenue_predictor, "_artist_languages_for", lambda artist_id: None)
+        # 2026-09-19 is a Saturday, 2026-09-16 (same week) is a Wednesday.
+        saturday = date(2026, 9, 19)
+        wednesday = date(2026, 9, 16)
+        assert saturday.weekday() == 5 and wednesday.weekday() == 2
+
+        weekend_out = revenue_calc(self._payload(saturday))
+        weekday_out = revenue_calc(self._payload(wednesday))
+
+        assert weekend_out.weekend_premium_applied is True
+        assert weekday_out.weekend_premium_applied is False
+        assert weekend_out.predicted_revenue == pytest.approx(
+            weekday_out.predicted_revenue * revenue_predictor.WEEKEND_PREMIUM_FACTOR
+        )
+
+
+# ── Weather / Season Risk (Revenue accuracy upgrade — Phase 3, Day 8) ─────────
+
+class TestWeatherSeasonFactor:
+    """Pure, offline-testable: no DB, no weather API."""
+
+    def test_outdoor_monsoon_is_penalized(self):
+        assert revenue_predictor._weather_season_factor(7, "Stadium") == revenue_predictor.OUTDOOR_MONSOON_RISK_FACTOR
+
+    def test_indoor_monsoon_is_neutral(self):
+        assert revenue_predictor._weather_season_factor(7, "Auditorium") == 1.0
+
+    def test_outdoor_non_monsoon_is_neutral(self):
+        assert revenue_predictor._weather_season_factor(12, "Stadium") == 1.0
+
+    def test_unknown_venue_type_defaults_to_indoor_neutral(self):
+        """A blank/unrecognized venue_type must never be guessed into a
+        penalty -- treated as indoor (the far more common case), not outdoor."""
+        assert revenue_predictor._weather_season_factor(7, None) == 1.0
+        assert revenue_predictor._weather_season_factor(7, "") == 1.0
+        assert revenue_predictor._weather_season_factor(7, "Some Venue") == 1.0
+
+    def test_open_air_keyword_is_recognized_as_outdoor(self):
+        assert revenue_predictor._weather_season_factor(8, "Open Air Grounds") == revenue_predictor.OUTDOOR_MONSOON_RISK_FACTOR
+
+
+class TestRevenueWeatherSeasonIntegration:
+    def _payload(self, concert_month, venue_type):
+        metrics = make_metrics(90, "spotify") + make_metrics(90, "instagram")
+        concert = ConcertRow(
+            concert_id="c1", artist_id="a1",
+            city="Mumbai", country="India",
+            venue_name="Test Venue", venue_type=venue_type,
+            venue_capacity=5000,
+            ticket_price_min=1500, ticket_price_max=1500,
+            # 2026-07-04 and 2026-12-05 are both Saturdays -- fixed to avoid
+            # the weekend premium (Day 7) confounding this comparison.
+            date=date(2026, concert_month, 4 if concert_month == 7 else 5),
+        )
+        return RevenueInput(concert=concert, platform_metrics=metrics, demand_score=75.0)
+
+    def test_outdoor_monsoon_show_predicts_less_than_indoor_winter_show(self, monkeypatch):
+        """Same artist/venue/price/demand -- only month and venue type
+        (outdoor vs indoor) differ. The classic case this feature exists for:
+        an outdoor monsoon show must predict strictly less than an indoor
+        winter show, all else equal."""
+        monkeypatch.setattr(revenue_predictor, "_artist_languages_for", lambda artist_id: None)
+        outdoor_monsoon = revenue_calc(self._payload(7, "Stadium"))     # July, outdoor
+        indoor_winter = revenue_calc(self._payload(12, "Auditorium"))  # December, indoor
+        assert outdoor_monsoon.predicted_revenue < indoor_winter.predicted_revenue
+        assert outdoor_monsoon.weather_season_factor == revenue_predictor.OUTDOOR_MONSOON_RISK_FACTOR
+        assert indoor_winter.weather_season_factor == 1.0
+
+    def test_same_outdoor_venue_unaffected_outside_monsoon(self, monkeypatch):
+        """The same outdoor venue in a non-monsoon month must not be
+        penalized -- this is a monsoon-specific risk, not a blanket
+        discount on all outdoor shows."""
+        monkeypatch.setattr(revenue_predictor, "_artist_languages_for", lambda artist_id: None)
+        monsoon = revenue_calc(self._payload(7, "Stadium"))
+        winter = revenue_calc(self._payload(12, "Stadium"))
+        assert monsoon.predicted_revenue < winter.predicted_revenue
 
 
 class TestHeuristicIsPrimaryRevenueModel:
@@ -719,6 +1016,53 @@ class TestArtistPopularity:
         assert outputs[0].artist_id == "artist_001"
         assert outputs[1].artist_id == "artist_002"
         assert all(0 <= out.popularity_score <= 100 for out in outputs)
+
+
+class TestPopularityGenreTilt:
+    """Genre-style platform tilt (Phase 3, Day 6) applied to the base entropy score."""
+
+    def _rows(self):
+        # Folk Artist is YouTube-heavy / Spotify-light -- a distribution the
+        # regional_folk tilt (toward YouTube) has something real to bite on.
+        return [
+            {"artist_id": "artist_001", "artistName": "Folk Artist",
+             "spotifyMonthlyListeners": 5000, "youtubeSubscribers": 500000,
+             "instagramFollowers": 20000, "facebookFollowers": 10000},
+            {"artist_id": "artist_002", "artistName": "Peer Artist",
+             "spotifyMonthlyListeners": 50000, "youtubeSubscribers": 30000,
+             "instagramFollowers": 40000, "facebookFollowers": 10000},
+        ]
+
+    def test_tagged_artist_scores_higher_than_untagged(self, monkeypatch):
+        monkeypatch.setattr(popularity_calculator, "fetch_artist_snapshots", lambda: self._rows())
+
+        monkeypatch.setattr(popularity_calculator, "genre_style_for_artist_name", lambda name: None)
+        untagged = popularity_calc(PopularityInput(artist_id="artist_001"))
+
+        monkeypatch.setattr(
+            popularity_calculator, "genre_style_for_artist_name",
+            lambda name: "regional_folk" if name == "Folk Artist" else None,
+        )
+        tagged = popularity_calc(PopularityInput(artist_id="artist_001"))
+
+        assert tagged.popularity_score > untagged.popularity_score
+        assert tagged.platform_weights["youtube"] > untagged.platform_weights["youtube"]
+
+    def test_single_artist_agrees_with_all_artists_when_tagged(self, monkeypatch):
+        """The genre tilt must be applied identically on both paths -- the
+        same consistency guarantee _calculate_base_entropy_score's docstring
+        already makes for the untagged case."""
+        monkeypatch.setattr(popularity_calculator, "fetch_artist_snapshots", lambda: self._rows())
+        monkeypatch.setattr(
+            popularity_calculator, "genre_style_for_artist_name",
+            lambda name: "regional_folk" if name == "Folk Artist" else None,
+        )
+
+        single = popularity_calc(PopularityInput(artist_id="artist_001"))
+        all_outputs = popularity_calc_all()
+        from_all = next(o for o in all_outputs if o.artist_id == "artist_001")
+
+        assert single.popularity_score == from_all.popularity_score
 
 
 class TestPopularityPersistence:

@@ -34,6 +34,12 @@ Code lives in `mad_analytics/` (Python). Score ranges are 0–100 unless noted.
 | Platform Size (derived) | Step 2 | — | Demand |
 | City Affinity (derived) | Step 3 | — | Demand |
 | Demand (derived) | Step 4 | — | Revenue |
+| Artist genre-style tag | static roster table (curated, V1) | `feature_engineering.ARTIST_GENRE_STYLE` | Popularity, Platform Size (Phase 3, Day 6) |
+| Artist performance language(s) | static roster table (curated, V1) | `revenue/predictor.ARTIST_LANGUAGES` | Revenue (Phase 3, Day 5) |
+| City dominant language | static table | `revenue/predictor.CITY_DOMINANT_LANGUAGE` | Revenue (Phase 3, Day 5) |
+| City affluence ratio (NCCS proxy) | NCCS reference | `mad_analytics/data/nccs.json` via `demand.scorer.city_affluence_ratio()` | Revenue (Phase 3, Day 7) |
+| Venue type (outdoor/indoor) | input | `concerts.venueType` / request input | Revenue (Phase 3, Day 8) |
+| Concert weekday / month | derived from concert date | `concerts.concertDate` | Revenue (`is_weekend` Phase 3 Day 7, `month` Phase 3 Day 8) |
 
 ---
 
@@ -50,13 +56,17 @@ Popularity = BaseEntropy × 0.75 + GoogleTrends × 0.25
 > Metrics**). Its weight was redistributed to BaseEntropy (0.60 → 0.75) and
 > GoogleTrends (0.20 → 0.25).
 
-- **BaseEntropy (0–100):** `5 + 95 × Σ(normalized_value[p] × entropy_weight[p])` over
+- **BaseEntropy (0–100):** `5 + 95 × Σ(normalized_value[p] × tilted_entropy_weight[p])` over
   p ∈ {spotify, youtube, instagram, facebook}.
   - `normalized_value[p] = log1p(value) / max(log1p(value)) across cohort`
   - `entropy_weight[p]` = Shannon-entropy diversification weight, with floors **Spotify ≥ 0.45**, **Instagram ≥ 0.25**.
+  - `tilted_entropy_weight[p]` = `entropy_weight[p]` adjusted by the artist's genre-style
+    platform tilt (Phase 3, Day 6 — see §3's callout below), then renormalized back to
+    sum to 1.0. Untagged artists (or a genre style with no tilt entry) get the
+    untilted `entropy_weight[p]` unchanged.
 - **GoogleTrends (0–100):** `artists.googleTrendsScore` (else omitted).
 
-**Inputs / DB:** `artists.{spotifyMonthlyListeners, youtubeSubscribers, instagramFollowers, facebookFollowers, googleTrendsScore}`.
+**Inputs / DB:** `artists.{spotifyMonthlyListeners, youtubeSubscribers, instagramFollowers, facebookFollowers, googleTrendsScore}`, curated genre-style tag (§3 callout).
 
 ---
 
@@ -64,14 +74,28 @@ Popularity = BaseEntropy × 0.75 + GoogleTrends × 0.25
 **File:** `mad_analytics/demand/scorer.py` → `compute_platform_size`
 
 ```
-PlatformSize = ( 0.40·norm(SpotifyMonthlyListeners)
-               + 0.25·norm(YouTubeSubscribers)
-               + 0.25·norm(InstagramFollowers)
-               + 0.10·norm(FacebookFollowers) ) × 100
+PlatformSize = ( w_spotify·norm(SpotifyMonthlyListeners)
+               + w_youtube·norm(YouTubeSubscribers)
+               + w_instagram·norm(InstagramFollowers)
+               + w_facebook·norm(FacebookFollowers) ) × 100
 ```
 - `norm(x) = (x − cohort_min) / (cohort_max − cohort_min)`  (min-max across active artists; degenerate cohort → 0)
+- Default weights `w = {spotify: 0.40, youtube: 0.25, instagram: 0.25, facebook: 0.10}`.
 
-**Inputs / DB:** `artists.{spotifyMonthlyListeners, youtubeSubscribers, instagramFollowers, facebookFollowers}`.
+> **Added (Phase 3, Day 6 — genre-style platform tilt):** a regional/folk artist's
+> real fanbase shows up more on YouTube than Spotify; the real `genre` DB field is
+> unusable for this (it's "Pop" for almost every one of the 11 artists), so a small
+> curated genre-style tag per artist (`feature_engineering.ARTIST_GENRE_STYLE`) tilts
+> the platform weights above before use, then renormalizes back to sum to 1.0. The
+> same tilt function (`feature_engineering.apply_genre_tilt`) and tag table are
+> shared with Popularity's `entropy_weight[p]` above — one table, not two that could
+> drift apart. Only `regional_folk` (YouTube ×1.5 / Spotify ×0.6) and `pop_remix`
+> (Spotify ×1.15 / YouTube ×0.9) have a real tilt for V1; `mainstream_bollywood` and
+> `modern_pop_crossover` are left untilted — 9 of the 11-artist roster is mainstream
+> Bollywood, so the untilted weights were already calibrated against them. An artist
+> not in the roster table gets no tilt, never a guessed adjustment.
+
+**Inputs / DB:** `artists.{spotifyMonthlyListeners, youtubeSubscribers, instagramFollowers, facebookFollowers}`, curated genre-style tag.
 
 ---
 
@@ -118,21 +142,99 @@ Demand = PlatformSize × 0.55 + GoogleTrends × 0.30 + CityAffinity × 0.15
 ---
 
 ## 6. Revenue Prediction
-**File:** `mad_analytics/revenue/predictor.py` → `calculate()`
+**File:** `mad_analytics/revenue/predictor.py` → `calculate()` / `_heuristic_revenue()`
 
-```
-predicted_revenue = model_prediction × 0.55 + heuristic_prediction × 0.45
-```
+**PRIMARY (canonical):** a deterministic, rule-based Heuristic Revenue Model —
+always computed, and always what `predicted_revenue`/`lower_bound`/`upper_bound`
+come from.
+**SECONDARY (optional/experimental):** a trained GradientBoostingRegressor,
+attempted only as a comparison signal (`ml_available` / `ml_predicted_revenue`).
+Its failure never affects the primary heuristic result, and it never blends
+into or replaces it.
 
-The trained GradientBoosting model (`model_prediction`) is blended with the rule-based
-`_heuristic_revenue()` fallback (`heuristic_prediction`); see `FORMULAS.md` §1–2 for
-the exact heuristic formula and blend weights.
+> **Corrected (2026-09):** this section previously described `predicted_revenue`
+> as a 0.55/0.45 blend of a trained model and the heuristic. That was never how
+> the live code works — the heuristic is canonical and the ML model is a
+> secondary, optional-only comparison signal that never affects
+> `predicted_revenue`. Corrected here to match `calculate()` as implemented.
 
 > **Removed (FORMULA_DECISIONS.md §3, System 3):** this section previously also
 > documented a `signal_revenue` signals-only cross-check
 > (`sell_through = (demand/100) × city_tier_factor`, `revenue = capacity × sell_through × avg_ticket_price`).
 > That value was computed and transmitted in the API response but never read by
 > the frontend, and has been removed from `predictor.py` and `RevenueOutput`.
+
+```
+sell_through = clamp(0.15, 0.85, 0.25 + demand_factor × 0.5)
+             × venue_factor
+             × language_affinity_factor        (Phase 3, Day 5)
+             × price_income_friction_factor    (Phase 3, Day 7)
+             × weather_season_factor           (Phase 3, Day 8)
+sell_through = clamp(0.15, 0.90, sell_through)
+
+predicted_revenue = venue_capacity × avg_ticket_price × sell_through × weekend_premium_factor   (Phase 3, Day 7)
+```
+- `demand_factor = (demand_score − 10) / 85`
+- `venue_factor`: **1.3** (capacity < 1,000) · **1.1** (< 5,000) · **1.0** (< 20,000) · **0.8** (≥ 20,000)
+
+### Language Affinity (Phase 3, Day 5)
+An artist performing in a language the target city doesn't primarily speak sells
+fewer tickets there, even with high demand and a big venue.
+```
+language_affinity_factor = 1.20   artist/city language match (incl. a curated multi-lingual artist, always treated as a match)
+                          = 1.00   artist or city not in the curated tables — never a guessed adjustment
+                          = 0.80   language mismatch
+```
+Values are the original product pitch's "Linguistic Affinity" multiplier, not
+invented fresh. **Inputs:** `revenue/predictor.ARTIST_LANGUAGES` (curated, 11-artist
+roster), `revenue/predictor.CITY_DOMINANT_LANGUAGE` (static table, defaults to
+Hindi for an unlisted city).
+
+### Price-vs-City-Income Friction (Phase 3, Day 7)
+Flagged as the single highest-value V1 accuracy addition. A ticket priced fine
+for Mumbai can be genuinely unaffordable for a lower-income city's audience.
+Mirrors the original pitch deck's Huff Gravity "Friction" term (Ticket Price ÷
+City Daily Income), rebuilt from data already trusted for City Affinity (no
+free/paid real income-data source exists):
+```
+affordable_reference = 2500 × city_affluence_ratio(city)     # AFFORDABLE_REFERENCE_PRICE_INR, a calibration assumption
+price_income_friction_factor = 1.0                              if avg_ticket_price ≤ affordable_reference, or city unknown
+                              = max(0.5, affordable_reference / avg_ticket_price)   otherwise
+```
+`city_affluence_ratio(city) = (NCCS_A + NCCS_B) / population` — the same NCCS
+reference data (`mad_analytics/data/nccs.json`) City Affinity already uses,
+via `demand.scorer.city_affluence_ratio()`. `2500` is a single, explicitly
+labeled calibration anchor (not derived from real ticket-sales data — none
+exists yet) and should be revisited once real concerts are logged (Phase 4:
+Excel intake + predicted-vs-actual comparison).
+
+### Weekend Ticket-Price Premium (Phase 3, Day 7)
+`is_weekend` was already computed for the ML training feature row but never
+read by the heuristic — this turns on that already-computed signal.
+```
+weekend_premium_factor = 1.08   if concert date is Friday/Saturday/Sunday, else 1.0
+```
+Organizers price weekend shows higher (more people free to attend), so this
+scales the revenue total directly rather than the sell-through fill-rate.
+Value is the original pitch deck's "Weekend Premium" multiplier.
+
+### Weather / Season Risk (Phase 3, Day 8)
+A monsoon-season outdoor show genuinely performs worse than a normal indoor
+show. Deliberately simple — no paid weather API, just a static calendar rule:
+```
+weather_season_factor = 0.55   if concert month ∈ {Jun, Jul, Aug, Sep} AND venue is outdoor
+                       = 1.00   otherwise (indoor is weather-shielded; unrecognized venue_type defaults to indoor)
+```
+`0.55` is the original pitch deck's exact "outdoor July monsoon" multiplier,
+applied across the whole monsoon window for simplicity rather than tapering
+month-by-month. This is a monsoon *penalty* on outdoor shows only — not a
+winter bonus for anyone. Outdoor is detected by keyword match on `venue_type`
+(stadium, arena, amphitheatre, festival, grounds, park, open air, outdoor).
+
+**Inputs / DB (Phase 3 additions):** curated artist language + city dominant
+language (Day 5), `mad_analytics/data/nccs.json` via `city_affluence_ratio()`
+(Day 7), `concerts.concertDate` weekday (Day 7), `concerts.concertDate` month +
+`concerts.venueType` (Day 8).
 
 ---
 
@@ -179,11 +281,11 @@ Insufficient = no platform data
 
 | Formula | Needs (minimum for a real number) |
 |---|---|
-| Popularity | artist follower columns (Trends optional) |
-| Platform Size | artist follower columns |
+| Popularity | artist follower columns (Trends optional; genre-style tilt optional, §3 callout) |
+| Platform Size | artist follower columns (genre-style tilt optional, §3 callout) |
 | City Affinity | NCCS data for the city (or concert history) |
 | Demand | Platform Size + at least one of Google Trends / city affinity |
-| Revenue | demand + city + venue capacity + avg ticket price |
+| Revenue | demand + city + venue capacity + avg ticket price (language/price-income/weekend/weather adjustments all degrade to neutral, never block a result — §6) |
 | Confidence (shown on the Analysis page as **Data Confidence**) | (always computes — grades what's present) |
 
 ---

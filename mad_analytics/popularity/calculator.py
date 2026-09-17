@@ -19,6 +19,11 @@ two remaining, more reliable signals do more of the work.
 Missing components are renormalized out: if Google Trends (pytrends not yet run)
 is unavailable for an artist, the full weight falls on the base entropy score so
 the score is never silently zeroed and no value is fabricated.
+
+The base entropy platform weights are also tilted per-artist by a curated
+genre-style tag (Phase 3, Day 6 — see feature_engineering.ARTIST_GENRE_STYLE):
+a regional/folk artist's real fanbase shows up more on YouTube than Spotify,
+so treating every artist under the same weights under- or over-counts them.
 """
 from __future__ import annotations
 from datetime import datetime, timezone
@@ -30,7 +35,9 @@ import pandas as pd
 
 from ..utils.db import fetch_artist_snapshots, get_engine
 from ..utils.schemas import PopularityInput, PopularityOutput
-from ..utils.feature_engineering import platform_series
+from ..utils.feature_engineering import (
+    platform_series, genre_style_for_artist_name, apply_genre_tilt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -395,7 +402,12 @@ def _calculate_base_entropy_score(artist_id: str, artists: list[dict], matrix: p
     against itself (a 1-row frame whose per-column max is the artist's own
     value), which forced every present platform to 1.0 and made every
     single-artist /popularity call return ~100. Reusing the cohort row makes the
-    single /popularity endpoint agree with /popularity/all. Weights unchanged.
+    single /popularity endpoint agree with /popularity/all.
+
+    `weights` (the cohort's shared entropy weights) are tilted per-artist by
+    genre style (Phase 3, Day 6 — see feature_engineering.apply_genre_tilt)
+    before use, so a regional/folk artist's YouTube-heavy real fanbase isn't
+    scored under the same platform weighting as a mainstream Bollywood artist.
     """
     if matrix.empty:
         return 5.0, {}, {}
@@ -413,12 +425,14 @@ def _calculate_base_entropy_score(artist_id: str, artists: list[dict], matrix: p
         return 5.0, {}, {}
 
     target_normalized = normalized.iloc[target_index]
+    genre_style = genre_style_for_artist_name(artists[target_index].get("artistName"))
+    tilted_weights = apply_genre_tilt(weights, genre_style)
 
     platform_contributions = {
-        platform: round(float(target_normalized.get(platform, 0.0) * weights.get(platform, 0.0)), 4)
+        platform: round(float(target_normalized.get(platform, 0.0) * tilted_weights.get(platform, 0.0)), 4)
         for platform in matrix.columns
     }
-    platform_weights = {platform: round(weights.get(platform, 0.0), 4) for platform in matrix.columns}
+    platform_weights = {platform: round(tilted_weights.get(platform, 0.0), 4) for platform in matrix.columns}
     score = round(min(100.0, max(0.0, 5.0 + 95.0 * sum(platform_contributions.values()))), 2)
 
     return score, platform_weights, platform_contributions
@@ -452,12 +466,18 @@ def calculate_all() -> list[PopularityOutput]:
         artist_id = artist["artist_id"]
         artist_name = artist["artistName"]
 
+        # Genre-style platform tilt (Phase 3, Day 6) — same tilt logic
+        # _calculate_base_entropy_score uses for the single-artist path, so
+        # /popularity and /popularity/all always agree for the same artist.
+        genre_style = genre_style_for_artist_name(artist_name)
+        tilted_weights = apply_genre_tilt(weights, genre_style)
+
         # Base entropy score (0–100)
         platform_contributions = {
-            platform: round(float(row.get(platform, 0.0) * weights.get(platform, 0.0)), 4)
+            platform: round(float(row.get(platform, 0.0) * tilted_weights.get(platform, 0.0)), 4)
             for platform in matrix.columns
         }
-        platform_weights_dict = {platform: round(weights.get(platform, 0.0), 4) for platform in matrix.columns}
+        platform_weights_dict = {platform: round(tilted_weights.get(platform, 0.0), 4) for platform in matrix.columns}
         base_score = round(min(100.0, max(0.0, 5.0 + 95.0 * sum(platform_contributions.values()))), 2)
 
         # Google Trends (0–100) — None if not present in DB (pytrends not yet run)

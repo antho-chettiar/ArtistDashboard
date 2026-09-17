@@ -128,6 +128,21 @@ def _build_feature_row(payload: RevenueInput) -> dict:
 
     features["demand_score"] = demand_score
 
+    # Language affinity — how well the artist's performance language matches
+    # the target city's dominant language. See the "Language Affinity" section
+    # below for the WHY and the static reference tables. Resolved here (DB
+    # lookup) and stored as a plain multiplier so _heuristic_revenue itself
+    # stays a pure function that only reads from feature_dict.
+    artist_languages = _artist_languages_for(concert.artist_id)
+    features["language_affinity_factor"] = _language_affinity_factor(artist_languages, concert.city)
+
+    # Price-vs-city-income friction — see the "Price-vs-City-Income Friction"
+    # section below for the WHY. Uses the now-resolved avg_price/city.
+    features["price_income_friction_factor"] = _price_income_friction_factor(avg_price, concert.city)
+
+    # Weather/season risk — see the "Weather / Season Risk" section below.
+    features["weather_season_factor"] = _weather_season_factor(concert.date.month, concert.venue_type)
+
     # best_rog_30d / cross_platform_score (growth/RoG-derived features) removed
     # here — see the NOTE by the imports above. If the dormant secondary ML
     # model is ever retrained (Phase 4 milestone, ~100+ logged concerts),
@@ -154,6 +169,200 @@ def _capacity_source_label(resolver_source: str) -> str:
     return _CAPACITY_SOURCE_LABELS.get(resolver_source, "default_estimate")
 
 
+# ── Language Affinity (accuracy upgrade — Phase 3, Day 5, 2026-09) ─────────────
+#
+# WHY THIS EXISTS: an artist performing in a language the target city doesn't
+# primarily speak sells fewer tickets there, even with high demand and a big
+# venue — the Revenue formula had zero awareness of this before today. The
+# multiplier values below (1.20x match / 0.80x mismatch) are taken directly
+# from the original product pitch's "Linguistic Affinity" multiplier, not
+# invented fresh for this change.
+#
+# ARTIST_LANGUAGES / CITY_DOMINANT_LANGUAGE are static reference tables,
+# curated for the current locked 11-artist roster (V1 scope) and the concert
+# cities already used across the product. An artist or city NOT in these
+# tables gets the neutral 1.0x factor — we never guess a bonus or penalty
+# from missing data, matching the "renormalize/neutral on missing" rule used
+# everywhere else in these formulas.
+
+#: Sentinel meaning "known to be multi-lingual enough to treat as a match in
+#: every city" — used instead of trying to enumerate every language an artist
+#: like Shreya Ghoshal performs in (we can't fully verify the list, but we are
+#: confident it's broad).
+_ANY_LANGUAGE = "*"
+
+ARTIST_LANGUAGES: dict[str, frozenset[str]] = {
+    "arijit singh":        frozenset({"hindi", "bengali"}),
+    "shreya ghoshal":      frozenset({_ANY_LANGUAGE}),
+    "sonu nigam":          frozenset({"hindi"}),
+    "armaan malik":        frozenset({"hindi", "english"}),
+    "vishal mishra":       frozenset({"hindi"}),
+    "sachet parampara":    frozenset({"hindi"}),
+    # UNCERTAIN — flagged during the V1 formula audit and accepted as a
+    # best-effort placeholder by the business rather than blocking on it.
+    # Correct this if/when the artist's actual primary language is confirmed.
+    "hansraj raghuwanshi": frozenset({"punjabi", "himachali"}),
+    "aparshakti khurana":  frozenset({"hindi"}),
+    "ayushmann khurrana":  frozenset({"hindi"}),
+    "neeraj shridhar":     frozenset({"hindi"}),
+    "amaal mallik":        frozenset({"hindi"}),
+}
+
+CITY_DOMINANT_LANGUAGE: dict[str, str] = {
+    "mumbai": "hindi", "delhi": "hindi", "new delhi": "hindi", "delhi ncr": "hindi",
+    "bangalore": "kannada", "bengaluru": "kannada",
+    "hyderabad": "telugu",
+    "chennai": "tamil",
+    "kolkata": "bengali",
+    "pune": "marathi",
+    "ahmedabad": "gujarati",
+    "jaipur": "hindi",
+    "chandigarh": "punjabi",
+}
+#: Hindi is the closest thing to a lingua franca across most untracked Indian
+#: cities, so it's the least-wrong default rather than an arbitrary guess.
+DEFAULT_CITY_LANGUAGE = "hindi"
+
+LANGUAGE_MATCH_FACTOR = 1.20     # perfect language match (pitch deck's "Linguistic Affinity")
+LANGUAGE_MISMATCH_FACTOR = 0.80  # language mismatch (same source)
+LANGUAGE_NEUTRAL_FACTOR = 1.00   # unknown artist/city — never guess a bonus or penalty
+
+
+def _city_dominant_language(city: str) -> str:
+    """Resolve a city's dominant concert-market language (defaults to Hindi)."""
+    if not city:
+        return DEFAULT_CITY_LANGUAGE
+    return CITY_DOMINANT_LANGUAGE.get(city.strip().lower(), DEFAULT_CITY_LANGUAGE)
+
+
+def _language_affinity_factor(artist_languages: Optional[frozenset[str]], city: str) -> float:
+    """Pure: sell-through multiplier for artist-language vs city-language fit.
+
+    No DB — offline-testable. `artist_languages=None` (artist not in the
+    static roster table, e.g. a future addition) always returns the neutral
+    factor rather than guessing a penalty. The _ANY_LANGUAGE marker (a
+    known multi-lingual artist) always returns the match factor.
+    """
+    if not artist_languages:
+        return LANGUAGE_NEUTRAL_FACTOR
+    if _ANY_LANGUAGE in artist_languages:
+        return LANGUAGE_MATCH_FACTOR
+    city_language = _city_dominant_language(city)
+    return LANGUAGE_MATCH_FACTOR if city_language in artist_languages else LANGUAGE_MISMATCH_FACTOR
+
+
+def _artist_languages_for(artist_id: str) -> Optional[frozenset[str]]:
+    """DB-touching resolver: artist_id -> artist name -> ARTIST_LANGUAGES entry.
+
+    Reuses popularity.calculator._get_artist_name (the same name-lookup
+    already used by Demand for its Google Trends lookup) rather than adding a
+    second way to resolve an artist's name from its ID.
+    """
+    from ..popularity.calculator import _get_artist_name
+    name = _get_artist_name(artist_id)
+    if not name:
+        return None
+    return ARTIST_LANGUAGES.get(name.strip().lower())
+
+
+# ── Price-vs-City-Income Friction (Phase 3, Day 7) ─────────────────────────────
+#
+# WHY THIS EXISTS: flagged as the single highest-value accuracy addition in
+# the V1 plan. A ticket priced fine for Mumbai can be genuinely unaffordable
+# for a lower-income city's audience even with identical demand and venue
+# size — the Revenue formula had zero awareness of city-level affordability
+# before today. Mirrors the original pitch deck's Huff Gravity "Friction" term
+# (Ticket Price ÷ City Daily Income), rebuilt from data we actually have (the
+# NCCS affluent-population ratio already trusted for City Affinity) instead of
+# a real per-capita income figure we have no free source for.
+#
+# AFFORDABLE_REFERENCE_PRICE_INR is a single, explicitly labeled calibration
+# assumption — NOT derived from real ticket-sales data (none exists yet; see
+# Phase 4) — and should be revisited once real concerts are logged.
+AFFORDABLE_REFERENCE_PRICE_INR = 2500.0  # comfortably affordable in India's most affluent metro market
+MIN_FRICTION_FACTOR = 0.5  # floor — an expensive ticket in a low-income city dampens sell-through, never zeroes it
+
+
+def _price_income_friction_factor(avg_ticket_price: float, city: str) -> float:
+    """Sell-through multiplier for ticket price vs. the target city's
+    affordability (NCCS-derived proxy — see demand.scorer.city_affluence_ratio).
+
+    A city with no NCCS data gets the neutral 1.0x factor — never a guessed
+    penalty. A price at or below the city's affordable reference also gets
+    1.0x: this is a penalty for overpricing relative to the local market, not
+    a bonus for underpricing.
+    """
+    from ..demand.scorer import city_affluence_ratio, _normalize_city_key
+    ratio = city_affluence_ratio().get(_normalize_city_key(city or ""))
+    if not ratio:
+        return 1.0
+    affordable_reference = AFFORDABLE_REFERENCE_PRICE_INR * ratio
+    if affordable_reference <= 0 or avg_ticket_price <= affordable_reference:
+        return 1.0
+    price_ratio = avg_ticket_price / affordable_reference
+    return max(MIN_FRICTION_FACTOR, 1.0 / price_ratio)
+
+
+# ── Weather / Season Risk (Phase 3, Day 8) ─────────────────────────────────────
+#
+# WHY THIS EXISTS: a monsoon-season outdoor show genuinely performs worse than
+# a normal indoor show — heavy rain suppresses turnout and can force
+# cancellations — but the Revenue formula had zero awareness of this before
+# today. Deliberately kept "simple" per the V1 plan: no paid weather API, just
+# a static calendar rule. Indoor venues are weather-shielded so they're always
+# neutral here — this is a monsoon PENALTY on outdoor shows, not a winter
+# bonus for anyone (matching the plan's own framing: "outdoor monsoon show
+# underperforms a December indoor one", not "indoor shows are boosted").
+#
+# OUTDOOR_MONSOON_RISK_FACTOR is the original pitch deck's exact "outdoor July
+# monsoon" multiplier, applied across the whole monsoon window for simplicity
+# rather than tapering month-by-month (that precision isn't something we have
+# real data to justify yet).
+MONSOON_MONTHS = {6, 7, 8, 9}          # June-September
+OUTDOOR_MONSOON_RISK_FACTOR = 0.55
+
+#: Keywords identifying an outdoor/exposed-to-weather venue, matched the same
+#: loose way venue_capacity/resolver.py matches its own venue-type keywords.
+#: An unrecognized/blank venue_type is treated as indoor (the safer, far more
+#: common default for ticketed concerts) rather than guessing a penalty.
+OUTDOOR_VENUE_KEYWORDS = (
+    "stadium", "arena", "amphitheatre", "amphitheater",
+    "festival", "grounds", "park", "open air", "open-air", "openair", "outdoor",
+)
+
+
+def _is_outdoor_venue_type(venue_type: Optional[str]) -> bool:
+    if not venue_type:
+        return False
+    normalized = venue_type.strip().lower()
+    return any(keyword in normalized for keyword in OUTDOOR_VENUE_KEYWORDS)
+
+
+def _weather_season_factor(concert_month: int, venue_type: Optional[str]) -> float:
+    """Sell-through multiplier for monsoon risk on outdoor shows.
+
+    Pure — no DB, no API, offline-testable. Indoor (or unrecognized) venue
+    types and non-monsoon months always return the neutral 1.0x.
+    """
+    if concert_month not in MONSOON_MONTHS:
+        return 1.0
+    if _is_outdoor_venue_type(venue_type):
+        return OUTDOOR_MONSOON_RISK_FACTOR
+    return 1.0
+
+
+# ── Weekend Ticket-Price Premium (Phase 3, Day 7) ──────────────────────────────
+#
+# WHY THIS EXISTS: `is_weekend` was already computed by concert_base_features()
+# for the ML training feature row (NUMERIC_COLS) but never actually read by
+# the primary heuristic formula below — this turns on that already-computed
+# signal. Organizers price Friday/Saturday shows higher (more people are free
+# to attend, willing to pay more), so this scales the revenue total directly
+# rather than the sell-through fill-rate — see _heuristic_revenue. Value is
+# the same one used in the original pitch deck's "Weekend Premium" multiplier.
+WEEKEND_PREMIUM_FACTOR = 1.08
+
+
 # ── Inference ──────────────────────────────────────────────────────────────────
 
 # NOTE: not referenced elsewhere in this file today (feature_dict is passed to
@@ -165,7 +374,8 @@ def _capacity_source_label(resolver_source: str) -> str:
 CATEGORICAL_COLS = ["season", "city", "country", "artist_tier"]
 NUMERIC_COLS = [
     "venue_capacity", "avg_ticket_price", "price_range", "max_revenue_naive",
-    "is_weekend", "month", "demand_score",
+    "is_weekend", "month", "demand_score", "language_affinity_factor",
+    "price_income_friction_factor", "weather_season_factor",
 ]
 
 
@@ -208,6 +418,16 @@ def _heuristic_revenue(feature_dict: dict) -> float:
     capacity = feature_dict["venue_capacity"]
     avg_price = feature_dict["avg_ticket_price"]
     demand_score = feature_dict["demand_score"]
+    # Language-match multiplier (1.20x match / 1.00x unknown / 0.80x mismatch)
+    # — see the "Language Affinity" section above. Defaults to neutral if this
+    # feature_dict predates that field (e.g. a hand-built dict in a test).
+    language_affinity_factor = feature_dict.get("language_affinity_factor", LANGUAGE_NEUTRAL_FACTOR)
+    # Price-vs-city-income friction (<= 1.0x) — see that section above.
+    price_income_friction_factor = feature_dict.get("price_income_friction_factor", 1.0)
+    # Monsoon risk on outdoor shows (<= 1.0x) — see the "Weather / Season Risk" section above.
+    weather_season_factor = feature_dict.get("weather_season_factor", 1.0)
+    # Weekend ticket-price premium — see that section above.
+    weekend_premium_factor = WEEKEND_PREMIUM_FACTOR if feature_dict.get("is_weekend") else 1.0
 
     base_sell_through = 0.25
     demand_factor = (demand_score - 10) / 85
@@ -221,11 +441,19 @@ def _heuristic_revenue(feature_dict: dict) -> float:
     else:
         venue_factor = 0.8
 
+    # Sell-through: how much of the venue fills, driven by demand/venue size
+    # and how well the show fits this audience (language match, local
+    # affordability, and whether monsoon rain keeps an outdoor crowd away).
+    # Weekend pricing is NOT a fill-rate effect, so it's kept out of
+    # sell_through and applied to the revenue total below instead.
     sell_through = max(0.15, min(0.85, base_sell_through + demand_factor * 0.5))
     sell_through *= venue_factor
+    sell_through *= language_affinity_factor
+    sell_through *= price_income_friction_factor
+    sell_through *= weather_season_factor
     sell_through = max(0.15, min(0.90, sell_through))
 
-    return capacity * avg_price * sell_through
+    return capacity * avg_price * sell_through * weekend_premium_factor
 
 
 def calculate(payload: RevenueInput) -> RevenueOutput:
@@ -347,4 +575,8 @@ def calculate(payload: RevenueInput) -> RevenueOutput:
         ticket_price_source=feature_dict["ticket_price_source"],
         ticket_price_is_estimated=ticket_price_is_estimated,
         data_quality=data_quality,
+        language_affinity_factor=feature_dict["language_affinity_factor"],
+        price_income_friction_factor=feature_dict["price_income_friction_factor"],
+        weekend_premium_applied=bool(feature_dict.get("is_weekend")),
+        weather_season_factor=feature_dict["weather_season_factor"],
     )

@@ -348,6 +348,78 @@ def artist_city_popularity(global_popularity: float, city: str, genre_affinity: 
     
     # Default to 0.7 for smaller/tier-3 cities
     multiplier = market_multipliers.get(city_lower, 0.7)
-    
+
     city_pop = global_popularity * multiplier * genre_affinity
     return min(100.0, max(0.0, city_pop))
+
+
+# ── Genre style — per-artist platform-weight tilt (Phase 3, Day 6, 2026-09) ────
+#
+# WHY THIS EXISTS: the real `genre` DB field is unusable for this — it's "Pop"
+# for almost every one of the 11 artists — so this is a small, manually
+# curated style tag per artist instead. A regional/folk artist's real fanbase
+# shows up more on YouTube than Spotify; treating every artist identically
+# under- or over-counts them in both Popularity's base entropy score and
+# Demand's Platform Size. Shared here (not duplicated in each module) so
+# Popularity and Demand can never drift onto two different genre tag lists.
+#
+# Curated for the current locked 11-artist roster (V1 scope). An artist not
+# in ARTIST_GENRE_STYLE gets NO tilt (their existing weights are used as-is)
+# — we never guess a genre or a platform adjustment from missing data.
+
+ARTIST_GENRE_STYLE: dict[str, str] = {
+    "arijit singh":        "mainstream_bollywood",
+    "shreya ghoshal":      "mainstream_bollywood",
+    "sonu nigam":          "mainstream_bollywood",
+    "ayushmann khurrana":  "mainstream_bollywood",
+    "sachet parampara":    "mainstream_bollywood",
+    "amaal mallik":        "mainstream_bollywood",
+    "aparshakti khurana":  "mainstream_bollywood",
+    "armaan malik":        "modern_pop_crossover",
+    "vishal mishra":       "modern_pop_crossover",
+    "hansraj raghuwanshi": "regional_folk",
+    "neeraj shridhar":     "pop_remix",
+}
+
+#: Multiplicative tilt applied to a platform's default weight, then the whole
+#: weight dict is renormalized back to its original sum. 1.0 = no change.
+#: Only regional_folk and pop_remix get a real tilt for V1 — mainstream_bollywood
+#: and modern_pop_crossover already match what the existing weights were
+#: calibrated against (9 of the 11-artist roster is mainstream Bollywood), so a
+#: tilt for them would be invented precision we don't have evidence for.
+GENRE_STYLE_PLATFORM_TILT: dict[str, dict[str, float]] = {
+    "regional_folk": {"youtube": 1.5, "spotify": 0.6},
+    "pop_remix":     {"spotify": 1.15, "youtube": 0.9},
+}
+
+
+def genre_style_for_artist_name(name: Optional[str]) -> Optional[str]:
+    """Resolve an artist's curated genre-style tag from their DB artistName.
+    None for any artist not in the curated V1 roster table."""
+    if not name:
+        return None
+    return ARTIST_GENRE_STYLE.get(name.strip().lower())
+
+
+def apply_genre_tilt(weights: dict[str, float], genre_style: Optional[str]) -> dict[str, float]:
+    """Apply a genre-style platform-weight tilt and renormalize back to the
+    original weights' sum (so a tilted weight dict stays comparable/bounded
+    exactly like the untilted one).
+
+    Pure — no DB, offline-testable. A genre_style with no tilt entry (or
+    None) returns the original weights unchanged.
+    """
+    tilt = GENRE_STYLE_PLATFORM_TILT.get(genre_style or "", {})
+    if not tilt:
+        return dict(weights)
+
+    target_total = sum(weights.values())
+    if target_total <= 0:
+        return dict(weights)
+
+    tilted = {platform: w * tilt.get(platform, 1.0) for platform, w in weights.items()}
+    tilted_total = sum(tilted.values())
+    if tilted_total <= 0:
+        return dict(weights)
+
+    return {platform: (w / tilted_total) * target_total for platform, w in tilted.items()}
