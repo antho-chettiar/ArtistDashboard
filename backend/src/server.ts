@@ -22,12 +22,10 @@ import dashboardRoutes from './routes/dashboard.routes';
 import ingestionRoutes from './routes/ingestion.routes';
 import scrapingRoutes from './routes/scraping.routes';
 import userRoutes from './routes/user.routes';
-import { PrismaClient } from '@prisma/client';
-import { connectRedis } from './utils/database';
+import { prisma, connectRedis } from './utils/database';
 import { startViberateScheduler } from './services/scrapers/viberate/scheduler';
 
 const app = express();
-const prisma = new PrismaClient();
 
 // Make DB instance available globally (for legacy code if needed)
 ;(global as any).prisma = prisma;

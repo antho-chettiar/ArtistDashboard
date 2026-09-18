@@ -55,7 +55,7 @@ from .demand.scorer import calculate as demand_calc
 from .revenue.predictor import calculate as revenue_calc
 from .revenue.llm_model import calculate as llm_calc
 from .popularity import calculate as popularity_calc, calculate_all as popularity_calc_all
-from .utils.db import persist_popularity_scores, fetch_saved_popularity, _normalize_db_url
+from .utils.db import persist_popularity_scores, fetch_saved_popularity, _normalize_db_url, get_engine
 from .venue_capacity import calculate as venue_capacity_calc
 from .venue_capacity.resolver import fetch_saved_capacity_resolutions
 
@@ -516,21 +516,25 @@ def _run_popularity_job() -> int:
         return 0
 
     try:
-        from sqlalchemy import create_engine, text as sql_text
+        from sqlalchemy import text as sql_text
 
         outputs = popularity_calc_all()
         if not outputs:
             return 0
 
-        normalized_url = _normalize_db_url(db_url)
-        engine = create_engine(normalized_url)
+        # Shared, bounded pool (utils.db.get_engine) -- this function is no longer
+        # scheduler-only, it's also what the frontend's "Sync Now" button hits via
+        # POST /popularity/refresh on the live request path, so an ad-hoc
+        # create_engine() here would open (and rely on properly disposing) a brand
+        # new connection pool on every click instead of reusing the one the rest
+        # of the app already shares.
+        engine = get_engine()
         with engine.begin() as conn:
             for output in outputs:
                 conn.execute(
                     sql_text('UPDATE artists SET popularity = :score, "lastUpdated" = now() WHERE id = :id'),
                     {"score": round(output.popularity_score, 2), "id": output.artist_id}
                 )
-        engine.dispose()
         logger.info(f"[Scheduler] Updated popularity for {len(outputs)} artists.")
         return len(outputs)
     except Exception as e:
