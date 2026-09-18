@@ -736,4 +736,21 @@ export const madAnalyticsService = {
       throw error;
     }
   },
+
+  // On-demand "Sync Now" (weekly-cache-plus-manual-sync design, 2026-09):
+  // recomputes Popularity for every active artist right now and writes it
+  // into artists.popularity -- the same column the background scheduler
+  // already refreshes automatically (as often as every 24h). Normal page
+  // loads never call this; they just read the artists list, which already
+  // carries the last-refreshed popularity + lastUpdated timestamp. This is
+  // only for someone who explicitly wants today's number (e.g. before a
+  // stakeholder demo).
+  refreshAllPopularityScores: async () => {
+    try {
+      return await postAnalytics('/popularity/refresh', undefined, ANALYTICS_EXTENDED_TIMEOUT_MS);
+    } catch (error) {
+      console.error('Error refreshing all popularity scores via mad_analytics:', error);
+      throw error;
+    }
+  },
 };

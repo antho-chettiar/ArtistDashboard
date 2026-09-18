@@ -1,7 +1,6 @@
 import { Response } from 'express';
 import { prisma, redis } from '../utils/database';
 import { calculateConcertRevenue } from '../utils/concertRevenue';
-import { madAnalyticsService } from '../services/madAnalytics.service';
 
 const CACHE_TTL = 60 * 60; // 1 hour
 
@@ -231,20 +230,22 @@ export const dashboardController = {
         candidates = Object.values(artistFollowers);
       }
 
-      // Canonical Popularity, batch-fetched once from the Python engine.
-      // Never fabricated: an artist absent from this map (or a service outage)
-      // gets compositeScore = null, rendered by the frontend as "—".
+      // Canonical Popularity -- read from artists.popularity (weekly-cache-
+      // plus-manual-sync design, 2026-09), the same column the background
+      // scheduler and the "Sync Now" button both keep fresh. This used to
+      // make its own live call to the Python engine on every Dashboard load
+      // (15-22s, and the whole reason this endpoint felt "broken" whenever
+      // that live call timed out or the DB connection pool was under
+      // pressure) -- normal page loads now never wait on a live computation.
+      // Never fabricated: an artist with no stored score yet gets
+      // compositeScore = null, rendered by the frontend as "—".
+      const popularityArtists = await prisma.artist.findMany({
+        where: { id: { in: candidates.map(c => c.artistId) } },
+        select: { id: true, popularity: true },
+      });
       const popularityByArtist: Record<string, number> = {};
-      try {
-        const popResult = await madAnalyticsService.getAllPopularityScores();
-        const list = Array.isArray(popResult) ? popResult : [];
-        for (const p of list as Array<{ artist_id?: string; popularity_score?: number }>) {
-          if (p?.artist_id && Number.isFinite(Number(p.popularity_score))) {
-            popularityByArtist[p.artist_id] = Number(p.popularity_score);
-          }
-        }
-      } catch (error) {
-        console.error('Dashboard: canonical popularity engine unavailable, showing artists without a score', error);
+      for (const a of popularityArtists) {
+        if (a.popularity != null) popularityByArtist[a.id] = Number(a.popularity);
       }
 
       const scored = candidates.map(item => {

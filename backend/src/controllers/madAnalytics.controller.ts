@@ -126,4 +126,27 @@ export const madAnalyticsController = {
       return handleAnalyticsError(res, error, 'getAllPopularityScores');
     }
   },
+
+  // "Sync Now" (weekly-cache-plus-manual-sync design, 2026-09) — recomputes
+  // Popularity right now and writes it into artists.popularity, the value
+  // every normal page load reads by default. Not cached itself (the whole
+  // point is to bypass the wait). Also clears every downstream Redis cache
+  // that's keyed off the popularity this just changed -- the live-score
+  // cache above, AND the Dashboard's own "Top Artists" cache (a separate
+  // 1-hour TTL in dashboard.controller.ts) -- otherwise someone could click
+  // Sync Now, see artists.popularity update in the database, and still see
+  // the old numbers on the Dashboard for up to an hour.
+  refreshAllPopularityScores: async (_req: Request, res: Response) => {
+    try {
+      const result = await madAnalyticsService.refreshAllPopularityScores();
+      try {
+        await redis.del(POPULARITY_ALL_CACHE_KEY);
+        const dashboardKeys = await redis.keys('dashboard:topArtists:*');
+        if (dashboardKeys.length) await redis.del(...dashboardKeys);
+      } catch { /* best-effort */ }
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      return handleAnalyticsError(res, error, 'refreshAllPopularityScores');
+    }
+  },
 };

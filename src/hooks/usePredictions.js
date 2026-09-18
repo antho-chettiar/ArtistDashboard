@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import client from '../api/client'
 
 export function useAutoPredict(artistId, city, capacity, enabled, options = {}) {
@@ -122,6 +122,27 @@ export function useModelInfo() {
     queryFn: async () => ({ models: [] }), // We can populate this later if there is a model info endpoint
     staleTime: Infinity,
     retry: false,
+  })
+}
+
+// "Sync Now" (weekly-cache-plus-manual-sync design, 2026-09). Popularity is
+// normally read from artists.popularity, refreshed automatically on a
+// schedule (as often as every 24h) -- normal page loads never wait on a
+// live calculation. This is the manual override for anyone who wants
+// today's number specifically (e.g. right before a stakeholder demo).
+// Shared by the Dashboard and Artists pages so both stay in sync after one
+// click, wherever it was clicked from.
+export function useSyncPopularity() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await client.post('/analytics/ml/popularity/refresh')
+      return data.data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['artists'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard', 'top-artists'] })
+    },
   })
 }
 

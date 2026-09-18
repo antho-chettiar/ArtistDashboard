@@ -105,4 +105,13 @@ router.get('/ml/popularity/all', authenticate, madAnalyticsController.getAllPopu
  */
 router.post('/ml/popularity/all/save', authenticate, madAnalyticsController.saveAllPopularityScores);
 
+/**
+ * @route POST /api/v1/analytics/ml/popularity/refresh
+ * @desc "Sync Now" -- recompute Popularity for every active artist right now
+ *       and write it into artists.popularity (weekly-cache-plus-manual-sync
+ *       design, 2026-09). Normal page loads never call this.
+ * @access Public (authenticated)
+ */
+router.post('/ml/popularity/refresh', authenticate, madAnalyticsController.refreshAllPopularityScores);
+
 export default router;

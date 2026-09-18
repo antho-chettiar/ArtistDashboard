@@ -8,6 +8,7 @@ import ChartContainer from '../components/charts/ChartContainer'
 import LineChart from '../components/charts/LineChart'
 import BarChart from '../components/charts/BarChart'
 import RoGBadge from '../components/ui/RoGBadge'
+import SyncPopularityButton from '../components/ui/SyncPopularityButton'
 import useFilterStore from '../store/useFilterStore'
 import { useDashboardData } from '../hooks/useDashboardData'
 import { formatNumber, formatCurrency, formatDate } from '../utils/formatters'
@@ -100,6 +101,16 @@ function Dashboard() {
     if (!topArtistsPool.length) return []
     return artistType ? topArtistsPool.filter(a => a.type === artistType) : topArtistsPool
   }, [topArtistsPool, artistType])
+
+  // Most recent scheduled/manual Popularity refresh across the pool, for the
+  // "Popularity synced X ago" label next to the Sync Now button.
+  const latestPopularitySync = useMemo(() => {
+    if (!filteredArtists.length) return null
+    return filteredArtists.reduce((latest, a) => {
+      if (!a.popularityUpdatedAt) return latest
+      return !latest || new Date(a.popularityUpdatedAt) > new Date(latest) ? a.popularityUpdatedAt : latest
+    }, null)
+  }, [filteredArtists])
 
   // Apply time filter and get top 10
   const topArtistsByPopularity = useMemo(() => {
@@ -331,6 +342,10 @@ function Dashboard() {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="flex justify-end mb-3">
+            <SyncPopularityButton lastUpdated={latestPopularitySync} />
           </div>
 
           {/* Artist List */}

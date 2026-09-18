@@ -4,6 +4,7 @@ import { Search, Filter, TrendingUp } from 'lucide-react'
 import PageHeader from '../components/ui/PageHeader'
 import RoGBadge from '../components/ui/RoGBadge'
 import EmptyState from '../components/ui/EmptyState'
+import SyncPopularityButton from '../components/ui/SyncPopularityButton'
 import useFilterStore from '../store/useFilterStore'
 import { useArtists } from '../hooks/useArtists'
 import { formatNumber } from '../utils/formatters'
@@ -284,6 +285,16 @@ function Artists() {
 
   const marketLabel = artistType === 'indian' ? '🇮🇳 Indian' : artistType === 'international' ? '🌍 International' : ''
 
+  // Most recent scheduled/manual Popularity refresh across the loaded roster,
+  // for the "Popularity synced X ago" label next to the Sync Now button.
+  const latestPopularitySync = useMemo(() => {
+    if (!artists?.length) return null
+    return artists.reduce((latest, a) => {
+      if (!a.popularityUpdatedAt) return latest
+      return !latest || new Date(a.popularityUpdatedAt) > new Date(latest) ? a.popularityUpdatedAt : latest
+    }, null)
+  }, [artists])
+
   // Loading state
   if (isLoading) {
     return (
@@ -347,7 +358,9 @@ function Artists() {
       <PageHeader
         title="Artists"
         subtitle={`${filtered.length} ${marketLabel} artists tracked on the platform`}
-      />
+      >
+        <SyncPopularityButton lastUpdated={latestPopularitySync} />
+      </PageHeader>
 
       {/* Search + Filter */}
       <div className="flex flex-col sm:flex-row gap-3 mb-6">

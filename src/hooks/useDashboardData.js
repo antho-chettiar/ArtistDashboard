@@ -203,6 +203,10 @@ export function useDashboardData(trendDays = 30) {
         // Real RoG from the backend (getTopArtists). null = no rog history → "—".
         avgRogDaily: item.avgRogDaily ?? null,
         rogScore: item.rogScore ?? null,
+        // When artists.popularity (above) was last refreshed -- weekly-cache-
+        // plus-manual-sync design (2026-09), for the "Sync Now" button's
+        // "synced X ago" label.
+        popularityUpdatedAt: artist.lastUpdated || null,
       }
     }).filter(Boolean)
   }, [topArtistsData, artistTypeById])

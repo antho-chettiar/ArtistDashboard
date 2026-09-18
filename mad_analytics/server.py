@@ -15,6 +15,7 @@ import os
 import threading
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -497,31 +498,44 @@ def _run_retrain_job():
         logger.error(f"[Scheduler] Retrain error: {e}")
 
 
-def _run_popularity_job():
-    """Update artist popularity scores in the artists table."""
+def _run_popularity_job() -> int:
+    """Recompute Popularity for every active artist and write it into
+    artists.popularity + artists."lastUpdated" — the DEFAULT, fast-loading
+    value the frontend reads on every normal page view (Dashboard, Artists
+    list). This is the "weekly cache" half of the on-demand-sync design: this
+    function is what BOTH the background scheduler (see _scheduler_loop,
+    currently as often as every 24h) AND the frontend's manual "Sync Now"
+    button (via the /popularity/refresh route below) call — one canonical
+    write path, not two, so the button and the schedule never disagree about
+    where the "current" score lives.
+
+    Returns the number of artists updated (0 on failure/no data).
+    """
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
-        return
+        return 0
 
     try:
         from sqlalchemy import create_engine, text as sql_text
 
         outputs = popularity_calc_all()
         if not outputs:
-            return
+            return 0
 
         normalized_url = _normalize_db_url(db_url)
         engine = create_engine(normalized_url)
         with engine.begin() as conn:
             for output in outputs:
                 conn.execute(
-                    sql_text('UPDATE artists SET popularity = :score WHERE id = :id'),
+                    sql_text('UPDATE artists SET popularity = :score, "lastUpdated" = now() WHERE id = :id'),
                     {"score": round(output.popularity_score, 2), "id": output.artist_id}
                 )
         engine.dispose()
         logger.info(f"[Scheduler] Updated popularity for {len(outputs)} artists.")
+        return len(outputs)
     except Exception as e:
         logger.error(f"[Scheduler] Popularity update error: {e}")
+        return 0
 
 
 def _scheduler_loop():
@@ -737,6 +751,31 @@ def popularity_all_save():
 def popularity_saved():
     try:
         return fetch_saved_popularity()
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+# NOTE on the two "save popularity" mechanisms living side by side here:
+# the /popularity/all/save + /popularity/saved pair above writes to a
+# separate artist_popularity_scores audit table that the frontend has never
+# actually read from. /popularity/refresh below is the one now wired to the
+# frontend's "Sync Now" button (2026-09, weekly-cache-plus-manual-sync
+# design) — it writes to artists.popularity, the same column the background
+# scheduler's _run_popularity_job() already updates automatically (as often
+# as every 24h). One canonical write target, so a manual sync and the
+# schedule can never disagree about where the "current" score lives. The
+# older pair is left in place (preserve, don't delete) rather than removed.
+@app.post("/popularity/refresh")
+def popularity_refresh():
+    """On-demand "Sync Now": recompute Popularity for every active artist
+    right now and write it into artists.popularity, the value the Dashboard
+    and Artists list read by default. Normal page views never wait on this —
+    they read whatever's already stored, refreshed on a schedule; this
+    endpoint exists only for someone who wants today's number specifically
+    (e.g. right before a stakeholder demo)."""
+    try:
+        updated = _run_popularity_job()
+        return {"updated_artists": updated, "refreshed_at": datetime.now(timezone.utc).isoformat()}
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 
