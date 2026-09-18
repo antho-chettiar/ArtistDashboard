@@ -11,11 +11,17 @@ let redisClient: Redis | null = null;
 export const connectRedis = async (): Promise<void> => {
   try {
     const redisUrl = process.env.REDIS_URL;
+    // retryStrategy: () => null stops ioredis from retrying forever when the host is
+    // unreachable (e.g. a decommissioned instance) -- without it, the initial connect
+    // promise never settles, so `await connectRedis()` below hangs indefinitely and the
+    // whole server never reaches app.listen(), which looks like a stuck deploy.
     const client = redisUrl
       ? new Redis(redisUrl, {
           lazyConnect: true,
           enableOfflineQueue: false,
           maxRetriesPerRequest: 1,
+          retryStrategy: () => null,
+          connectTimeout: 5000,
           ...(process.env.REDIS_TLS === 'true' ? { tls: { rejectUnauthorized: false } } : {}),
         })
       : new Redis({
@@ -26,6 +32,8 @@ export const connectRedis = async (): Promise<void> => {
           lazyConnect: true,
           enableOfflineQueue: false,
           maxRetriesPerRequest: 1,
+          retryStrategy: () => null,
+          connectTimeout: 5000,
           ...(process.env.REDIS_TLS === 'true' ? { tls: { rejectUnauthorized: false } } : {}),
         });
 
