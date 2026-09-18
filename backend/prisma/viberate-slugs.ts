@@ -26,6 +26,9 @@ const SLUGS: Record<string, string> = {
   'Sachet Parampara':  'sachet-parampara',
   'Neeraj Shridhar':   'neeraj-shridhar',
   'Hansraj Raghuwanshi': 'hansraj-raghuwanshi',
+  // Added 2026-09 as a calibration/benchmark artist (real stadium-selling
+  // headliner) -- see mad_analytics ARTIST_GENRE_STYLE for why.
+  'Diljit Dosanjh':    'diljit-dosanjh',
 };
 
 // Normalize a name for matching: lowercase, punctuation → spaces, collapse whitespace.

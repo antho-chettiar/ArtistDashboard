@@ -179,11 +179,12 @@ def _capacity_source_label(resolver_source: str) -> str:
 # invented fresh for this change.
 #
 # ARTIST_LANGUAGES / CITY_DOMINANT_LANGUAGE are static reference tables,
-# curated for the current locked 11-artist roster (V1 scope) and the concert
-# cities already used across the product. An artist or city NOT in these
-# tables gets the neutral 1.0x factor — we never guess a bonus or penalty
-# from missing data, matching the "renormalize/neutral on missing" rule used
-# everywhere else in these formulas.
+# curated for the locked 11-artist V1 roster (plus Diljit Dosanjh, added
+# 2026-09 as a calibration benchmark — see feature_engineering.ARTIST_GENRE_STYLE
+# for why) and the concert cities already used across the product. An artist
+# or city NOT in these tables gets the neutral 1.0x factor — we never guess a
+# bonus or penalty from missing data, matching the "renormalize/neutral on
+# missing" rule used everywhere else in these formulas.
 
 #: Sentinel meaning "known to be multi-lingual enough to treat as a match in
 #: every city" — used instead of trying to enumerate every language an artist
@@ -206,6 +207,9 @@ ARTIST_LANGUAGES: dict[str, frozenset[str]] = {
     "ayushmann khurrana":  frozenset({"hindi"}),
     "neeraj shridhar":     frozenset({"hindi"}),
     "amaal mallik":        frozenset({"hindi"}),
+    # Primarily Punjabi, also performs in Hindi -- global crossover artist,
+    # not multi-lingual enough to warrant the _ANY_LANGUAGE sentinel.
+    "diljit dosanjh":      frozenset({"punjabi", "hindi"}),
 }
 
 CITY_DOMINANT_LANGUAGE: dict[str, str] = {

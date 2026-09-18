@@ -363,9 +363,13 @@ def artist_city_popularity(global_popularity: float, city: str, genre_affinity: 
 # Demand's Platform Size. Shared here (not duplicated in each module) so
 # Popularity and Demand can never drift onto two different genre tag lists.
 #
-# Curated for the current locked 11-artist roster (V1 scope). An artist not
-# in ARTIST_GENRE_STYLE gets NO tilt (their existing weights are used as-is)
-# — we never guess a genre or a platform adjustment from missing data.
+# Curated for the locked 11-artist V1 roster, plus Diljit Dosanjh (added
+# 2026-09 as a deliberate calibration/benchmark case — a genuine stadium-
+# selling headliner whose streaming numbers alone don't obviously top the
+# roster, useful for sanity-checking whether these formulas track real-world
+# popularity or just social-platform size). An artist not in
+# ARTIST_GENRE_STYLE gets NO tilt (their existing weights are used as-is) —
+# we never guess a genre or a platform adjustment from missing data.
 
 ARTIST_GENRE_STYLE: dict[str, str] = {
     "arijit singh":        "mainstream_bollywood",
@@ -379,6 +383,12 @@ ARTIST_GENRE_STYLE: dict[str, str] = {
     "vishal mishra":       "modern_pop_crossover",
     "hansraj raghuwanshi": "regional_folk",
     "neeraj shridhar":     "pop_remix",
+    # Diljit's actual platform numbers (Spotify/YouTube/Instagram/Facebook, all
+    # in the 8-27M range) are far more balanced than Hansraj's YouTube-heavy
+    # regional_folk profile, and closer in shape to Armaan Malik/Vishal
+    # Mishra's -- modern_pop_crossover (untilted) fits without inventing a tilt
+    # we don't have evidence for.
+    "diljit dosanjh":      "modern_pop_crossover",
 }
 
 #: Multiplicative tilt applied to a platform's default weight, then the whole
