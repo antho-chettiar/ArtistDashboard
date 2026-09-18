@@ -134,7 +134,9 @@ def _build_feature_row(payload: RevenueInput) -> dict:
     # lookup) and stored as a plain multiplier so _heuristic_revenue itself
     # stays a pure function that only reads from feature_dict.
     artist_languages = _artist_languages_for(concert.artist_id)
-    features["language_affinity_factor"] = _language_affinity_factor(artist_languages, concert.city)
+    features["language_affinity_factor"] = _feasibility_language_factor(
+        concert.artist_id, artist_languages, concert.city, payload.popularity_score
+    )
 
     # Price-vs-city-income friction — see the "Price-vs-City-Income Friction"
     # section below for the WHY. Uses the now-resolved avg_price/city.
@@ -142,6 +144,11 @@ def _build_feature_row(payload: RevenueInput) -> dict:
 
     # Weather/season risk — see the "Weather / Season Risk" section below.
     features["weather_season_factor"] = _weather_season_factor(concert.date.month, concert.venue_type)
+
+    # Cannibalization — see the "Cannibalization" section below for the WHY.
+    features["cannibalization_factor"] = _cannibalization_factor(
+        concert.artist_id, concert.city, concert.date
+    )
 
     # best_rog_30d / cross_platform_score (growth/RoG-derived features) removed
     # here — see the NOTE by the imports above. If the dormant secondary ML
@@ -269,6 +276,104 @@ def _artist_languages_for(artist_id: str) -> Optional[frozenset[str]]:
     return ARTIST_LANGUAGES.get(name.strip().lower())
 
 
+# ── Feasibility hierarchy (Phase B, 2026-09) ────────────────────────────────
+#
+# WHY THIS EXISTS: the 2026-09 Diljit Dosanjh calibration incident (see
+# touring_history/scorer.py) showed the flat language-affinity heuristic
+# above is a last resort, not a rule -- Arijit Singh and Shreya Ghoshal
+# both tour every linguistic region of India despite the "mismatch" table,
+# and a real touring history is direct proof tickets already sold there,
+# stronger than any language guess. Agreed hierarchy (Anthony, 2026-09):
+#   1. Real touring precedent for this artist+city -> use it directly,
+#      overriding the language heuristic entirely.
+#   2. No precedent yet, but broad reach (high Popularity) -> soften the
+#      mismatch penalty rather than fully applying an unproven assumption.
+#   3. No precedent, no broad reach -> fall back to the flat heuristic above.
+POPULARITY_BROAD_REACH_THRESHOLD = 70.0  # 0-100 scale; only genuinely broad-reach artists get Tier 2
+LANGUAGE_MISMATCH_SOFTENED_FACTOR = 0.90  # halfway between neutral (1.0) and full mismatch (0.80)
+
+
+def _feasibility_language_factor(
+    artist_id: str,
+    artist_languages: Optional[frozenset[str]],
+    city: str,
+    popularity_score: Optional[float],
+    db_url: Optional[str] = None,
+) -> float:
+    """Tiered replacement for a bare _language_affinity_factor() call --
+    see the "Feasibility hierarchy" section above for the WHY. db_url=None
+    (the live request path) shares the pooled engine via touring_precedent's
+    own get_engine(db_url) call; tests pass an explicit temp-DB URL."""
+    from ..touring_history import touring_precedent
+
+    precedent = touring_precedent(artist_id, city, db_url=db_url)
+    if precedent.has_precedent:
+        return LANGUAGE_MATCH_FACTOR  # Tier 1: real ticket-sold evidence beats a language guess
+
+    base_factor = _language_affinity_factor(artist_languages, city)
+    if (
+        base_factor == LANGUAGE_MISMATCH_FACTOR
+        and popularity_score is not None
+        and popularity_score >= POPULARITY_BROAD_REACH_THRESHOLD
+    ):
+        return LANGUAGE_MISMATCH_SOFTENED_FACTOR  # Tier 2
+    return base_factor  # Tier 3 (already match/neutral, or no broad-reach signal available)
+
+
+# ── Cannibalization (Phase B, 2026-09) ──────────────────────────────────────
+#
+# WHY THIS EXISTS: flagged during the Phase B planning conversation as fully
+# computable from concert dates already in the database, no new data needed.
+# A rival concert (any other artist) in the same city within two weeks
+# competes for the same local audience's discretionary spend and attention,
+# dampening sell-through even when this show's own demand is high.
+CANNIBALIZATION_WINDOW_DAYS = 14
+CANNIBALIZATION_PENALTY_FACTOR = 0.85
+
+
+def _cannibalization_factor(
+    artist_id: str, city: str, concert_date, db_url: Optional[str] = None
+) -> float:
+    """Sell-through multiplier when another artist has a concert in the same
+    city within +/- CANNIBALIZATION_WINDOW_DAYS of this one. City matching
+    uses the same alias table as City Affinity (Bangalore == Bengaluru) so a
+    rival show isn't missed over a spelling variant. db_url=None (the live
+    request path) shares the pooled engine, matching the get_engine(db_url)
+    convention used throughout touring_history/venue_capacity -- see
+    touring_history/scorer.py's docstring for why this matters."""
+    from datetime import timedelta
+    from sqlalchemy import text
+    from ..utils.db import get_engine
+    from ..demand.scorer import _normalize_city_key
+
+    # Bind the window as ISO date strings, not raw date objects -- works
+    # uniformly whether "concertDate" is a real DATE column (production
+    # Postgres) or a TEXT column (sqlite test fixtures, see
+    # test_touring_history.py's _seed_concerts), since ISO-format strings
+    # compare correctly both lexicographically and after Postgres's implicit
+    # text-to-date cast.
+    window_start = (concert_date - timedelta(days=CANNIBALIZATION_WINDOW_DAYS)).isoformat()
+    window_end = (concert_date + timedelta(days=CANNIBALIZATION_WINDOW_DAYS)).isoformat()
+
+    engine = get_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    'SELECT city FROM concerts WHERE "artistId" != :aid '
+                    'AND "concertDate" BETWEEN :start AND :end'
+                ),
+                {"aid": artist_id, "start": window_start, "end": window_end},
+            ).mappings().all()
+    finally:
+        if db_url is not None:
+            engine.dispose()
+
+    target_key = _normalize_city_key(city)
+    has_rival = any(_normalize_city_key(r["city"] or "") == target_key for r in rows)
+    return CANNIBALIZATION_PENALTY_FACTOR if has_rival else 1.0
+
+
 # ── Price-vs-City-Income Friction (Phase 3, Day 7) ─────────────────────────────
 #
 # WHY THIS EXISTS: flagged as the single highest-value accuracy addition in
@@ -379,7 +484,7 @@ CATEGORICAL_COLS = ["season", "city", "country", "artist_tier"]
 NUMERIC_COLS = [
     "venue_capacity", "avg_ticket_price", "price_range", "max_revenue_naive",
     "is_weekend", "month", "demand_score", "language_affinity_factor",
-    "price_income_friction_factor", "weather_season_factor",
+    "price_income_friction_factor", "weather_season_factor", "cannibalization_factor",
 ]
 
 
@@ -430,6 +535,9 @@ def _heuristic_revenue(feature_dict: dict) -> float:
     price_income_friction_factor = feature_dict.get("price_income_friction_factor", 1.0)
     # Monsoon risk on outdoor shows (<= 1.0x) — see the "Weather / Season Risk" section above.
     weather_season_factor = feature_dict.get("weather_season_factor", 1.0)
+    # Rival concert in the same city within +/-14 days (<= 1.0x) — see the
+    # "Cannibalization" section above.
+    cannibalization_factor = feature_dict.get("cannibalization_factor", 1.0)
     # Weekend ticket-price premium — see that section above.
     weekend_premium_factor = WEEKEND_PREMIUM_FACTOR if feature_dict.get("is_weekend") else 1.0
 
@@ -455,6 +563,7 @@ def _heuristic_revenue(feature_dict: dict) -> float:
     sell_through *= language_affinity_factor
     sell_through *= price_income_friction_factor
     sell_through *= weather_season_factor
+    sell_through *= cannibalization_factor
     sell_through = max(0.15, min(0.90, sell_through))
 
     return capacity * avg_price * sell_through * weekend_premium_factor

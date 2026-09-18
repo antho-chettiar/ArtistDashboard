@@ -171,6 +171,13 @@ class RevenueInput(BaseModel):
     concert: ConcertRow
     platform_metrics: list[PlatformMetricRow] = Field(..., min_length=14)
     demand_score: Optional[float] = None    # pre-computed or auto-calculated
+    # Pre-computed only -- NOT auto-calculated here (unlike demand_score above)
+    # because Popularity's live Google Trends lookup is too expensive to run
+    # as a side effect of every Revenue call. When omitted, the language-
+    # affinity Tier 2 softening (see revenue/predictor.py) simply doesn't
+    # activate; it falls through to the flat Tier 3 heuristic instead of
+    # guessing a value.
+    popularity_score: Optional[float] = None
 
     @field_validator("concert")
     @classmethod

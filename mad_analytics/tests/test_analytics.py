@@ -424,11 +424,13 @@ class TestRevenueLanguageAffinityIntegration:
         """An artist_id that can't be resolved to a name (not in the roster
         table, or DB lookup fails) must fall back to neutral -- city alone
         must not move predicted revenue THROUGH THE LANGUAGE CHANNEL when
-        language affinity is unknown. Price-vs-income friction (Day 7) is
-        also city-dependent but is a separate channel -- neutralized here so
-        this test isolates language affinity specifically."""
+        language affinity is unknown. Price-vs-income friction (Day 7) and
+        Cannibalization (Phase B) are also city-dependent but separate
+        channels -- neutralized here so this test isolates language affinity
+        specifically."""
         monkeypatch.setattr(revenue_predictor, "_artist_languages_for", lambda artist_id: None)
         monkeypatch.setattr(revenue_predictor, "_price_income_friction_factor", lambda price, city: 1.0)
+        monkeypatch.setattr(revenue_predictor, "_cannibalization_factor", lambda artist_id, city, concert_date: 1.0)
         mumbai = revenue_calc(self._payload("Mumbai"))
         chennai = revenue_calc(self._payload("Chennai"))
         assert mumbai.predicted_revenue == chennai.predicted_revenue
@@ -1107,3 +1109,137 @@ class TestPopularityPersistence:
             assert saved_rows[0]["artist_id"] == "artist_001"
             assert saved_rows[1]["artist_id"] == "artist_002"
             assert saved_rows[0]["platform_weights"]["spotify"] == 0.5
+
+
+# ── Feasibility Hierarchy / Cannibalization (Phase B, 2026-09) ────────────────
+
+def _seed_concerts_table(db_url: str, rows: list[tuple[str, str, str, str]]):
+    """rows: (concert_id, artist_id, city, date). Same minimal schema as
+    test_touring_history.py's _seed_concerts."""
+    from sqlalchemy import create_engine, text as sa_text
+    engine = create_engine(db_url)
+    with engine.begin() as conn:
+        conn.execute(sa_text(
+            '''
+            CREATE TABLE concerts (
+                id TEXT PRIMARY KEY,
+                "artistId" TEXT NOT NULL,
+                city TEXT,
+                "concertDate" TEXT,
+                "venueName" TEXT
+            )
+            '''
+        ))
+        for concert_id, artist_id, city, concert_date in rows:
+            conn.execute(sa_text(
+                'INSERT INTO concerts (id, "artistId", city, "concertDate", "venueName") '
+                'VALUES (:id, :aid, :city, :date, NULL)'
+            ), {"id": concert_id, "aid": artist_id, "city": city, "date": concert_date})
+    engine.dispose()
+
+
+class TestFeasibilityLanguageFactor:
+    """Tier 1 (real touring precedent) > Tier 2 (Popularity-moderated) >
+    Tier 3 (flat heuristic fallback) -- see revenue/predictor.py's
+    "Feasibility hierarchy" section for the WHY (the Diljit Dosanjh
+    calibration incident)."""
+
+    def test_tier1_real_precedent_overrides_language_mismatch(self):
+        """Hindi-only artist, Chennai is Tamil-dominant -- would normally
+        mismatch, but a real past Chennai show is direct proof tickets
+        already sold there, so it must override the guess entirely."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/feas.db"
+            _seed_concerts_table(db_url, [("c1", "artist-1", "Chennai", "2024-01-01")])
+            factor = revenue_predictor._feasibility_language_factor(
+                "artist-1", frozenset({"hindi"}), "Chennai", None, db_url=db_url,
+            )
+            assert factor == revenue_predictor.LANGUAGE_MATCH_FACTOR
+
+    def test_tier2_broad_reach_softens_mismatch_without_precedent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/feas.db"
+            _seed_concerts_table(db_url, [])
+            factor = revenue_predictor._feasibility_language_factor(
+                "artist-1", frozenset({"hindi"}), "Chennai", 85.0, db_url=db_url,
+            )
+            assert factor == revenue_predictor.LANGUAGE_MISMATCH_SOFTENED_FACTOR
+
+    def test_tier3_fallback_when_no_precedent_and_not_broad_reach(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/feas.db"
+            _seed_concerts_table(db_url, [])
+            factor = revenue_predictor._feasibility_language_factor(
+                "artist-1", frozenset({"hindi"}), "Chennai", 40.0, db_url=db_url,
+            )
+            assert factor == revenue_predictor.LANGUAGE_MISMATCH_FACTOR
+
+    def test_tier2_never_upgrades_an_already_match_or_neutral_factor(self):
+        """Popularity softening only ever pulls a MISMATCH partway back to
+        neutral -- it must never be mistaken for a bonus on top of an
+        already-matching or already-unknown factor."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/feas.db"
+            _seed_concerts_table(db_url, [])
+            match = revenue_predictor._feasibility_language_factor(
+                "artist-1", frozenset({"hindi"}), "Mumbai", 90.0, db_url=db_url,
+            )
+            assert match == revenue_predictor.LANGUAGE_MATCH_FACTOR
+            neutral = revenue_predictor._feasibility_language_factor(
+                "artist-1", None, "Chennai", 90.0, db_url=db_url,
+            )
+            assert neutral == revenue_predictor.LANGUAGE_NEUTRAL_FACTOR
+
+
+class TestCannibalizationFactor:
+    """See revenue/predictor.py's "Cannibalization" section for the WHY."""
+
+    def test_rival_concert_in_same_city_within_window_penalizes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/canni.db"
+            _seed_concerts_table(db_url, [("c1", "rival-artist", "Mumbai", "2026-06-10")])
+            factor = revenue_predictor._cannibalization_factor(
+                "artist-1", "Mumbai", date(2026, 6, 15), db_url=db_url,
+            )
+            assert factor == revenue_predictor.CANNIBALIZATION_PENALTY_FACTOR
+
+    def test_rival_concert_outside_window_is_neutral(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/canni.db"
+            _seed_concerts_table(db_url, [("c1", "rival-artist", "Mumbai", "2026-05-01")])
+            factor = revenue_predictor._cannibalization_factor(
+                "artist-1", "Mumbai", date(2026, 6, 15), db_url=db_url,
+            )
+            assert factor == 1.0
+
+    def test_rival_concert_in_different_city_is_neutral(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/canni.db"
+            _seed_concerts_table(db_url, [("c1", "rival-artist", "Chennai", "2026-06-10")])
+            factor = revenue_predictor._cannibalization_factor(
+                "artist-1", "Mumbai", date(2026, 6, 15), db_url=db_url,
+            )
+            assert factor == 1.0
+
+    def test_same_artist_own_concert_is_not_a_rival(self):
+        """The exclusion is on artistId, not just city+date -- an artist's
+        own multi-night run in the same city must never look like
+        cannibalization against itself."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/canni.db"
+            _seed_concerts_table(db_url, [("c1", "artist-1", "Mumbai", "2026-06-10")])
+            factor = revenue_predictor._cannibalization_factor(
+                "artist-1", "Mumbai", date(2026, 6, 15), db_url=db_url,
+            )
+            assert factor == 1.0
+
+    def test_city_alias_normalization(self):
+        """A rival show in "Bangalore" must still be caught when this
+        prediction targets "Bengaluru"."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/canni.db"
+            _seed_concerts_table(db_url, [("c1", "rival-artist", "Bangalore", "2026-06-10")])
+            factor = revenue_predictor._cannibalization_factor(
+                "artist-1", "Bengaluru", date(2026, 6, 15), db_url=db_url,
+            )
+            assert factor == revenue_predictor.CANNIBALIZATION_PENALTY_FACTOR
