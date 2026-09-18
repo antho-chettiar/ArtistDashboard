@@ -100,6 +100,18 @@ KNOWN_VENUES: dict[tuple[str, str], int] = {
     ("terraform", "bangalore"): 5000,
     ("roxanne`s bar & all day diner", "mumbai"): 250,
 
+    # India -- major stadiums (well-documented public capacities, added
+    # 2026-09-18 for the touring-history/venue-capacity backfill; not
+    # independently re-verified via web search this session since these are
+    # the same handful of internationally reported cricket/multi-purpose
+    # stadiums, not obscure venues).
+    ("narendra modi stadium", "ahmedabad"): 132000,
+    ("dy patil stadium", "navi mumbai"): 55000,
+    ("dy patil stadium", "mumbai"): 55000,
+    ("eden gardens", "kolkata"): 66000,
+    ("maharashtra cricket association stadium", "gahunje"): 44000,
+    ("indira gandhi indoor stadium", "new delhi"): 14254,
+
     # UAE
     ("expo city dubai", "dubai"): 4000,
     ("coca-cola arena", "dubai"): 17000,
