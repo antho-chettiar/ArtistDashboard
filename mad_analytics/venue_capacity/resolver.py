@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from typing import Iterable, Optional
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from ..utils.schemas import (
@@ -15,7 +15,7 @@ from ..utils.schemas import (
     VenueCapacityInput,
     VenueCapacityOutput,
 )
-from ..utils.db import _normalize_db_url
+from ..utils.db import get_engine
 
 DATABASE_URL_ENV = "DATABASE_URL"
 
@@ -239,9 +239,18 @@ def _fetch_venue_row(
     country: str,
     db_url: Optional[str],
 ) -> dict[str, object] | None:
-    if not db_url:
+    """`db_url=None` (the live request path — see resolve_venue_capacity) uses
+    the shared pooled engine (utils.db.get_engine) instead of opening a brand
+    new, unpooled connection on every single capacity lookup. That per-request
+    engine churn was a real, avoidable contributor to the Supabase Session
+    Pooler's 15-connection cap being exhausted under concurrent traffic — the
+    same class of bug already fixed once for Popularity (see get_engine's own
+    docstring). Only an explicitly-supplied db_url (CLI/one-off scripts) gets
+    its own dedicated engine, which this function then owns and disposes.
+    """
+    if not db_url and not os.environ.get(DATABASE_URL_ENV):
         return None
-    engine = create_engine(_normalize_db_url(db_url))
+    engine = get_engine(db_url)
     query = text(
         """
         SELECT name, city, country, state, "venueType", "capacityMin", "capacityMax", "avgCapacity",
@@ -259,7 +268,8 @@ def _fetch_venue_row(
     except SQLAlchemyError:
         row = None
     finally:
-        engine.dispose()
+        if db_url is not None:
+            engine.dispose()  # dedicated (CLI) engine only; never the shared one
     return dict(row) if row else None
 
 
@@ -486,7 +496,17 @@ def _validate_capacity(
 
 
 def resolve_venue_capacity(payload: VenueCapacityInput) -> VenueCapacityOutput:
-    """Resolve venue capacity from DB, supplied evidence, and heuristic fallback."""
+    """Resolve venue capacity from DB, supplied evidence, and heuristic fallback.
+
+    payload.db_url is passed through to _fetch_venue_row/persist_capacity_resolution
+    AS-IS (usually None on the live request path) rather than eagerly resolved to
+    the environment's DATABASE_URL here -- that resolved value was previously
+    threaded through as if it were an explicit override, which made every single
+    call open its own brand-new, unpooled connection instead of sharing the one
+    bounded pool. `db_url` below is used only to decide whether a DB is
+    configured at all (see the `if db_url:` / `if db_url and payload.persist:`
+    checks); it is never passed to the DB-calling functions themselves.
+    """
     candidates: list[VenueCapacityCandidate] = []
     db_url = _resolve_db_url(payload.db_url)
 
@@ -519,7 +539,7 @@ def resolve_venue_capacity(payload: VenueCapacityInput) -> VenueCapacityOutput:
     candidates.extend(extract_capacity_candidates(payload.source_texts, source=payload.source_url or "source_text"))
 
     if db_url:
-        venue_row = _fetch_venue_row(payload.venue_name, payload.city, payload.country, db_url)
+        venue_row = _fetch_venue_row(payload.venue_name, payload.city, payload.country, payload.db_url)
         if venue_row:
             # Prefer capacityMax when capacityMin is 0 (indicates incomplete data)
             cap_min = venue_row.get("capacityMin") or 0
@@ -582,7 +602,7 @@ def resolve_venue_capacity(payload: VenueCapacityInput) -> VenueCapacityOutput:
     output.validation_reasons = reasons
 
     if db_url and payload.persist:
-        persist_capacity_resolution(output, db_url=db_url)
+        persist_capacity_resolution(output, db_url=payload.db_url)
 
     return output
 
@@ -591,8 +611,11 @@ def calculate(payload: VenueCapacityInput) -> VenueCapacityOutput:
     return resolve_venue_capacity(payload)
 
 
-def persist_capacity_resolution(output: VenueCapacityOutput, *, db_url: str) -> int:
-    engine = create_engine(_normalize_db_url(db_url))
+def persist_capacity_resolution(output: VenueCapacityOutput, *, db_url: Optional[str]) -> int:
+    """db_url=None (the live request path) shares the pooled engine instead of
+    opening a fresh, unpooled connection on every resolved concert -- see
+    _fetch_venue_row's docstring for why that mattered."""
+    engine = get_engine(db_url)
     _ensure_tables(engine)
     capacity_record = {
         "id": f"{output.normalized_venue_name}:{output.normalized_city}:{output.normalized_country}",
@@ -648,16 +671,19 @@ def persist_capacity_resolution(output: VenueCapacityOutput, *, db_url: str) -> 
         # Mirroring into backend venues is best-effort for lightweight test DBs.
         pass
 
-    engine.dispose()
+    if db_url is not None:
+        engine.dispose()  # dedicated (CLI) engine only; never the shared one
     return 1
 
 
 def fetch_saved_capacity_resolutions(db_url: Optional[str] = None) -> list[dict[str, object]]:
-    resolved_db_url = _resolve_db_url(db_url)
-    if not resolved_db_url:
+    if not _resolve_db_url(db_url):
         raise RuntimeError(f"Database URL is not configured. Set {DATABASE_URL_ENV} or pass db_url.")
 
-    engine = create_engine(_normalize_db_url(resolved_db_url))
+    # db_url=None shares the pooled engine (utils.db.get_engine) instead of
+    # opening a fresh, unpooled connection on every call -- see
+    # _fetch_venue_row's docstring for why that mattered.
+    engine = get_engine(db_url)
     _ensure_tables(engine)
     query = text(
         """
@@ -670,7 +696,8 @@ def fetch_saved_capacity_resolutions(db_url: Optional[str] = None) -> list[dict[
     )
     with engine.connect() as conn:
         rows = conn.execute(query).mappings().all()
-    engine.dispose()
+    if db_url is not None:
+        engine.dispose()  # dedicated (CLI) engine only; never the shared one
 
     results: list[dict[str, object]] = []
     for row in rows:
