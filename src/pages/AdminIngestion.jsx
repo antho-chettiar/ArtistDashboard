@@ -59,15 +59,16 @@ function AdminIngestion() {
   // Sync platform mutation
   const syncMutation = useMutation({
     mutationFn: (platform) => client.post(`/ingestion/sync/${platform}`),
-    onSuccess: () => queryClient.invalidateQueries(['ingestionJobs'])
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ingestionJobs'] })
   })
 
   // Enrich artists mutation
   const enrichMutation = useMutation({
     mutationFn: () => client.post('/ingestion/enrich'),
     onSuccess: () => {
-      queryClient.invalidateQueries(['ingestionJobs'])
-      queryClient.invalidateQueries(['artists'])
+      queryClient.invalidateQueries({ queryKey: ['ingestionJobs'] })
+      queryClient.invalidateQueries({ queryKey: ['artists'] })
+      queryClient.invalidateQueries({ queryKey: ['artist'] })
     }
   })
 
@@ -86,8 +87,9 @@ function AdminIngestion() {
         persistConcerts: true,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries(['ingestionJobs'])
-      queryClient.invalidateQueries(['concerts'])
+      queryClient.invalidateQueries({ queryKey: ['ingestionJobs'] })
+      queryClient.invalidateQueries({ queryKey: ['concerts'] })
+      queryClient.invalidateQueries({ queryKey: ['concert'] })
     }
   })
 
@@ -108,7 +110,7 @@ function AdminIngestion() {
     onSuccess: () => {
       setUploading(false)
       setUploadDone(true)
-      queryClient.invalidateQueries(['ingestionJobs'])
+      queryClient.invalidateQueries({ queryKey: ['ingestionJobs'] })
       setTimeout(() => { setFile(null); setUploadDone(false) }, 3000)
     },
     onError: () => setUploading(false)

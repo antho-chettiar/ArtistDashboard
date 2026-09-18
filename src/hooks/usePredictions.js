@@ -146,6 +146,11 @@ export function useSyncPopularity() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['artists'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard', 'top-artists'] })
+      // 'artist' (singular, ['artist', id]) is a separate cache from the
+      // 'artists' list queries above -- ArtistProfile fetches an individual
+      // artist from a different endpoint, so it needs its own invalidation
+      // or it can keep showing the pre-sync popularity/lastUpdated.
+      queryClient.invalidateQueries({ queryKey: ['artist'] })
     },
   })
 }

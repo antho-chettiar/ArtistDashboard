@@ -111,8 +111,12 @@ export function useDashboardData(trendDays = 30) {
   })
 
   // ── All concerts ──────────────────────────────────────────────────────────
+  // Same queryKey as useArtists.js's identical GET /concerts?limit=1000 call
+  // (previously ['concerts', 'all-for-dashboard'], a separate cache entry for
+  // the exact same request) so both share one cached fetch and invalidate
+  // together instead of drifting independently.
   const { data: allConcertsRaw } = useQuery({
-    queryKey: ['concerts', 'all-for-dashboard'],
+    queryKey: ['concerts', 'all'],
     queryFn: async () => {
       const response = await client.get('/concerts?limit=1000')
       return getArrayPayload(response.data, 'concerts')

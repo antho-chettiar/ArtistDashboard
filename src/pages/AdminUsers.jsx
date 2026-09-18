@@ -26,7 +26,7 @@ function AdminUsers() {
   const createMutation = useMutation({
     mutationFn: (data) => client.post('/users', data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['users'])
+      queryClient.invalidateQueries({ queryKey: ['users'] })
       setShowModal(false)
       setNewUser({ email: '', password: '', role: 'VIEWER' })
     }
@@ -35,13 +35,13 @@ function AdminUsers() {
   // Delete user
   const deleteMutation = useMutation({
     mutationFn: (id) => client.delete(`/users/${id}`),
-    onSuccess: () => queryClient.invalidateQueries(['users'])
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] })
   })
 
   // Toggle status
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => client.patch(`/users/${id}`, data),
-    onSuccess: () => queryClient.invalidateQueries(['users'])
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] })
   })
 
   const filtered = users.filter(u =>

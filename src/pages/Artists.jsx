@@ -7,6 +7,7 @@ import EmptyState from '../components/ui/EmptyState'
 import SyncPopularityButton from '../components/ui/SyncPopularityButton'
 import useFilterStore from '../store/useFilterStore'
 import { useArtists } from '../hooks/useArtists'
+import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import { formatNumber } from '../utils/formatters'
 
 
@@ -267,10 +268,14 @@ function Artists() {
   const { artistType } = useFilterStore()
   const [search, setSearch]     = useState('')
   const [activeGenre, setGenre] = useState('All')
+  // The input reflects `search` immediately; the API call/query key only
+  // react to `debouncedSearch`, so typing a name doesn't fire one request
+  // per keystroke.
+  const debouncedSearch = useDebouncedValue(search, 350)
 
   // Fetch artists from API
   const { data: artists, isLoading, error } = useArtists({
-    search: search,
+    search: debouncedSearch,
     genre: activeGenre === 'All' ? '' : activeGenre,
   })
 
