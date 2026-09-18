@@ -143,6 +143,7 @@ interface AnalyticsRevenuePayload {
   concert: AnalyticsConcertPayload;
   platform_metrics: MetricRow[];
   demand_score?: number;
+  popularity_score?: number;
 }
 
 export interface LlmPredictorPayload {
@@ -178,6 +179,7 @@ export interface RevenuePayload {
   instagram_followers?: number;
   youtube_subscribers?: number;
   demand_score?: number;
+  popularity_score?: number;
   concert?: AnalyticsConcertPayload;
   platform_metrics?: MetricRow[];
 }
@@ -573,6 +575,7 @@ const buildRevenuePayload = async (payload: RevenuePayload): Promise<AnalyticsRe
     },
     platform_metrics: platformMetrics,
     demand_score: payload.demand_score,
+    popularity_score: payload.popularity_score,
   };
 };
 

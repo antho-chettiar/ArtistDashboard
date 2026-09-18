@@ -21,6 +21,11 @@ export function useAutoPredict(artistId, city, capacity, enabled, options = {}) 
       // useMadDemand call for the same artist/city) so the backend's revenue
       // predictor reuses it instead of recomputing Demand itself from scratch.
       if (options.demandScore != null) payload.demand_score = options.demandScore
+      // Pass through a Popularity score the page already fetched so Revenue's
+      // Tier 2 feasibility softening (see revenue/predictor.py) has a real
+      // value to check -- omitted entirely (never a guessed/default value)
+      // when the caller hasn't fetched Popularity for this artist.
+      if (options.popularityScore != null) payload.popularity_score = options.popularityScore
 
       const { data } = await client.post('/analytics/ml/revenue', payload)
       return data.data

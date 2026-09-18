@@ -195,7 +195,13 @@ function ProfitabilityPredictor({ artists, concerts }) {
   // reuse this Demand score instead of the backend computing Demand a second
   // time internally -- the same live computation, done once instead of twice.
   const demand = useMadDemand(selectedArtist, selectedCity, Boolean(selectedArtist && selectedCity), { country: 'India', targetDate: predictionDate() })
-  const modelPrediction = useAutoPredict(selectedArtist, selectedCity, realVenueCapacity, Boolean(selectedArtist && selectedCity && !demand.isLoading), {
+  // Also fetched before useAutoPredict (and gated on below) so Revenue's
+  // Tier 2 feasibility softening (see revenue/predictor.py's
+  // POPULARITY_BROAD_REACH_THRESHOLD) has a real Popularity score to check --
+  // without this, Tier 2 never activates and every language mismatch silently
+  // falls through to the flat Tier 3 heuristic even for broad-reach artists.
+  const popularity = useMadPopularity(selectedArtist, Boolean(selectedArtist))
+  const modelPrediction = useAutoPredict(selectedArtist, selectedCity, realVenueCapacity, Boolean(selectedArtist && selectedCity && !demand.isLoading && !popularity.isLoading), {
     artistName: artist?.name,
     country: 'India',
     avgTicketPrice: realAvgTicketPrice,
@@ -203,6 +209,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
     venueName,
     venueType: 'arena',
     demandScore: demand.data?.score,
+    popularityScore: popularity.data?.popularity_score,
   })
   const pred = applyModelPrediction(fallbackPred, modelPrediction.data)
   // Heuristic Revenue Model is the canonical/primary predictor (the backend
@@ -222,7 +229,6 @@ function ProfitabilityPredictor({ artists, concerts }) {
     if (!parts.length) return null
     return `Assumed ${parts.join(' and ')} used — not historical/actual data for this concert.`
   })()
-  const popularity = useMadPopularity(selectedArtist, Boolean(selectedArtist))
   const llmPrediction = useMadLlmPrediction(selectedArtist, selectedCity, venueCapacityValue, Boolean(selectedArtist && selectedCity), {
     artistName: artist?.name,
     venueName,
