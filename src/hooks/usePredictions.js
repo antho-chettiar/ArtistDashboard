@@ -17,7 +17,11 @@ export function useAutoPredict(artistId, city, capacity, enabled, options = {}) 
         venue_type: options.venueType,
       }
       if (capacity) payload.capacity = capacity
-      
+      // Pass through a Demand score the page already fetched (e.g. Analysis' own
+      // useMadDemand call for the same artist/city) so the backend's revenue
+      // predictor reuses it instead of recomputing Demand itself from scratch.
+      if (options.demandScore != null) payload.demand_score = options.demandScore
+
       const { data } = await client.post('/analytics/ml/revenue', payload)
       return data.data
     },

@@ -191,13 +191,18 @@ function ProfitabilityPredictor({ artists, concerts }) {
   const realVenueCapacity = selectedVenueData?.capacity > 0 ? selectedVenueData.capacity : undefined
   const realAvgTicketPrice = selectedVenueData?.avgTicketPrice > 0 ? selectedVenueData.avgTicketPrice : undefined
 
-  const modelPrediction = useAutoPredict(selectedArtist, selectedCity, realVenueCapacity, Boolean(selectedArtist && selectedCity), {
+  // Fetched before useAutoPredict (and gated on below) so the revenue call can
+  // reuse this Demand score instead of the backend computing Demand a second
+  // time internally -- the same live computation, done once instead of twice.
+  const demand = useMadDemand(selectedArtist, selectedCity, Boolean(selectedArtist && selectedCity), { country: 'India', targetDate: predictionDate() })
+  const modelPrediction = useAutoPredict(selectedArtist, selectedCity, realVenueCapacity, Boolean(selectedArtist && selectedCity && !demand.isLoading), {
     artistName: artist?.name,
     country: 'India',
     avgTicketPrice: realAvgTicketPrice,
     eventDate: predictionDate(),
     venueName,
     venueType: 'arena',
+    demandScore: demand.data?.score,
   })
   const pred = applyModelPrediction(fallbackPred, modelPrediction.data)
   // Heuristic Revenue Model is the canonical/primary predictor (the backend
@@ -217,7 +222,6 @@ function ProfitabilityPredictor({ artists, concerts }) {
     if (!parts.length) return null
     return `Assumed ${parts.join(' and ')} used — not historical/actual data for this concert.`
   })()
-  const demand = useMadDemand(selectedArtist, selectedCity, Boolean(selectedArtist && selectedCity), { country: 'India', targetDate: predictionDate() })
   const popularity = useMadPopularity(selectedArtist, Boolean(selectedArtist))
   const llmPrediction = useMadLlmPrediction(selectedArtist, selectedCity, venueCapacityValue, Boolean(selectedArtist && selectedCity), {
     artistName: artist?.name,
