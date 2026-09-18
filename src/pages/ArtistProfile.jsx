@@ -426,8 +426,8 @@ function ArtistProfile() {
                     <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>{formatDate(c.date)}</td>
                     <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-secondary)' }}>{c.city}</td>
                     <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>{c.venue}</td>
-                    <td className="px-4 py-3 text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>{formatNumber(c.ticketsSold)}</td>
-                    <td className="px-4 py-3 font-bold font-display text-sm" style={{ color: 'var(--accent-gold)' }}>{formatCurrency(c.totalRevenue, { country: c.country })}</td>
+                    <td className="px-4 py-3 text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>{c.ticketsSold > 0 ? formatNumber(c.ticketsSold) : '—'}</td>
+                    <td className="px-4 py-3 font-bold font-display text-sm" style={{ color: 'var(--accent-gold)' }}>{c.totalRevenue > 0 ? formatCurrency(c.totalRevenue, { country: c.country }) : '—'}</td>
                   </tr>
                 ))}
               </tbody>

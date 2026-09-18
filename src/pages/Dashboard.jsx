@@ -503,11 +503,16 @@ function Dashboard() {
                     </p>
                   </div>
                   <div className="text-right flex-shrink-0">
+                    {/* Imported historical concerts often have revenue/tickets
+                        stored as a literal 0 rather than left unset -- treat
+                        0 the same as missing here (matching the Revenue YTD/
+                        Tickets Sold YTD KPI cards above) so we never display
+                        a real concert as if it earned nothing. */}
                     <p className="text-sm font-bold font-display" style={{ color: 'var(--accent-gold)' }}>
-                      {formatCurrency(c.totalRevenue, { country: c.country })}
+                      {c.totalRevenue > 0 ? formatCurrency(c.totalRevenue, { country: c.country }) : '—'}
                     </p>
                     <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      {formatNumber(c.ticketsSold)} tickets
+                      {c.ticketsSold > 0 ? `${formatNumber(c.ticketsSold)} tickets` : 'Not available'}
                     </p>
                   </div>
                 </div>

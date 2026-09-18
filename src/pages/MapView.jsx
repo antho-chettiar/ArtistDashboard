@@ -156,11 +156,11 @@ function MapView() {
               <div className="grid grid-cols-2 gap-2">
                 {[
                       { label: 'Date',         value: formatDate(selectedConcert.date) },
-                      { label: 'Capacity',     value: formatNumber(selectedConcert.capacity) },
-                      { label: 'Tickets Sold', value: formatNumber(selectedConcert.ticketsSold) },
-                      { label: 'ATP',          value: formatCurrency(selectedConcert.avgTicketPrice, { country: selectedConcert.country }) },
-                      { label: 'Revenue',      value: formatCurrency(selectedConcert.totalRevenue, { country: selectedConcert.country }) },
-                      { label: 'Sell-Through', value: (selectedConcert.capacity > 0 ? ((selectedConcert.ticketsSold / selectedConcert.capacity) * 100).toFixed(1) : '0.0') + '%' },
+                      { label: 'Capacity',     value: selectedConcert.capacity > 0 ? formatNumber(selectedConcert.capacity) : '—' },
+                      { label: 'Tickets Sold', value: selectedConcert.ticketsSold > 0 ? formatNumber(selectedConcert.ticketsSold) : '—' },
+                      { label: 'ATP',          value: selectedConcert.avgTicketPrice > 0 ? formatCurrency(selectedConcert.avgTicketPrice, { country: selectedConcert.country }) : '—' },
+                      { label: 'Revenue',      value: selectedConcert.totalRevenue > 0 ? formatCurrency(selectedConcert.totalRevenue, { country: selectedConcert.country }) : '—' },
+                      { label: 'Sell-Through', value: selectedConcert.capacity > 0 ? ((selectedConcert.ticketsSold / selectedConcert.capacity) * 100).toFixed(1) + '%' : '—' },
                 ].map((item, i) => (
                   <div key={i} className="rounded-xl p-2" style={{ background: 'var(--bg-secondary)' }}>
                     <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{item.label}</p>
@@ -203,7 +203,7 @@ function MapView() {
                   <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{formatDate(concert.date)}</span>
                     <span className="text-xs font-bold font-display" style={{ color: 'var(--accent-gold)' }}>
-                      {formatCurrency(concert.totalRevenue, { country: concert.country })}
+                      {concert.totalRevenue > 0 ? formatCurrency(concert.totalRevenue, { country: concert.country }) : '—'}
                     </span>
                   </div>
                 </div>

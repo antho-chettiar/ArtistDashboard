@@ -31,7 +31,12 @@ function BarChart({ data = [], bars = [], xKey = 'name', layout = 'vertical', he
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={isHorizontal} horizontal={!isHorizontal} />
         {isHorizontal ? (
           <>
-            <XAxis dataKey={xKey} tick={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'Satoshi' }} axisLine={false} tickLine={false} />
+            {/* interval={0} forces every category label to render -- Recharts'
+                default auto-skip-for-space logic was silently hiding some
+                (including, confusingly, the tallest bar's label). Angled text
+                gives 10 city names room without overlapping. */}
+            <XAxis dataKey={xKey} tick={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'Satoshi' }}
+              axisLine={false} tickLine={false} interval={0} angle={-35} textAnchor="end" height={50} />
             <YAxis tickFormatter={formatNumber} tick={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'Satoshi' }} axisLine={false} tickLine={false} width={48} />
           </>
         ) : (

@@ -161,13 +161,16 @@ function ConcertCard({ concert, onOpen }) {
         <div className="rounded-xl p-3" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
           <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>Tickets</p>
           <p className="text-sm font-bold mt-1" style={{ color: 'var(--text-primary)' }}>
-            {formatNumber(concert.ticketsSold || 0)}
+            {/* Imported historical concerts often have 0 stored where the real
+                value was never recorded -- `|| 0` here was actively turning a
+                genuinely missing value into a fabricated zero. */}
+            {concert.ticketsSold > 0 ? formatNumber(concert.ticketsSold) : '—'}
           </p>
         </div>
           <div className="rounded-xl p-3" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
           <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>Revenue</p>
           <p className="text-sm font-bold mt-1" style={{ color: 'var(--text-primary)' }}>
-            {formatCurrency(concert.totalRevenue || 0, concert.currency)}
+            {concert.totalRevenue > 0 ? formatCurrency(concert.totalRevenue, concert.currency) : '—'}
           </p>
         </div>
       </div>
@@ -592,20 +595,20 @@ function Concerts() {
                         </td>
                         <td className="px-4 py-4">
                           <p className="text-sm font-bold font-mono" style={{ color: 'var(--text-primary)' }}>
-                            {formatNumber(tickets)}
+                            {concert.ticketsSold > 0 ? formatNumber(tickets) : '—'}
                           </p>
                           <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                            of {formatNumber(capacity)}
+                            {concert.capacity > 0 ? `of ${formatNumber(capacity)}` : 'capacity unknown'}
                           </p>
                         </td>
                         <td className="px-4 py-4">
                           <SellThroughBar value={sellThrough} capacity={capacity} />
                         </td>
                         <td className="px-4 py-4 text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
-                          {formatCurrency(concert.avgTicketPrice || 0, concert.currency)}
+                          {concert.avgTicketPrice > 0 ? formatCurrency(concert.avgTicketPrice, concert.currency) : '—'}
                         </td>
                         <td className="px-4 py-4 text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
-                          {formatCurrency(concert.totalRevenue || 0, concert.currency)}
+                          {concert.totalRevenue > 0 ? formatCurrency(concert.totalRevenue, concert.currency) : '—'}
                         </td>
                         <td className="px-4 py-4">
                           <ChevronRight size={17} style={{ color: 'var(--text-muted)' }} />

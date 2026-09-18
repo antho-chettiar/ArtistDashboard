@@ -33,10 +33,12 @@ function ConcertDetail() {
 
   const stColor = st >= 95 ? 'var(--accent-green)' : st >= 75 ? 'var(--accent-gold)' : 'var(--accent-red)'
 
+  // Imported historical concerts often store 0 where the real value was
+  // never recorded -- treat 0 as missing here too, not a real zero.
   const kpis = [
-    { label: 'Tickets Sold',    value: formatNumber(concert.ticketsSold), sub: `of ${formatNumber(concert.capacity)}`, icon: Ticket,      color: 'var(--accent-indigo)' },
-    { label: 'Avg Ticket Price',value: formatCurrency(concert.avgTicketPrice, { country: concert.country }), sub: 'per ticket',            icon: TrendingUp,  color: 'var(--accent-gold)'   },
-    { label: 'Total Revenue',   value: formatCurrency(concert.totalRevenue, { country: concert.country }),    sub: 'incl. sponsors',        icon: DollarSign,  color: 'var(--accent-green)'  },
+    { label: 'Tickets Sold',    value: concert.ticketsSold > 0 ? formatNumber(concert.ticketsSold) : '—', sub: concert.capacity > 0 ? `of ${formatNumber(concert.capacity)}` : 'capacity unknown', icon: Ticket,      color: 'var(--accent-indigo)' },
+    { label: 'Avg Ticket Price',value: concert.avgTicketPrice > 0 ? formatCurrency(concert.avgTicketPrice, { country: concert.country }) : '—', sub: 'per ticket',            icon: TrendingUp,  color: 'var(--accent-gold)'   },
+    { label: 'Total Revenue',   value: concert.totalRevenue > 0 ? formatCurrency(concert.totalRevenue, { country: concert.country }) : '—',    sub: 'incl. sponsors',        icon: DollarSign,  color: 'var(--accent-green)'  },
     { label: 'Sponsors',        value: concert.sponsors.length,                  sub: 'brand partners',        icon: Star,        color: 'var(--accent-red)'    },
   ]
 
