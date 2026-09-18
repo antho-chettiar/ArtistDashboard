@@ -47,7 +47,7 @@ Code lives in `mad_analytics/` (Python). Score ranges are 0–100 unless noted.
 **File:** `mad_analytics/popularity/calculator.py`
 
 ```
-Popularity = BaseEntropy × 0.75 + GoogleTrends × 0.25
+Popularity = BaseEntropy × 0.80 + GoogleTrends × 0.20
 ```
 (weights renormalized over available components)
 
@@ -55,6 +55,19 @@ Popularity = BaseEntropy × 0.75 + GoogleTrends × 0.25
 > 0.20) was removed — Growth/RoG was archived (see **§10 Legacy — Retired
 > Metrics**). Its weight was redistributed to BaseEntropy (0.60 → 0.75) and
 > GoogleTrends (0.20 → 0.25).
+
+> **Changed again (2026-09 — Google Trends distortion incident):** an actor-singer's
+> live Google Trends search interest spiked hard for reasons unrelated to music
+> (most likely a film promotion), maxed out at 100 within Google Trends'
+> always-scale-the-max-to-100 normalization, and that alone briefly outranked
+> artists who are far more established musicians. Two fixes together: (1) the
+> Trends lookback window widened from 3 to 12 months
+> (`trends/google_trends.py`'s `fetch_trends_scores`) so a short-lived spike is
+> diluted by a full year of baseline interest instead of dominating a 3-month
+> window outright — verified live, the same artist's Trends score dropped from
+> 100 to 0.31 once widened; (2) Trends' weight reduced 0.25 → 0.20 (moved to
+> BaseEntropy, now 0.80) as a second layer of protection so even a spike that
+> survives the wider window swings the score less.
 
 - **BaseEntropy (0–100):** `5 + 95 × Σ(normalized_value[p] × tilted_entropy_weight[p])` over
   p ∈ {spotify, youtube, instagram, facebook}.
@@ -64,7 +77,8 @@ Popularity = BaseEntropy × 0.75 + GoogleTrends × 0.25
     platform tilt (Phase 3, Day 6 — see §3's callout below), then renormalized back to
     sum to 1.0. Untagged artists (or a genre style with no tilt entry) get the
     untilted `entropy_weight[p]` unchanged.
-- **GoogleTrends (0–100):** `artists.googleTrendsScore` (else omitted).
+- **GoogleTrends (0–100):** `artists.googleTrendsScore`, queried over a trailing
+  12-month window (else omitted).
 
 **Inputs / DB:** `artists.{spotifyMonthlyListeners, youtubeSubscribers, instagramFollowers, facebookFollowers, googleTrendsScore}`, curated genre-style tag (§3 callout).
 

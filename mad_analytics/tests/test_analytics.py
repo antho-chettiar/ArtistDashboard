@@ -1034,6 +1034,11 @@ class TestPopularityGenreTilt:
         ]
 
     def test_tagged_artist_scores_higher_than_untagged(self, monkeypatch):
+        # Deterministic "no trends data" regardless of whether pytrends happens
+        # to be installed in this environment -- these tests are about the
+        # genre tilt, not live Google Trends, which would otherwise make a
+        # real (rate-limited, non-deterministic) network call for fake names.
+        monkeypatch.setattr(popularity_calculator, "_fetch_google_trends_scores", lambda names: {})
         monkeypatch.setattr(popularity_calculator, "fetch_artist_snapshots", lambda: self._rows())
 
         monkeypatch.setattr(popularity_calculator, "genre_style_for_artist_name", lambda name: None)
@@ -1052,6 +1057,13 @@ class TestPopularityGenreTilt:
         """The genre tilt must be applied identically on both paths -- the
         same consistency guarantee _calculate_base_entropy_score's docstring
         already makes for the untagged case."""
+        # Deterministic "no trends data" -- see the sibling test's comment above.
+        # Without this, calculate() and calculate_all() each make their own
+        # live Google Trends call for these fake artist names whenever pytrends
+        # happens to be installed, and those two calls aren't guaranteed to
+        # agree -- a real flake this test hit once pytrends was installed
+        # locally for unrelated live-data debugging.
+        monkeypatch.setattr(popularity_calculator, "_fetch_google_trends_scores", lambda names: {})
         monkeypatch.setattr(popularity_calculator, "fetch_artist_snapshots", lambda: self._rows())
         monkeypatch.setattr(
             popularity_calculator, "genre_style_for_artist_name",

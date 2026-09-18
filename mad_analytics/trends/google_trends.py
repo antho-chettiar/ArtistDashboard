@@ -107,7 +107,7 @@ def _fetch_batch(pytrends, keywords: list[str], geo: str, timeframe: str) -> dic
 def fetch_trends_scores(
     artist_names: list[str],
     geo: str = "",
-    timeframe: str = "today 3-m",
+    timeframe: str = "today 12-m",
     reference_artist: Optional[str] = None,
     delay_seconds: float = 5.0,
     suffix: str = "",
@@ -124,10 +124,22 @@ def fetch_trends_scores(
     3. Normalize each batch so scores are comparable across batches
     4. Final normalization: scale so max = 100
 
+    WHY 12 MONTHS (widened from 3, 2026-09): step 4 above means whichever
+    artist has the single highest search interest in the window always gets
+    scaled to exactly 100 — a real incident showed this badly distorting
+    Popularity: an actor-singer's name spiked hard for reasons entirely
+    unrelated to music (a film promotion, most likely), maxed out at 100, and
+    that one live data point (25% of the Popularity blend) briefly outranked
+    artists who are far more established musicians. A 12-month window doesn't
+    stop a genuine current spike from still winning the max=100 slot, but it
+    means that spike has to compete against — and get diluted by — a full
+    year of everyone's baseline interest, so a short-lived, music-unrelated
+    spike moves the needle far less than it did in a 3-month window.
+
     Args:
         artist_names: List of artist names to query
         geo: Country code (default "" for worldwide)
-        timeframe: Pytrends timeframe string (default "today 3-m")
+        timeframe: Pytrends timeframe string (default "today 12-m")
         reference_artist: Artist to use as cross-batch normalizer (default: first in list)
         delay_seconds: Seconds to wait between API calls (rate limiting)
         suffix: Optional suffix appended to keywords for API query (e.g. " music")

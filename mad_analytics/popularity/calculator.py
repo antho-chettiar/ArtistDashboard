@@ -1,10 +1,10 @@
 """
-Popularity model — Formula Blueprint v2.1 (Growth/RoG retired, 2026-09):
+Popularity model — Formula Blueprint v2.2 (Google Trends weight reduced, 2026-09):
 
-    Popularity = BaseEntropy * 0.75 + GoogleTrends * 0.25
+    Popularity = BaseEntropy * 0.80 + GoogleTrends * 0.20
 
-  - 75% Base entropy score (Spotify, YouTube, Instagram, Facebook follower counts)
-  - 25% Google Trends score (real-time public search interest)
+  - 80% Base entropy score (Spotify, YouTube, Instagram, Facebook follower counts)
+  - 20% Google Trends score (real-time public search interest)
 
 The base entropy model uses information-entropy weighting across artist platform
 snapshots to compute relative popularity from follower/listener counts.
@@ -13,8 +13,20 @@ Momentum (cross_platform_score from the growth/RoG module) was dropped as an
 input by product decision — Growth/RoG has been archived (see
 mad_analytics/legacy/growth_calculator.py) because the business decided it
 added complexity without a proportional accuracy gain for V1. Its 20% weight
-was redistributed to Base (60% -> 75%) and Google Trends (20% -> 25%) so the
-two remaining, more reliable signals do more of the work.
+was originally redistributed to Base (60% -> 75%) and Google Trends (20% -> 25%).
+
+> **Changed again (2026-09):** a real incident showed Google Trends at 25%
+> weight is too easily distorted — an actor-singer's live search interest
+> spiked hard for reasons unrelated to music (most likely a film promotion),
+> maxed out Google Trends at 100, and that alone was enough to briefly
+> outrank artists who are far more established musicians. Two changes
+> together address this: (1) the Trends lookback window widened from 3 to 12
+> months (see trends/google_trends.py's fetch_trends_scores docstring) so a
+> short-lived spike gets diluted by a full year of baseline interest instead
+> of dominating a 3-month window outright; (2) Trends' weight reduced 25% ->
+> 20%, with that 5% moved to Base, as a second layer of protection so even a
+> spike that survives the wider window swings the final score less. Base is
+> now 80% (was 75%).
 
 Missing components are renormalized out: if Google Trends (pytrends not yet run)
 is unavailable for an artist, the full weight falls on the base entropy score so
@@ -43,13 +55,15 @@ logger = logging.getLogger(__name__)
 
 # ── Weight Configuration ───────────────────────────────────────────────────────
 
-# Final blended formula weights — Formula Blueprint v2.1 (Popularity):
-#   Popularity = BaseEntropy * 0.75 + GoogleTrends * 0.25
-# Growth/RoG's Momentum was retired (see module docstring) and its 20% folded
-# into these two remaining components. Weights are renormalized over whichever
-# components are actually available (see _blend_popularity).
-WEIGHT_BASE = 0.75           # Entropy-weighted platform followers
-WEIGHT_GOOGLE_TRENDS = 0.25  # Google Trends search interest
+# Final blended formula weights — Formula Blueprint v2.2 (Popularity):
+#   Popularity = BaseEntropy * 0.80 + GoogleTrends * 0.20
+# Google Trends' weight was reduced from 0.25 (moved to Base) after a live
+# incident where a 25%-weighted, un-widened-window Trends spike (unrelated to
+# music) briefly outranked more established musicians — see module docstring.
+# Weights are renormalized over whichever components are actually available
+# (see _blend_popularity).
+WEIGHT_BASE = 0.80           # Entropy-weighted platform followers
+WEIGHT_GOOGLE_TRENDS = 0.20  # Google Trends search interest
 
 # Base model platforms
 SNAPSHOT_PLATFORMS = [
@@ -185,10 +199,14 @@ def _fetch_google_trends_scores(artist_names: list[str]) -> dict[str, float]:
     """
     scores: dict[str, float] = {}
 
-    # Try live fetch first
+    # Try live fetch first. timeframe="today 12-m" (widened from 3-m, 2026-09):
+    # a short window lets one artist's momentary, music-unrelated search spike
+    # (e.g. a film promotion for an actor-singer) max out at 100 and swing 25%
+    # of their Popularity score — see fetch_trends_scores' docstring for the
+    # real incident that motivated this.
     try:
         from ..trends.google_trends import fetch_trends_scores
-        scores = fetch_trends_scores(artist_names, geo="", timeframe="today 3-m", suffix=" music")
+        scores = fetch_trends_scores(artist_names, geo="", timeframe="today 12-m", suffix=" music")
         if scores:
             logger.info(f"[Popularity] Google Trends: live scores for {len(scores)} artists")
             return scores
@@ -370,7 +388,7 @@ def _blend_popularity(
     base_score: float,
     trends: Optional[float],
 ) -> tuple[float, dict[str, float]]:
-    """Apply Popularity = base*0.75 + trends*0.25, renormalizing
+    """Apply Popularity = base*0.80 + trends*0.20, renormalizing
     over whichever components are actually available.
 
     base_score is always present. trends is None when unavailable (pytrends not
@@ -441,7 +459,7 @@ def _calculate_base_entropy_score(artist_id: str, artists: list[dict], matrix: p
 def calculate_all() -> list[PopularityOutput]:
     """
     Compute popularity scores for all active artists using the blended formula:
-      Popularity = base × 0.75 + google_trends × 0.25
+      Popularity = base × 0.80 + google_trends × 0.20
     (weights renormalized over available components).
     """
     artists = fetch_artist_snapshots()
