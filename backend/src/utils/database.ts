@@ -11,16 +11,29 @@ let redisClient: Redis | null = null;
 export const connectRedis = async (): Promise<void> => {
   try {
     const redisUrl = process.env.REDIS_URL;
-    // retryStrategy: () => null stops ioredis from retrying forever when the host is
-    // unreachable (e.g. a decommissioned instance) -- without it, the initial connect
-    // promise never settles, so `await connectRedis()` below hangs indefinitely and the
-    // whole server never reaches app.listen(), which looks like a stuck deploy.
+    // A capped retryStrategy: up to 3 quick retries (200ms apart) tolerate a
+    // flaky first connection attempt (e.g. right after a database is newly
+    // provisioned), then give up for good. Without ANY limit, ioredis's
+    // default retries forever against a truly dead host, hanging
+    // `await connectRedis()` below indefinitely and blocking the whole server
+    // from ever reaching app.listen() -- returning null after a few tries
+    // avoids that while still surviving a one-off transient hiccup.
+    const retryStrategy = (times: number) => (times <= 3 ? 200 : null);
+    // enableOfflineQueue: false was removed -- against some Redis Cloud
+    // endpoints (proxied, slightly slower handshake), ioredis's own automatic
+    // AUTH command fires before the socket is confirmed writable, and with
+    // the offline queue disabled that write fails outright instead of being
+    // buffered ("Stream isn't writeable and enableOfflineQueue options is
+    // false"), reproduced consistently against the current instance.
+    // maxRetriesPerRequest: 1 already gives the same "fail fast instead of
+    // hanging" guarantee for commands issued while Redis is unreachable, so
+    // dropping enableOfflineQueue costs nothing on that front (verified: a
+    // dead host still rejects in under half a second).
     const client = redisUrl
       ? new Redis(redisUrl, {
           lazyConnect: true,
-          enableOfflineQueue: false,
           maxRetriesPerRequest: 1,
-          retryStrategy: () => null,
+          retryStrategy,
           connectTimeout: 5000,
           ...(process.env.REDIS_TLS === 'true' ? { tls: { rejectUnauthorized: false } } : {}),
         })
@@ -30,9 +43,8 @@ export const connectRedis = async (): Promise<void> => {
           username: process.env.REDIS_USERNAME || 'default',
           password: process.env.REDIS_PASSWORD,
           lazyConnect: true,
-          enableOfflineQueue: false,
           maxRetriesPerRequest: 1,
-          retryStrategy: () => null,
+          retryStrategy,
           connectTimeout: 5000,
           ...(process.env.REDIS_TLS === 'true' ? { tls: { rejectUnauthorized: false } } : {}),
         });
