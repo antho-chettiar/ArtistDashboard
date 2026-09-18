@@ -241,6 +241,7 @@ def fetch_and_store_trends(db_url: Optional[str] = None, geo: str = "", suffix: 
     """
     import os
     from sqlalchemy import create_engine, text as sql_text
+    from ..utils.db import _normalize_db_url
 
     if not db_url:
         db_url = os.environ.get("DATABASE_URL")
@@ -248,7 +249,7 @@ def fetch_and_store_trends(db_url: Optional[str] = None, geo: str = "", suffix: 
         logger.error("[GoogleTrends] DATABASE_URL not set")
         return {}
 
-    normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+    normalized = _normalize_db_url(db_url)
     engine = create_engine(normalized)
 
     # Fetch active artists

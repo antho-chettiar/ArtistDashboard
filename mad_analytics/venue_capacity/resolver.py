@@ -15,6 +15,7 @@ from ..utils.schemas import (
     VenueCapacityInput,
     VenueCapacityOutput,
 )
+from ..utils.db import _normalize_db_url
 
 DATABASE_URL_ENV = "DATABASE_URL"
 
@@ -260,12 +261,6 @@ def _fetch_venue_row(
     finally:
         engine.dispose()
     return dict(row) if row else None
-
-
-def _normalize_db_url(db_url: str) -> str:
-    if db_url.startswith("postgres://"):
-        return db_url.replace("postgres://", "postgresql://", 1)
-    return db_url
 
 
 def _resolve_db_url(db_url: Optional[str]) -> Optional[str]:

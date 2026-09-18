@@ -54,7 +54,7 @@ from .demand.scorer import calculate as demand_calc
 from .revenue.predictor import calculate as revenue_calc
 from .revenue.llm_model import calculate as llm_calc
 from .popularity import calculate as popularity_calc, calculate_all as popularity_calc_all
-from .utils.db import persist_popularity_scores, fetch_saved_popularity
+from .utils.db import persist_popularity_scores, fetch_saved_popularity, _normalize_db_url
 from .venue_capacity import calculate as venue_capacity_calc
 from .venue_capacity.resolver import fetch_saved_capacity_resolutions
 
@@ -90,7 +90,7 @@ def _run_scraper_job():
 
             # Get tracked artists for all artist-based scrapers
             from sqlalchemy import create_engine, text as sql_text
-            normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+            normalized = _normalize_db_url(db_url)
             engine = create_engine(normalized)
             with engine.connect() as conn:
                 artists = [dict(r) for r in conn.execute(sql_text('SELECT id, "artistName" FROM artists WHERE active = true')).mappings().all()]
@@ -107,7 +107,7 @@ def _run_scraper_job():
             if not os.environ.get("SERPAPI_KEY"):
                 # Need to fetch artists if not already done above
                 from sqlalchemy import create_engine, text as sql_text
-                normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+                normalized = _normalize_db_url(db_url)
                 engine = create_engine(normalized)
                 with engine.connect() as conn:
                     artists = [dict(r) for r in conn.execute(sql_text('SELECT id, "artistName" FROM artists WHERE active = true')).mappings().all()]
@@ -137,7 +137,7 @@ def _run_venue_capacity_job():
         from .venue_capacity.web_search import search_venue_capacity
         from .venue_capacity.resolver import estimate_capacity
 
-        normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+        normalized = _normalize_db_url(db_url)
         engine = create_engine(normalized)
 
         with engine.connect() as conn:
@@ -219,7 +219,7 @@ def _run_fix_capacities_job():
         from sqlalchemy import create_engine, text as sql_text
         from .venue_capacity.known_venues import lookup_known_capacity
 
-        normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+        normalized = _normalize_db_url(db_url)
         engine = create_engine(normalized)
 
         with engine.connect() as conn:
@@ -259,7 +259,7 @@ def _run_predict_empty_concerts_job():
     try:
         from sqlalchemy import create_engine, text as sql_text
 
-        normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+        normalized = _normalize_db_url(db_url)
         engine = create_engine(normalized)
 
         with engine.connect() as conn:
@@ -338,7 +338,7 @@ def _run_data_validation_job():
     try:
         from sqlalchemy import create_engine, text as sql_text
 
-        normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+        normalized = _normalize_db_url(db_url)
         engine = create_engine(normalized)
         fixed = 0
 
@@ -510,7 +510,7 @@ def _run_popularity_job():
         if not outputs:
             return
 
-        normalized_url = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+        normalized_url = _normalize_db_url(db_url)
         engine = create_engine(normalized_url)
         with engine.begin() as conn:
             for output in outputs:

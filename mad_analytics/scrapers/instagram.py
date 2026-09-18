@@ -294,8 +294,9 @@ def update_artists_in_db(profiles: list[InstagramProfile], artists: list[dict], 
     - platform_metrics — full engagement snapshot for historical tracking
     """
     from sqlalchemy import create_engine, text as sql_text
+    from ..utils.db import _normalize_db_url
 
-    normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+    normalized = _normalize_db_url(db_url)
     engine = create_engine(normalized)
 
     username_map = _get_username_map()
@@ -384,8 +385,9 @@ def run_instagram_scraper_job(db_url: str | None = None) -> dict:
         return {"error": "APIFY_API_TOKEN not set. Get it from https://console.apify.com/settings/integrations", "updated": 0}
 
     from sqlalchemy import create_engine, text as sql_text
+    from ..utils.db import _normalize_db_url
 
-    normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+    normalized = _normalize_db_url(db_url)
     engine = create_engine(normalized)
 
     with engine.connect() as conn:

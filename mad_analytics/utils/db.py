@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -19,11 +20,29 @@ DATABASE_URL_ENV = "DATABASE_URL"
 _POOL_KWARGS = dict(pool_size=3, max_overflow=2, pool_pre_ping=True, pool_recycle=1800)
 _ENGINE: Optional[Engine] = None
 
+# Query-string parameters that are meaningful to Prisma (Node) but that
+# libpq/psycopg2 (Python) doesn't recognize at all -- passing them through
+# unmodified makes psycopg2 refuse to even parse the connection string
+# ("invalid connection option"), not just ignore the unknown key. Node and
+# this Python service read the exact same DATABASE_URL; this only changes
+# what Python's driver is handed, never the .env value Prisma reads.
+_PRISMA_ONLY_QUERY_PARAMS = {"pgbouncer"}
+
 
 def _normalize_db_url(db_url: str) -> str:
     if db_url.startswith("postgres://"):
-        return db_url.replace("postgres://", "postgresql://", 1)
-    return db_url
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+    parts = urlsplit(db_url)
+    if not parts.query:
+        return db_url
+
+    query_pairs = parse_qsl(parts.query, keep_blank_values=True)
+    filtered = [(k, v) for k, v in query_pairs if k.lower() not in _PRISMA_ONLY_QUERY_PARAMS]
+    if filtered == query_pairs:
+        return db_url
+
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(filtered), parts.fragment))
 
 
 def _get_db_url(db_url: Optional[str] = None) -> str:

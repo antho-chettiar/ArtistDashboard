@@ -213,8 +213,9 @@ def fetch_artist_youtube_data(artist_name: str) -> dict:
 def fetch_all_artists(db_url: str) -> list[dict]:
     """Fetch all active artists from the database."""
     from sqlalchemy import create_engine, text as sql_text
+    from ..utils.db import _normalize_db_url
 
-    normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+    normalized = _normalize_db_url(db_url)
     engine = create_engine(normalized)
 
     with engine.connect() as conn:
@@ -234,8 +235,9 @@ def store_youtube_data(artist_id: str, artist_name: str, data: dict, db_url: str
         return False
 
     from sqlalchemy import create_engine, text as sql_text
+    from ..utils.db import _normalize_db_url
 
-    normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
+    normalized = _normalize_db_url(db_url)
     engine = create_engine(normalized)
 
     with engine.begin() as conn:
