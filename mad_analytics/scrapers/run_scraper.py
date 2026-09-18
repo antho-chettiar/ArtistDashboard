@@ -23,22 +23,22 @@ from mad_analytics.scrapers.district import scrape_district
 from mad_analytics.scrapers.setlistfm import scrape_setlistfm
 from mad_analytics.scrapers.songkick import scrape_songkick
 from mad_analytics.scrapers.models import ScrapedConcert
+from mad_analytics.utils.db import get_engine
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def _normalize_db_url(db_url: str) -> str:
-    if db_url.startswith("postgres://"):
-        return db_url.replace("postgres://", "postgresql://", 1)
-    return db_url
-
-
 def store_concerts(concerts: list[ScrapedConcert], db_url: str) -> int:
     """Store scraped concerts in the database, skipping duplicates."""
-    from sqlalchemy import create_engine, text
+    from sqlalchemy import text
 
-    engine = create_engine(_normalize_db_url(db_url))
+    # Dedicated engine (db_url passed explicitly, CLI usage) -- disposed below,
+    # never the shared server-path engine. Also fixes a pre-existing bug: the
+    # old local _normalize_db_url only rewrote postgres:// -> postgresql://
+    # and didn't strip Prisma-only params like pgbouncer=true, so this script
+    # crashed outright against the current DATABASE_URL.
+    engine = get_engine(db_url)
     stored = 0
 
     with engine.begin() as conn:
@@ -46,19 +46,24 @@ def store_concerts(concerts: list[ScrapedConcert], db_url: str) -> int:
             if not concert.date or not concert.artist_name:
                 continue
 
-            # Check for duplicate (same artist + city + date + venue)
+            # Check for duplicate (same artist + city + date). Venue name is
+            # deliberately NOT part of this match: real-world testing across
+            # a dozen artists in this session found every venue-name mismatch
+            # was the *same* real event recorded under two different venue
+            # spellings (e.g. "Hotel Dayal Gateway" vs "Dayal Gateway
+            # Convention Centre"), never two genuinely different same-day
+            # shows -- matching on venue name too was silently letting those
+            # re-spelled duplicates through as if they were new concerts.
             existing = conn.execute(text("""
                 SELECT id FROM concerts
                 WHERE "artistName" = :artist
                   AND city = :city
                   AND "concertDate" = :date
-                  AND ("venueName" = :venue OR :venue = '')
                 LIMIT 1
             """), {
                 "artist": concert.artist_name,
                 "city": concert.city,
                 "date": concert.date,
-                "venue": concert.venue_name or "",
             }).first()
 
             if existing:

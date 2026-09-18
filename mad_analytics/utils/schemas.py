@@ -285,3 +285,43 @@ class LlmPredictorOutput(BaseModel):
     total_revenue_usd: Optional[float] = None
     avg_ticket_price_usd: Optional[float] = None
     exchange_rate: Optional[float] = None
+
+
+# ── Touring History (real precedent, not a formula estimate) ──────────────────
+#
+# Answers "has this artist actually performed in this city before" from real
+# logged concerts -- deliberately NOT derived from Popularity/Demand/Trends,
+# since the whole point is to give feasibility decisions a ground-truth signal
+# that doesn't inherit those formulas' blind spots (see the 2026-09 Diljit
+# Dosanjh calibration incident: he had digital-reach data but zero real
+# concert history, and no formula reweighting could have substituted for that).
+
+class TouringVisit(BaseModel):
+    date: str
+    venue: Optional[str] = None
+
+
+class TouringHistoryOutput(BaseModel):
+    artist_id: str
+    city: str
+    visit_count: int
+    visits: list[TouringVisit] = Field(default_factory=list)
+    first_visit: Optional[str] = None
+    last_visit: Optional[str] = None
+    has_precedent: bool
+    computed_at: str
+
+
+class RepeatVisitRateOutput(BaseModel):
+    """Per-artist (not per-city) -- what fraction of the cities this artist has
+    ever played did they return to more than once. A per-artist-per-city
+    metric like this is deliberately never used to rank different artists'
+    total *volume* against each other (an artist doing 30 small club shows
+    would wrongly outrank one doing 3 sold-out stadiums on raw count) -- this
+    is precedent/consistency for one artist's own history, not a cross-artist
+    demand ranking."""
+    artist_id: str
+    distinct_cities: int
+    repeat_cities: int
+    repeat_rate: float = Field(..., ge=0, le=1)
+    computed_at: str

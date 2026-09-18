@@ -87,7 +87,11 @@ def _parse_setlist_date(date_str: str) -> Optional[str]:
 
 
 def fetch_artist_setlists(artist_name: str, api_key: str, page: int = 1) -> list[ScrapedConcert]:
-    """Fetch setlists (concerts) for an artist."""
+    """Fetch ONE page of setlists (concerts) for an artist. Prefer
+    fetch_all_artist_setlists() below for a complete history -- the
+    Setlist.fm API caps each response at 20 setlists (itemsPerPage),
+    newest first, so calling this alone silently drops everything past
+    an artist's most recent 20 shows for anyone with a longer history."""
     concerts = []
 
     # First find the artist's MBID
@@ -139,6 +143,64 @@ def fetch_artist_setlists(artist_name: str, api_key: str, page: int = 1) -> list
     return concerts
 
 
+def fetch_all_artist_setlists(artist_name: str, api_key: str, max_pages: int = 20) -> list[ScrapedConcert]:
+    """Fetch an artist's FULL setlist history across all pages (20/page),
+    not just the most recent 20. max_pages is a hard safety cap (400 shows)
+    against a runaway loop, not an expected ceiling for this roster."""
+    mbid = _search_artist(artist_name, api_key)
+    if not mbid:
+        logger.debug(f"  Artist not found on Setlist.fm: {artist_name}")
+        return []
+
+    all_concerts: list[ScrapedConcert] = []
+    page = 1
+    while page <= max_pages:
+        time.sleep(0.5)  # Rate limit: 2 req/sec max
+        data = _api_request(f"artist/{mbid}/setlists", {"p": str(page)}, api_key)
+        if not data or not data.get("setlist"):
+            break
+
+        for setlist in data["setlist"]:
+            event_date = _parse_setlist_date(setlist.get("eventDate"))
+            if not event_date:
+                continue
+
+            venue = setlist.get("venue", {})
+            venue_name = venue.get("name", "")
+            city_data = venue.get("city", {})
+            city = city_data.get("name", "")
+            country = city_data.get("country", {}).get("name", "")
+
+            tour_name = setlist.get("tour", {}).get("name", "")
+            event_name = tour_name or f"{artist_name} Live"
+            if venue_name:
+                event_name = f"{artist_name} at {venue_name}"
+
+            all_concerts.append(ScrapedConcert(
+                event_name=event_name,
+                artist_name=artist_name,
+                venue_name=venue_name,
+                city=city,
+                country=country or "Unknown",
+                date=event_date,
+                time=None,
+                price_min=None,
+                price_max=None,
+                currency="INR" if "india" in country.lower() else "USD",
+                source_url=setlist.get("url", ""),
+                source="setlistfm",
+            ))
+
+        total_items = int(data.get("total", 0) or 0)
+        items_per_page = int(data.get("itemsPerPage", 20) or 20)
+        total_pages = -(-total_items // items_per_page) if items_per_page else page  # ceil div
+        if page >= total_pages:
+            break
+        page += 1
+
+    return all_concerts
+
+
 def scrape_setlistfm(artists: list[dict]) -> list[ScrapedConcert]:
     """
     Scrape Setlist.fm for all tracked artists.
@@ -162,7 +224,7 @@ def scrape_setlistfm(artists: list[dict]) -> list[ScrapedConcert]:
             continue
 
         logger.info(f"  Setlist.fm: {name}...")
-        concerts = fetch_artist_setlists(name, api_key)
+        concerts = fetch_all_artist_setlists(name, api_key)
         all_concerts.extend(concerts)
 
         if concerts:
