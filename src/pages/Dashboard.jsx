@@ -83,6 +83,14 @@ function Dashboard() {
 
   const safeTrends = followerTrends || []
 
+  // Latest absolute reading per platform (for the legend chips) -- the chart
+  // itself plots % change so Spotify's streams and the others' followers are
+  // comparable on one axis; the chips show the real current scale alongside.
+  const latestByPlatform = useMemo(() => {
+    const last = safeTrends[safeTrends.length - 1]
+    return last || {}
+  }, [safeTrends])
+
   const marketLabel = artistType === 'indian'
     ? '🇮🇳 Indian'
     : artistType === 'international'
@@ -283,6 +291,9 @@ function Dashboard() {
                   style={{ background: `${p.color}18`, color: p.color, border: `1px solid ${p.color}30` }}>
                   <span className="w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
                   {p.label}
+                  {latestByPlatform[p.key] != null && (
+                    <span style={{ opacity: 0.75 }}>· {formatNumber(latestByPlatform[p.key])}</span>
+                  )}
                 </span>
               ))}
             </div>
@@ -305,9 +316,16 @@ function Dashboard() {
               ))}
             </div>
           </div>
-          <LineChart data={safeTrends} xKey="date" lines={TREND_LINES} height={260}
+          <LineChart data={safeTrends} xKey="date"
+            lines={TREND_LINES.map(p => ({ ...p, key: `${p.key}Pct` }))} height={260}
             margin={{ top: 10, right: 48, left: 48, bottom: 10 }}
-            yDomain={['auto', 'auto']} />
+            yDomain={['auto', 'auto']}
+            yTickFormatter={(v) => `${v > 0 ? '+' : ''}${Math.round(v)}%`}
+            tooltipValueFormatter={(value, entry) => {
+              const rawKey = entry.dataKey.replace('Pct', '')
+              const raw = entry.payload?.[rawKey]
+              return `${value > 0 ? '+' : ''}${value.toFixed(1)}%  (${formatNumber(raw)})`
+            }} />
         </ChartContainer>
 
         {/* Top 10 Artists */}

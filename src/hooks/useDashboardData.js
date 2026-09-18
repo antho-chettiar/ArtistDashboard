@@ -248,6 +248,8 @@ export function useDashboardData(trendDays = 30) {
   // ── Follower trends ───────────────────────────────────────────────────────
   // Merges three platform arrays into: [{ date: 'Jan 2025', instagram, youtube, spotify }]
   // Keyed by full 'Mon YYYY' so months across different years never collide.
+  const PLATFORM_KEYS = ['instagram', 'youtube', 'spotify', 'facebook']
+
   const followerTrends = useMemo(() => {
     const map = {}
 
@@ -268,9 +270,30 @@ export function useDashboardData(trendDays = 30) {
     merge(facebookTrends  || [], 'facebook')
 
     // Daily labels like "Jul 5" sort correctly when parsed with a year.
-    return Object.values(map)
+    const rows = Object.values(map)
       .sort((a, b) => new Date(a.date + ' 2026').getTime() - new Date(b.date + ' 2026').getTime())
       .map(({ _order, ...rest }) => rest)              // strip internal sort key
+
+    // Spotify's streams sit in the tens of billions while Instagram/YouTube/
+    // Facebook followers sit in the hundreds of millions -- plotted on one
+    // shared axis, three of the four lines flatten to zero. Add a "% of this
+    // window's starting value" field per platform so all four trajectories
+    // are visible and comparable on the same axis regardless of absolute
+    // scale; the raw values are kept on the row for the tooltip/legend to
+    // show real numbers alongside the trend shape.
+    const baseline = {}
+    for (const key of PLATFORM_KEYS) {
+      const firstRow = rows.find(r => r[key] > 0)
+      baseline[key] = firstRow ? firstRow[key] : 0
+    }
+    return rows.map(row => {
+      const pct = {}
+      for (const key of PLATFORM_KEYS) {
+        // 0 = unchanged from the window's start, +/- = % growth/decline since then.
+        pct[`${key}Pct`] = baseline[key] > 0 ? (row[key] / baseline[key] - 1) * 100 : 0
+      }
+      return { ...row, ...pct }
+    })
   }, [instagramTrends, youtubeTrends, spotifyTrends, facebookTrends])
 
   // ── Genre transform ───────────────────────────────────────────────────────

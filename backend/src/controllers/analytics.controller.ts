@@ -92,31 +92,51 @@ export const analyticsController = {
           return res.status(200).json({ success: true, data: { trends: JSON.parse(cached) }, cached: true });
         }
 
-        const where: any = { platform: platformUpper };
+        // + a few days of buffer so trimming an incomplete trailing day (below)
+        // never eats into the requested range -- without this filter the query
+        // pulled the platform's ENTIRE history on every chart load just to use
+        // the last few points of it.
+        const dayCutoff = new Date();
+        dayCutoff.setDate(dayCutoff.getDate() - (dayCount + 10));
+
+        const where: any = { platform: platformUpper, metricDate: { gte: dayCutoff } };
         if (artistId) where.artistId = String(artistId);
 
         const rows = await prisma.platformMetric.findMany({
           where,
           orderBy: { metricDate: 'asc' },
-          select: { metricDate: true, followers: true, streams: true },
+          select: { metricDate: true, followers: true, streams: true, artistId: true },
         });
 
         const streamPlatforms = new Set(['SPOTIFY', 'APPLE_MUSIC']);
         const useStreams = streamPlatforms.has(platformUpper);
 
         // Sum across artists per real calendar day (aggregate roster reach).
-        const byDay: Record<string, { total: number; date: Date }> = {};
+        // Also track which artists reported on each day: the scraper ingests
+        // artists one at a time, so "today" typically only has a handful of
+        // rows while it's mid-run. Summing a day where most artists haven't
+        // reported yet makes the chart crash toward zero at the most recent
+        // point even though nothing actually declined -- trimmed below.
+        const byDay: Record<string, { total: number; date: Date; artists: Set<string> }> = {};
         for (const row of rows) {
           const d = new Date(row.metricDate);
           const key = d.toISOString().slice(0, 10); // YYYY-MM-DD
           const value = Number(useStreams ? row.streams : row.followers) || 0;
-          if (!byDay[key]) byDay[key] = { total: 0, date: d };
+          if (!byDay[key]) byDay[key] = { total: 0, date: d, artists: new Set() };
           byDay[key].total += value;
+          byDay[key].artists.add(row.artistId);
         }
 
-        const allDays = Object.values(byDay)
-          .sort((a, b) => a.date.getTime() - b.date.getTime())
-          .map(({ total, date }) => ({
+        const sortedDays = Object.values(byDay).sort((a, b) => a.date.getTime() - b.date.getTime())
+        const maxCoverage = sortedDays.reduce((max, d) => Math.max(max, d.artists.size), 0)
+        // Drop trailing days that haven't reached full artist coverage yet
+        // (today's still-in-progress ingestion) -- but never touch older days,
+        // where lower coverage reflects a real roster change, not a partial run.
+        while (sortedDays.length && sortedDays[sortedDays.length - 1].artists.size < maxCoverage) {
+          sortedDays.pop()
+        }
+
+        const allDays = sortedDays.map(({ total, date }) => ({
             date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), // "Jul 5"
             followers: total,
           }));
@@ -155,6 +175,7 @@ export const analyticsController = {
             metricDate: true,
             followers: true,
             streams: true,
+            artistId: true,
           },
         });
 
@@ -164,25 +185,46 @@ export const analyticsController = {
         const streamPlatforms = new Set(['SPOTIFY', 'APPLE_MUSIC']);
         const useStreams = streamPlatforms.has(platformUpper);
 
-        // Aggregate by "Mon YYYY" so Jan 2024 and Jan 2025 never collide
-        const byMonth: Record<string, { total: number; date: Date }> = {};
-
+        // followers/streams are CUMULATIVE lifetime totals, not daily deltas --
+        // so a month's value must be each artist's latest cumulative reading
+        // within that month (an end-of-month snapshot of the roster), never a
+        // sum of every day's already-cumulative total. Summing ~30 cumulative
+        // readings per artist would inflate every month by its own day-count
+        // (a 31-day month reading ~10% "bigger" than a 28-day one for zero
+        // real reason) and make the current, still-in-progress month look like
+        // it crashed relative to a complete prior month.
+        const latestPerArtistPerMonth: Record<string, { date: Date; value: number }> = {};
         for (const row of rows) {
           const d = new Date(row.metricDate);
-          const key = d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); // "Jan 2025"
+          const monthKey = d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); // "Jan 2025"
+          const key = `${monthKey}::${row.artistId}`;
           const value = Number(useStreams ? row.streams : row.followers) || 0;
-
-          if (!byMonth[key]) {
-            byMonth[key] = { total: 0, date: d };
+          if (!latestPerArtistPerMonth[key] || d.getTime() > latestPerArtistPerMonth[key].date.getTime()) {
+            latestPerArtistPerMonth[key] = { date: d, value };
           }
-          byMonth[key].total += value;
         }
 
-        // Sort chronologically and shape for the chart
-        const trends = Object.entries(byMonth)
-          .sort((a, b) => a[1].date.getTime() - b[1].date.getTime())
-          .map(([label, { total }]) => ({
-            date: label,             // "Jan 2025"
+        const byMonth: Record<string, { total: number; date: Date; artists: number }> = {};
+        for (const [key, { date, value }] of Object.entries(latestPerArtistPerMonth)) {
+          const monthKey = key.split('::')[0]
+          if (!byMonth[monthKey]) byMonth[monthKey] = { total: 0, date, artists: 0 }
+          byMonth[monthKey].total += value
+          byMonth[monthKey].artists += 1
+        }
+
+        const sortedMonths = Object.values(byMonth).sort((a, b) => a.date.getTime() - b.date.getTime())
+        const maxMonthCoverage = sortedMonths.reduce((max, m) => Math.max(max, m.artists), 0)
+        // Same trailing-incompleteness guard as the daily path: don't let a
+        // brand-new month with only a couple of artists reported so far make
+        // the chart look like it just crashed.
+        while (sortedMonths.length && sortedMonths[sortedMonths.length - 1].artists < maxMonthCoverage) {
+          sortedMonths.pop()
+        }
+
+        // Shape for the chart
+        const trends = sortedMonths
+          .map(({ total, date }) => ({
+            date: date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }), // "Jan 2025"
             followers: total,        // key the LineChart uses (kept as 'followers' to match existing chart config)
           }));
 
