@@ -11,7 +11,12 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import { formatNumber } from '../utils/formatters'
 
 
-const GENRES = ['All', 'Bollywood', 'Pop', 'R&B', 'Classical/Fusion']
+// Matches the real genre values now stored on artists.genre (backfilled from
+// Viberate's sub-genre classification, 2026-09) -- the old static list
+// (Bollywood/Pop/R&B/Classical-Fusion) never matched real data for most of
+// these options, and "Pop" would now match zero artists since the roster is
+// tagged with the more specific "Indian Pop"/"Indian Folk" instead.
+const GENRES = ['All', 'Indian Pop', 'Indian Folk']
 
 const PLATFORM_META = {
   instagram:  { label: 'IG', color: '#E1306C' },
