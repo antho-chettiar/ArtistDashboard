@@ -139,8 +139,22 @@ function Dashboard() {
       : allConcerts
   }, [allConcerts, artistIdToType, artistType])
 
-  // Show only the latest 15 concerts in the dashboard list
-  const recentConcerts = useMemo(() => filteredConcerts.slice(0, 10), [filteredConcerts])
+  // Cap at one concert per artist so a single artist's cluster of scheduled
+  // shows (e.g. many future tour dates logged for one artist, none yet for
+  // the rest of the roster) can't crowd out every other artist in this
+  // roster-wide "at a glance" widget -- filteredConcerts is already sorted
+  // most-future/most-recent-first (see useDashboardData.js), so the first
+  // occurrence per artistId is each artist's single most relevant concert.
+  const recentConcerts = useMemo(() => {
+    const seenArtists = new Set()
+    const perArtist = []
+    for (const c of filteredConcerts) {
+      if (seenArtists.has(c.artistId)) continue
+      seenArtists.add(c.artistId)
+      perArtist.push(c)
+    }
+    return perArtist.slice(0, 10)
+  }, [filteredConcerts])
 
   // Count concerts per city (real event counts). Revenue is NOT used here —
   // the imported historical concerts have unknown/NULL revenue, so summing it
