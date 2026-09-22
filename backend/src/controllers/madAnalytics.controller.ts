@@ -127,6 +127,17 @@ export const madAnalyticsController = {
     }
   },
 
+  // Dashboard homepage highlights (spotlight + revisit reminders) -- a
+  // single cheap SQL query on the Python side, no caching layer needed.
+  getDashboardHighlights: async (_req: Request, res: Response) => {
+    try {
+      const result = await madAnalyticsService.getDashboardHighlights();
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      return handleAnalyticsError(res, error, 'getDashboardHighlights');
+    }
+  },
+
   // "Sync Now" (weekly-cache-plus-manual-sync design, 2026-09) — recomputes
   // Popularity right now and writes it into artists.popularity, the value
   // every normal page load reads by default. Not cached itself (the whole

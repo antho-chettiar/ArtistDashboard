@@ -740,6 +740,18 @@ export const madAnalyticsService = {
     }
   },
 
+  // Dashboard homepage highlights (spotlight + revisit reminders) -- see
+  // mad_analytics/touring_history/scorer.py's dashboard_highlights() for the
+  // WHY (a plain fact for a human to act on, not a scored prediction).
+  getDashboardHighlights: async () => {
+    try {
+      return await getAnalytics('/dashboard/highlights');
+    } catch (error) {
+      console.error('Error fetching dashboard highlights from mad_analytics:', error);
+      throw error;
+    }
+  },
+
   // On-demand "Sync Now" (weekly-cache-plus-manual-sync design, 2026-09):
   // recomputes Popularity for every active artist right now and writes it
   // into artists.popularity -- the same column the background scheduler

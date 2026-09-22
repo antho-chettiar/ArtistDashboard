@@ -366,3 +366,27 @@ class FeasibilityOutput(BaseModel):
     total_cities_compared: int
     components: FeasibilityCriteria
     computed_at: str
+
+
+# ── Dashboard Highlights (reminder, not forecast -- 2026-09) ────────────────
+#
+# WHY THIS EXISTS: agreed with Anthony as the honest alternative to a scored
+# "will they sell out" prediction -- a plain fact ("it's been this long since
+# X played Y") that a human decides what to do with, not a number that
+# pretends to know. Computed directly from real concert dates, no formula, no
+# TOPSIS/Popularity call (too expensive to run for a homepage widget and
+# unnecessary for a plain fact).
+
+class TouringHighlight(BaseModel):
+    artist_id: str
+    artist_name: str
+    city: str
+    visit_count: int
+    last_visit: str
+    days_since_last_visit: int
+
+
+class DashboardHighlightsOutput(BaseModel):
+    spotlight: Optional[TouringHighlight] = None            # most-repeated real artist+city pair, roster-wide
+    revisit_reminders: list[TouringHighlight] = Field(default_factory=list)
+    computed_at: str

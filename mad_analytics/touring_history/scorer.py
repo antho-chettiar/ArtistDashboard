@@ -36,7 +36,10 @@ from typing import Optional
 from sqlalchemy import text
 
 from ..utils.db import get_engine
-from ..utils.schemas import RepeatVisitRateOutput, TouringHistoryOutput, TouringVisit
+from ..utils.schemas import (
+    DashboardHighlightsOutput, RepeatVisitRateOutput, TouringHighlight,
+    TouringHistoryOutput, TouringVisit,
+)
 from ..demand.scorer import _normalize_city_key
 
 
@@ -129,5 +132,76 @@ def repeat_visit_rate(
         distinct_cities=distinct_cities,
         repeat_cities=repeat_cities,
         repeat_rate=round(rate, 4),
+        computed_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+# ── Dashboard Highlights (reminder, not forecast -- 2026-09) ────────────────
+#
+# WHY THIS EXISTS: replaces the retired Tickets Sold YTD / Revenue YTD
+# homepage KPIs (removed because real ticket/revenue coverage was too sparse
+# to headline honestly) with something built on data this roster actually
+# has in full: real concert dates. Deliberately NOT a scored prediction --
+# see the module docstring's Tier-1 principle and the explicit 2026-09
+# decision with Anthony to surface "it's been this long since X played Y" as
+# a plain fact for a human to act on, not a fabricated "likely to sell out"
+# style number. One query, no formula, no live Popularity/TOPSIS call.
+DEFAULT_REVISIT_THRESHOLD_DAYS = 545  # ~18 months -- a reasonable touring-cycle gap, not derived from data
+
+
+def dashboard_highlights(
+    revisit_threshold_days: int = DEFAULT_REVISIT_THRESHOLD_DAYS,
+    db_url: Optional[str] = None,
+) -> DashboardHighlightsOutput:
+    """spotlight: the single most-repeated real artist+city pair roster-wide
+    (the strongest real touring-precedent story to headline). revisit_reminders:
+    every artist+city pair whose last visit is more than revisit_threshold_days
+    ago, longest-overdue first, capped at 5."""
+    engine = get_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    'SELECT a."artistName", c."artistId", c.city, c."concertDate" '
+                    'FROM concerts c JOIN artists a ON a.id = c."artistId" '
+                    'WHERE c.city IS NOT NULL AND c."concertDate" IS NOT NULL '
+                    'AND c."concertDate" <= CURRENT_DATE'
+                )
+            ).mappings().all()
+    finally:
+        if db_url is not None:
+            engine.dispose()
+
+    groups: dict[tuple[str, str, str], list] = {}
+    for r in rows:
+        city_key = _normalize_city_key(r["city"] or "")
+        if not city_key:
+            continue
+        key = (r["artistId"], r["artistName"], city_key)
+        groups.setdefault(key, []).append(r["concertDate"])
+
+    today = datetime.now(timezone.utc).date()
+    pairs: list[TouringHighlight] = []
+    for (artist_id, artist_name, city_key), dates in groups.items():
+        dates.sort()
+        last_visit = dates[-1]
+        pairs.append(TouringHighlight(
+            artist_id=artist_id,
+            artist_name=artist_name,
+            city=city_key,
+            visit_count=len(dates),
+            last_visit=last_visit.isoformat(),
+            days_since_last_visit=(today - last_visit).days,
+        ))
+
+    spotlight = max(pairs, key=lambda p: p.visit_count) if pairs else None
+    revisit_reminders = sorted(
+        (p for p in pairs if p.days_since_last_visit > revisit_threshold_days),
+        key=lambda p: -p.days_since_last_visit,
+    )[:5]
+
+    return DashboardHighlightsOutput(
+        spotlight=spotlight,
+        revisit_reminders=revisit_reminders,
         computed_at=datetime.now(timezone.utc).isoformat(),
     )

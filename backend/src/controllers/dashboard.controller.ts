@@ -11,7 +11,7 @@ export const dashboardController = {
       // v2: bumped 2026-09 to invalidate the old cached shape (pre-dates
       // ticketsSoldYTDCount/revenueYTDCount/concertsYTDCount and the
       // real-values-only sum) without needing direct Redis access to flush it.
-      const cacheKey = 'dashboard:kpis:v2';
+      const cacheKey = 'dashboard:kpis:v3';
       const cached = await redis.get(cacheKey);
       if (cached) {
         return res.status(200).json({
@@ -32,6 +32,15 @@ export const dashboardController = {
 
       // Total concerts (all time)
       const totalConcerts = await prisma.concert.count();
+
+      // Data coverage (all-time, not just YTD) -- replaces the old Tickets
+      // Sold YTD / Revenue YTD homepage KPIs, which mostly showed "--" since
+      // real ticket/revenue coverage is sparse. This discloses the actual
+      // coverage as the headline stat instead of hiding it.
+      const concertsWithCapacity = await prisma.concert.count({ where: { capacity: { gt: 0 } } });
+      const concertsWithTicketOrRevenueData = await prisma.concert.count({
+        where: { OR: [{ ticketsSold: { gt: 0 } }, { totalRevenue: { gt: 0 } }] },
+      });
 
       // Concert totals YTD
       const concertsYTD = await prisma.concert.findMany({
@@ -128,6 +137,8 @@ export const dashboardController = {
         revenueYTD,
         revenueYTDCount,
         concertsYTDCount: concertsYTD.length,
+        concertsWithCapacity,
+        concertsWithTicketOrRevenueData,
         avgRoGDaily: avgRoG._avg.rogDaily ? parseFloat(avgRoG._avg.rogDaily.toFixed(2)) : 0,
         topArtistByStreams,
       };

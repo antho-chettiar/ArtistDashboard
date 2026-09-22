@@ -99,6 +99,13 @@ router.post('/ml/popularity', authenticate, madAnalyticsController.getPopularity
 router.get('/ml/popularity/all', authenticate, madAnalyticsController.getAllPopularityScores);
 
 /**
+ * @route GET /api/v1/analytics/ml/dashboard-highlights
+ * @desc Dashboard homepage spotlight + revisit reminders (real touring data, no formula)
+ * @access Public (authenticated)
+ */
+router.get('/ml/dashboard-highlights', authenticate, madAnalyticsController.getDashboardHighlights);
+
+/**
  * @route POST /api/v1/analytics/ml/popularity/all/save
  * @desc Save popularity scores for all artists using ML
  * @access Public (authenticated)

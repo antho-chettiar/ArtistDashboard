@@ -60,6 +60,7 @@ from .utils.db import persist_popularity_scores, fetch_saved_popularity, _normal
 from .venue_capacity import calculate as venue_capacity_calc
 from .venue_capacity.resolver import fetch_saved_capacity_resolutions
 from .feasibility import calculate as feasibility_calc
+from .touring_history import dashboard_highlights
 
 
 # ── Background Scheduler ───────────────────────────────────────────────────────
@@ -739,6 +740,14 @@ def revenue(payload: RevenueInput):
 def feasibility(payload: FeasibilityInput):
     try:
         return feasibility_calc(payload)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/dashboard/highlights")
+def dashboard_highlights_endpoint():
+    try:
+        return dashboard_highlights()
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 

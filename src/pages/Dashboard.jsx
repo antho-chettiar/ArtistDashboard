@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import {
-  Users, Music2, Ticket, DollarSign, TrendingUp,
+  Users, Music2, Ticket, TrendingUp, Building2, History,
 } from 'lucide-react'
 import PageHeader from '../components/ui/PageHeader'
 import KpiCard from '../components/ui/KpiCard'
@@ -34,6 +34,8 @@ const TREND_RANGES = [
   { label: '15D', days: 15 },
   { label: '30D', days: 30 },
 ]
+
+const capitalizeCity = (city = '') => city.charAt(0).toUpperCase() + city.slice(1)
 
 function Dashboard() {
   const { artistType } = useFilterStore()
@@ -79,6 +81,7 @@ function Dashboard() {
         followerTrends = [],
         genres: genreData = [],
         artistIdToType = {},
+        highlights = {},
       } = data || {}
 
   const safeTrends = followerTrends || []
@@ -221,29 +224,22 @@ function Dashboard() {
       delay: 80,
     },
     {
-      // Unknown ≠ zero: imported concerts carry no ticket data, so a 0 here means
-      // "not available", not real zero sales. Show a dash rather than "0".
-      // This total only ever sums concerts with a REAL reported value (see
-      // dashboard.controller.ts) -- the "N of M" subtitle discloses that it's
-      // a partial sum, not the full YTD concert count, whenever coverage is
-      // incomplete.
-      title: 'Tickets Sold YTD',
-      value: (kpis?.ticketsSoldYTD || 0) > 0 ? formatNumber(kpis.ticketsSoldYTD) : '—',
-      subtitle: (kpis?.ticketsSoldYTD || 0) > 0
-        ? (kpis.ticketsSoldYTDCount < kpis.concertsYTDCount ? `From ${kpis.ticketsSoldYTDCount} of ${kpis.concertsYTDCount} concerts` : undefined)
-        : 'Not available',
-      icon: Ticket,
+      // Replaces the old Tickets Sold YTD / Revenue YTD cards (2026-09
+      // dashboard-authenticity redesign) -- those mostly showed "--" since
+      // real ticket/revenue coverage is too sparse to headline honestly.
+      // This surfaces the coverage itself as the useful, always-true stat.
+      title: 'Venue Capacity Coverage',
+      value: `${formatNumber(kpis?.concertsWithCapacity || 0)} / ${formatNumber(filteredConcerts.length)}`,
+      subtitle: 'Concerts with a resolved venue capacity',
+      icon: Building2,
       accentColor: '#34D399',
       delay: 160,
     },
     {
-      // Unknown ≠ zero: revenue is NULL on the imported concerts. Show a dash.
-      title: 'Revenue YTD',
-      value: (kpis?.revenueYTD || 0) > 0 ? formatCurrency(kpis.revenueYTD) : '—',
-      subtitle: (kpis?.revenueYTD || 0) > 0
-        ? (kpis.revenueYTDCount < kpis.concertsYTDCount ? `From ${kpis.revenueYTDCount} of ${kpis.concertsYTDCount} concerts` : undefined)
-        : 'Not available',
-      icon: DollarSign,
+      title: 'Ticket/Revenue Data Coverage',
+      value: `${formatNumber(kpis?.concertsWithTicketOrRevenueData || 0)} / ${formatNumber(filteredConcerts.length)}`,
+      subtitle: 'Concerts with real reported sales data',
+      icon: Ticket,
       accentColor: '#F87171',
       delay: 240,
     },
@@ -358,10 +354,13 @@ function Dashboard() {
           <div className="flex items-start justify-between mb-4">
             <div>
               <h3 className="font-display font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
-                🏆 Top {marketLabel} Artists
+                🏆 Top {marketLabel} Artists by Digital Reach
               </h3>
               <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                Ranked by popularity score
+                {/* 2026-09 dashboard-authenticity redesign: Popularity is
+                    followers/streams/search-trend reach, not live commercial
+                    draw -- see the Feasibility signal below for that. */}
+                Ranked by Popularity (digital/social reach, not live draw)
               </p>
             </div>
             {/* Time filter pills */}
@@ -541,6 +540,75 @@ function Dashboard() {
               ))
             )}
           </div>
+        </div>
+      </div>
+
+      {/* ── Row 3: Touring Spotlight + Revisit Reminders ── */}
+      {/* 2026-09 dashboard-authenticity redesign: a plain fact ("it's been
+          this long since X played Y"), never a scored prediction -- see
+          mad_analytics/touring_history/scorer.py's dashboard_highlights(). */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <div className="glass-card p-5 animate-fade-up"
+          style={{ animationDelay: '320ms', animationFillMode: 'both', opacity: 0 }}>
+          <h3 className="font-display font-semibold text-sm flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            <History size={16} /> Touring Spotlight
+          </h3>
+          <p className="text-xs mt-0.5 mb-4" style={{ color: 'var(--text-muted)' }}>
+            Real, most-repeated artist-city relationship in the roster
+          </p>
+          {highlights?.spotlight ? (
+            <div>
+              <p className="text-lg font-bold font-display" style={{ color: 'var(--text-primary)' }}>
+                {highlights.spotlight.artist_name}
+              </p>
+              <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
+                Played {capitalizeCity(highlights.spotlight.city)} {highlights.spotlight.visit_count} times
+              </p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                Last visit: {formatDate(highlights.spotlight.last_visit)}
+              </p>
+            </div>
+          ) : (
+            <p className="text-sm text-center py-8" style={{ color: 'var(--text-muted)' }}>
+              Not enough concert data yet
+            </p>
+          )}
+        </div>
+
+        <div className="glass-card p-5 animate-fade-up xl:col-span-2"
+          style={{ animationDelay: '360ms', animationFillMode: 'both', opacity: 0 }}>
+          <h3 className="font-display font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+            Worth Revisiting
+          </h3>
+          <p className="text-xs mt-0.5 mb-4" style={{ color: 'var(--text-muted)' }}>
+            A reminder, not a prediction — artist-city pairs it's been a while since a real visit
+          </p>
+          {highlights?.revisit_reminders?.length ? (
+            <div className="space-y-2">
+              {highlights.revisit_reminders.map((r) => (
+                <div key={`${r.artist_id}-${r.city}`}
+                  className="flex items-center justify-between p-3 rounded-xl"
+                  style={{ background: 'var(--bg-secondary)' }}>
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                      {r.artist_name} · {capitalizeCity(r.city)}
+                    </p>
+                    <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                      Last played {formatDate(r.last_visit)} ({r.visit_count} visit{r.visit_count === 1 ? '' : 's'} total)
+                    </p>
+                  </div>
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0"
+                    style={{ background: 'rgba(251,191,36,0.12)', color: 'var(--accent-gold)' }}>
+                    {Math.round(r.days_since_last_visit / 365 * 10) / 10}y ago
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-center py-8" style={{ color: 'var(--text-muted)' }}>
+              No overdue artist-city pairs right now
+            </p>
+          )}
         </div>
       </div>
     </div>

@@ -32,6 +32,20 @@ export function useDashboardData(trendDays = 30) {
     staleTime: 5 * 60 * 1000,
   })
 
+  // ── Dashboard highlights (spotlight + revisit reminders) ───────────────────
+  // A plain fact ("it's been this long since X played Y"), not a scored
+  // prediction -- see mad_analytics/touring_history/scorer.py's
+  // dashboard_highlights() for the WHY.
+  const { data: highlightsData, isLoading: highlightsLoading } = useQuery({
+    queryKey: ['dashboard', 'highlights'],
+    queryFn: async () => {
+      const response = await client.get('/analytics/ml/dashboard-highlights')
+      return response.data?.data || {}
+    },
+    enabled: isAuthenticated(),
+    staleTime: 5 * 60 * 1000,
+  })
+
   // ── Top artists pool ──────────────────────────────────────────────────────
   const { data: topArtistsData, isLoading: topArtistsLoading } = useQuery({
     queryKey: ['dashboard', 'top-artists'],
@@ -170,6 +184,8 @@ export function useDashboardData(trendDays = 30) {
     revenueYTD:          rawKpis.revenueYTD || 0,
     revenueYTDCount:     rawKpis.revenueYTDCount || 0,
     concertsYTDCount:    rawKpis.concertsYTDCount || 0,
+    concertsWithCapacity:            rawKpis.concertsWithCapacity || 0,
+    concertsWithTicketOrRevenueData: rawKpis.concertsWithTicketOrRevenueData || 0,
     avgRoG:             rawKpis.avgRoGDaily ? parseFloat(rawKpis.avgRoGDaily.toFixed(2)) : 0,
     topArtistByStreams:  rawKpis.topArtistByStreams || null,
   } : null
@@ -354,6 +370,7 @@ export function useDashboardData(trendDays = 30) {
       ageData,
       genderData,
       artistIdToType:  artistTypeById,
+      highlights:      highlightsData || {},
     },
     isLoading,
     error,
@@ -363,5 +380,6 @@ export function useDashboardData(trendDays = 30) {
     isTrendsLoading:       instagramLoading || youtubeLoading || spotifyLoading,
     isGenresLoading:       genresLoading,
     isDemographicsLoading: ageLoading || genderLoading,
+    isHighlightsLoading:   highlightsLoading,
   }
 }
