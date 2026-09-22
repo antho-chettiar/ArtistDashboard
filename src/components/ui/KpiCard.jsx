@@ -1,8 +1,14 @@
 import { useEffect, useState } from 'react'
 import RoGBadge from './RoGBadge'
 
+// A "/" (e.g. "143 / 233") is a ratio, not a single animatable count -- the
+// digit-stripping numeric parser below would otherwise merge both numbers
+// into one meaningless value and swallow the separator entirely.
+const isRatioValue = (target) => String(target).includes('/')
+
 function useCountUp(target, duration = 1000) {
   const getDisplayValue = () => {
+    if (isRatioValue(target)) return target
     const numeric = parseFloat(String(target).replace(/[^0-9.]/g, ''))
     return isNaN(numeric) ? target : 0
   }
@@ -10,6 +16,10 @@ function useCountUp(target, duration = 1000) {
   const [value, setValue] = useState(getDisplayValue)
 
   useEffect(() => {
+    if (isRatioValue(target)) {
+      setValue(target)
+      return
+    }
     const numeric = parseFloat(String(target).replace(/[^0-9.]/g, ''))
     if (isNaN(numeric)) {
       const animationFrame = requestAnimationFrame(() => setValue(target))
