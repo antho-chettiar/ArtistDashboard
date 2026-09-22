@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Mic2, Music2,
   Map, Upload, UserCog, ChevronRight,
-  BarChart3
+  BarChart3, Building2
 } from 'lucide-react'
 
 function NavIcon({ icon }) {
@@ -14,6 +14,7 @@ const navItems = [
   { label: 'Dashboard',    path: '/dashboard',      icon: LayoutDashboard },
   { label: 'Artists',      path: '/artists',         icon: Mic2            },
   { label: 'Concerts',     path: '/concerts',        icon: Music2          },
+  { label: 'Venues',       path: '/venues',          icon: Building2       },
   // { label: 'Demographics', path: '/demographics',    icon: Users           },
   { label: 'Analysis',     path: '/analysis',        icon: BarChart3       },
   { label: 'Map View',     path: '/map',             icon: Map             },

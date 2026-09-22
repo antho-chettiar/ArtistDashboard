@@ -106,6 +106,13 @@ router.get('/ml/popularity/all', authenticate, madAnalyticsController.getAllPopu
 router.get('/ml/dashboard-highlights', authenticate, madAnalyticsController.getDashboardHighlights);
 
 /**
+ * @route GET /api/v1/analytics/ml/venue-capacity/known-list
+ * @desc Curated venue capacities (real/verified, vs. the keyword heuristic)
+ * @access Public (authenticated)
+ */
+router.get('/ml/venue-capacity/known-list', authenticate, madAnalyticsController.getKnownVenueCapacities);
+
+/**
  * @route POST /api/v1/analytics/ml/popularity/all/save
  * @desc Save popularity scores for all artists using ML
  * @access Public (authenticated)

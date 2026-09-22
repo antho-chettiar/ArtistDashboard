@@ -752,6 +752,17 @@ export const madAnalyticsService = {
     }
   },
 
+  // Curated venue capacities -- lets the Venues tab show which capacities
+  // are real/verified vs. a keyword heuristic estimate.
+  getKnownVenueCapacities: async () => {
+    try {
+      return await getAnalytics('/venue-capacity/known-list');
+    } catch (error) {
+      console.error('Error fetching known venue capacities from mad_analytics:', error);
+      throw error;
+    }
+  },
+
   // On-demand "Sync Now" (weekly-cache-plus-manual-sync design, 2026-09):
   // recomputes Popularity for every active artist right now and writes it
   // into artists.popularity -- the same column the background scheduler

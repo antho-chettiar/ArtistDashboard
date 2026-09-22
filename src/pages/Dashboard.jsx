@@ -12,6 +12,7 @@ import SyncPopularityButton from '../components/ui/SyncPopularityButton'
 import useFilterStore from '../store/useFilterStore'
 import { useDashboardData } from '../hooks/useDashboardData'
 import { formatNumber, formatCurrency, formatDate } from '../utils/formatters'
+import { classifyVenue } from '../utils/venueClassifier'
 
 const TIME_FILTERS = [
   { label: '6M',  months: 6  },
@@ -142,6 +143,21 @@ function Dashboard() {
       : allConcerts
   }, [allConcerts, artistIdToType, artistType])
 
+  // Venue-type breakdown -- leads with what we DO know (where concerts
+  // actually happen) instead of a bare capacity-verified fraction, which
+  // reads as a failure rate. See Venues.jsx for the full per-city breakdown.
+  const topVenueCategory = useMemo(() => {
+    const withVenue = filteredConcerts.filter(c => c.venue)
+    if (!withVenue.length) return null
+    const counts = {}
+    withVenue.forEach(c => {
+      const { category } = classifyVenue(c.venue)
+      counts[category] = (counts[category] || 0) + 1
+    })
+    const [category, count] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]
+    return { category, count, total: withVenue.length, pct: Math.round((count / withVenue.length) * 100) }
+  }, [filteredConcerts])
+
   // Cap at one concert per artist so a single artist's cluster of scheduled
   // shows (e.g. many future tour dates logged for one artist, none yet for
   // the rest of the roster) can't crowd out every other artist in this
@@ -225,12 +241,16 @@ function Dashboard() {
     },
     {
       // Replaces the old Tickets Sold YTD / Revenue YTD cards (2026-09
-      // dashboard-authenticity redesign) -- those mostly showed "--" since
-      // real ticket/revenue coverage is too sparse to headline honestly.
-      // This surfaces the coverage itself as the useful, always-true stat.
-      title: 'Venue Capacity Coverage',
-      value: `${formatNumber(kpis?.concertsWithCapacity || 0)} / ${formatNumber(filteredConcerts.length)}`,
-      subtitle: 'Concerts with a resolved venue capacity',
+      // dashboard-authenticity redesign). Leads with what we DO know --
+      // where concerts actually happen -- rather than a bare "X verified"
+      // fraction, which reads as a failure rate even though it's honest.
+      // Full per-venue breakdown (capacity, indoor/outdoor) lives on the
+      // Venues tab.
+      title: 'Most Common Venue Type',
+      value: topVenueCategory ? `${topVenueCategory.pct}%` : '—',
+      subtitle: topVenueCategory
+        ? `${topVenueCategory.category} (${topVenueCategory.count} of ${topVenueCategory.total} identified venues)`
+        : 'Not available',
       icon: Building2,
       accentColor: '#34D399',
       delay: 160,

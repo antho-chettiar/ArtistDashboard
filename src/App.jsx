@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard'
 import Artists from './pages/Artists'
 import ArtistProfile from './pages/ArtistProfile'
 import Concerts from './pages/Concerts'
+import Venues from './pages/Venues'
 import ConcertDetail from './pages/ConcertDetail'
 import Demographics from './pages/Demographics'
 import MapView from './pages/MapView'
@@ -51,6 +52,7 @@ function App() {
           <Route path="artists" element={<Artists />} />
           <Route path="artists/:id" element={<ArtistProfile />} />
           <Route path="concerts" element={<Concerts />} />
+          <Route path="venues" element={<Venues />} />
           <Route path="concerts/:id" element={<ConcertDetail />} />
           {/* <Route path="demographics" element={<Demographics />} /> */}
           <Route path="map" element={<MapView />} />

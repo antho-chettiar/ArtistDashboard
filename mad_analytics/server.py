@@ -686,6 +686,18 @@ def venue_capacity_saved(db_url: str | None = Query(default=None)):
         raise HTTPException(status_code=422, detail=str(e))
 
 
+@app.get("/venue-capacity/known-list")
+def venue_capacity_known_list():
+    """The curated KNOWN_VENUES table, so callers (the Venues tab) can show
+    which capacities are real/verified vs. the keyword-heuristic estimate --
+    see venue_capacity/known_venues.py's own docstring for the WHY."""
+    from .venue_capacity.known_venues import KNOWN_VENUES
+    return [
+        {"venue_name": venue, "city": city, "capacity": capacity}
+        for (venue, city), capacity in KNOWN_VENUES.items()
+    ]
+
+
 @app.post("/venue-capacity/enrich")
 def venue_capacity_enrich(dry_run: bool = Query(default=False)):
     """Batch-resolve venue capacities from concert data."""

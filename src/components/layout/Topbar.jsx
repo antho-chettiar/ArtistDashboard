@@ -9,6 +9,7 @@ const pageTitles = {
   '/dashboard':       'Dashboard',
   '/artists':         'Artists',
   '/concerts':        'Concerts',
+  '/venues':          'Venues',
   '/demographics':    'Demographics',
   '/analysis':        'Analysis',
   '/map':             'Map View',
