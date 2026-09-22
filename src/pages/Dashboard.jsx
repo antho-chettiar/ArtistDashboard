@@ -581,7 +581,10 @@ function Dashboard() {
             Worth Revisiting
           </h3>
           <p className="text-xs mt-0.5 mb-4" style={{ color: 'var(--text-muted)' }}>
-            A reminder, not a prediction — artist-city pairs it's been a while since a real visit
+            {/* Our concert data isn't exhaustive -- a long gap here can mean
+                a real gap, or just a show we haven't logged yet. This is a
+                cue to check, never a claim that nothing happened. */}
+            Based on concerts logged in this database, which may be incomplete — a long gap here is a cue to check, not a confirmed fact
           </p>
           {highlights?.revisit_reminders?.length ? (
             <div className="space-y-2">
