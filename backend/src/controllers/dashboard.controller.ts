@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { prisma, redis } from '../utils/database';
-import { calculateConcertRevenue } from '../utils/concertRevenue';
+import { calculateConcertRevenue, toFiniteNumber } from '../utils/concertRevenue';
 
 const CACHE_TTL = 60 * 60; // 1 hour
 
@@ -11,7 +11,7 @@ export const dashboardController = {
       // v2: bumped 2026-09 to invalidate the old cached shape (pre-dates
       // ticketsSoldYTDCount/revenueYTDCount/concertsYTDCount and the
       // real-values-only sum) without needing direct Redis access to flush it.
-      const cacheKey = 'dashboard:kpis:v3';
+      const cacheKey = 'dashboard:kpis:v4';
       const cached = await redis.get(cacheKey);
       if (cached) {
         return res.status(200).json({
@@ -38,8 +38,18 @@ export const dashboardController = {
       // real ticket/revenue coverage is sparse. This discloses the actual
       // coverage as the headline stat instead of hiding it.
       const concertsWithCapacity = await prisma.concert.count({ where: { capacity: { gt: 0 } } });
+      // avgTicketPrice = 1500.00 on every single one of these rows (confirmed
+      // 2026-09, zero exceptions across all 100 -- no independent real sales
+      // record would ever share one exact flat price) is a formula-generated
+      // placeholder (capacity x an assumed sell-through rate x a flat ₹1500
+      // price) baked into ticketsSold/totalRevenue by the original historical
+      // import and mislabeled verificationStatus=VERIFIED. Excluding it is
+      // the honest count until real, source-attributed sales data exists.
       const concertsWithTicketOrRevenueData = await prisma.concert.count({
-        where: { OR: [{ ticketsSold: { gt: 0 } }, { totalRevenue: { gt: 0 } }] },
+        where: {
+          OR: [{ ticketsSold: { gt: 0 } }, { totalRevenue: { gt: 0 } }],
+          NOT: { avgTicketPrice: 1500 },
+        },
       });
 
       // Concert totals YTD
@@ -66,9 +76,12 @@ export const dashboardController = {
       // silent 0, so this total is never inflated-looking-complete when it's
       // actually a partial sum. ticketsSoldYTDCount/revenueYTDCount below let
       // the frontend disclose exactly how many of concertsYTD.length concerts
-      // that total is actually built from.
-      const concertsWithTickets = concertsYTD.filter(c => (c.ticketsSold || 0) > 0);
-      const concertsWithRevenue = concertsYTD.filter(c => calculateConcertRevenue(c) > 0);
+      // that total is actually built from. Also excludes the known
+      // formula-generated avgTicketPrice=1500 placeholder -- see the
+      // concertsWithTicketOrRevenueData comment above for the full WHY.
+      const isRealSalesRecord = (c: { avgTicketPrice: unknown }) => toFiniteNumber(c.avgTicketPrice) !== 1500;
+      const concertsWithTickets = concertsYTD.filter(c => (c.ticketsSold || 0) > 0 && isRealSalesRecord(c));
+      const concertsWithRevenue = concertsYTD.filter(c => calculateConcertRevenue(c) > 0 && isRealSalesRecord(c));
       const ticketsSoldYTD = concertsWithTickets.reduce((sum, concert) => sum + (concert.ticketsSold || 0), 0);
       const revenueYTD = concertsWithRevenue.reduce((sum, concert) => sum + calculateConcertRevenue(concert), 0);
       const ticketsSoldYTDCount = concertsWithTickets.length;
