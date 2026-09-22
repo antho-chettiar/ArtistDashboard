@@ -112,6 +112,17 @@ KNOWN_VENUES: dict[tuple[str, str], int] = {
     ("maharashtra cricket association stadium", "gahunje"): 44000,
     ("indira gandhi indoor stadium", "new delhi"): 14254,
 
+    # India -- cross-verified via background web research, 2026-09 (real
+    # sources per venue, not re-derived from the keyword/city-tier heuristic;
+    # see the research agent's findings in that session for per-venue
+    # sourcing and any range/discrepancy notes).
+    ("balbir singh juneja indoor stadium", "raipur"): 4000,
+    ("nehru indoor stadium", "chennai"): 8000,
+    ("major dhyan chand national stadium", "new delhi"): 16200,
+    ("tata theatre, ncpa", "mumbai"): 1010,
+    ("g. m. c. balayogi athletic stadium", "hyderabad"): 18000,  # Wikipedia infobox; a secondary source cites 30,000
+    ("sardar patel stadium, navrangpura", "ahmedabad"): 45000,  # Wikipedia describes a 40,000-50,000 range; midpoint used
+
     # UAE
     ("expo city dubai", "dubai"): 4000,
     ("coca-cola arena", "dubai"): 17000,
