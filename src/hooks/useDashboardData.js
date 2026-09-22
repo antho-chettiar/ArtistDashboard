@@ -165,8 +165,11 @@ export function useDashboardData(trendDays = 30) {
   const kpis = rawKpis ? {
     totalArtists:       rawKpis.totalArtists || 0,
     totalConcerts:      rawKpis.totalConcerts || 0,
-    ticketsSoldYTD:     rawKpis.ticketsSoldYTD || 0,
-    revenueYTD:         rawKpis.revenueYTD || 0,
+    ticketsSoldYTD:      rawKpis.ticketsSoldYTD || 0,
+    ticketsSoldYTDCount: rawKpis.ticketsSoldYTDCount || 0,
+    revenueYTD:          rawKpis.revenueYTD || 0,
+    revenueYTDCount:     rawKpis.revenueYTDCount || 0,
+    concertsYTDCount:    rawKpis.concertsYTDCount || 0,
     avgRoG:             rawKpis.avgRoGDaily ? parseFloat(rawKpis.avgRoGDaily.toFixed(2)) : 0,
     topArtistByStreams:  rawKpis.topArtistByStreams || null,
   } : null

@@ -223,9 +223,15 @@ function Dashboard() {
     {
       // Unknown ≠ zero: imported concerts carry no ticket data, so a 0 here means
       // "not available", not real zero sales. Show a dash rather than "0".
+      // This total only ever sums concerts with a REAL reported value (see
+      // dashboard.controller.ts) -- the "N of M" subtitle discloses that it's
+      // a partial sum, not the full YTD concert count, whenever coverage is
+      // incomplete.
       title: 'Tickets Sold YTD',
       value: (kpis?.ticketsSoldYTD || 0) > 0 ? formatNumber(kpis.ticketsSoldYTD) : '—',
-      subtitle: (kpis?.ticketsSoldYTD || 0) > 0 ? undefined : 'Not available',
+      subtitle: (kpis?.ticketsSoldYTD || 0) > 0
+        ? (kpis.ticketsSoldYTDCount < kpis.concertsYTDCount ? `From ${kpis.ticketsSoldYTDCount} of ${kpis.concertsYTDCount} concerts` : undefined)
+        : 'Not available',
       icon: Ticket,
       accentColor: '#34D399',
       delay: 160,
@@ -234,7 +240,9 @@ function Dashboard() {
       // Unknown ≠ zero: revenue is NULL on the imported concerts. Show a dash.
       title: 'Revenue YTD',
       value: (kpis?.revenueYTD || 0) > 0 ? formatCurrency(kpis.revenueYTD) : '—',
-      subtitle: (kpis?.revenueYTD || 0) > 0 ? undefined : 'Not available',
+      subtitle: (kpis?.revenueYTD || 0) > 0
+        ? (kpis.revenueYTDCount < kpis.concertsYTDCount ? `From ${kpis.revenueYTDCount} of ${kpis.concertsYTDCount} concerts` : undefined)
+        : 'Not available',
       icon: DollarSign,
       accentColor: '#F87171',
       delay: 240,

@@ -49,8 +49,18 @@ export const dashboardController = {
         },
       });
 
-      const ticketsSoldYTD = concertsYTD.reduce((sum, concert) => sum + (concert.ticketsSold || 0), 0);
-      const revenueYTD = concertsYTD.reduce((sum, concert) => sum + calculateConcertRevenue(concert), 0);
+      // Sum only concerts with a real reported value -- a concert with no
+      // ticketsSold/revenue on record contributes nothing here rather than a
+      // silent 0, so this total is never inflated-looking-complete when it's
+      // actually a partial sum. ticketsSoldYTDCount/revenueYTDCount below let
+      // the frontend disclose exactly how many of concertsYTD.length concerts
+      // that total is actually built from.
+      const concertsWithTickets = concertsYTD.filter(c => (c.ticketsSold || 0) > 0);
+      const concertsWithRevenue = concertsYTD.filter(c => calculateConcertRevenue(c) > 0);
+      const ticketsSoldYTD = concertsWithTickets.reduce((sum, concert) => sum + (concert.ticketsSold || 0), 0);
+      const revenueYTD = concertsWithRevenue.reduce((sum, concert) => sum + calculateConcertRevenue(concert), 0);
+      const ticketsSoldYTDCount = concertsWithTickets.length;
+      const revenueYTDCount = concertsWithRevenue.length;
 
       // Avg RoG across all platforms (last 30 days)
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -111,7 +121,10 @@ export const dashboardController = {
         totalArtists,
         totalConcerts,
         ticketsSoldYTD,
+        ticketsSoldYTDCount,
         revenueYTD,
+        revenueYTDCount,
+        concertsYTDCount: concertsYTD.length,
         avgRoGDaily: avgRoG._avg.rogDaily ? parseFloat(avgRoG._avg.rogDaily.toFixed(2)) : 0,
         topArtistByStreams,
       };
