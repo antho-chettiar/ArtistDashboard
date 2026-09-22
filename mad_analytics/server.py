@@ -44,6 +44,7 @@ from .utils.schemas import (
     PopularityInput,
     LlmPredictorInput,
     VenueCapacityInput,
+    FeasibilityInput,
 )
 # Growth/RoG was archived by product decision (2026-09) — Popularity and Demand
 # no longer depend on it (see their own module docstrings for the rebalanced
@@ -58,6 +59,7 @@ from .popularity import calculate as popularity_calc, calculate_all as popularit
 from .utils.db import persist_popularity_scores, fetch_saved_popularity, _normalize_db_url, get_engine
 from .venue_capacity import calculate as venue_capacity_calc
 from .venue_capacity.resolver import fetch_saved_capacity_resolutions
+from .feasibility import calculate as feasibility_calc
 
 
 # ── Background Scheduler ───────────────────────────────────────────────────────
@@ -729,6 +731,14 @@ def demand(payload: DemandInput):
 def revenue(payload: RevenueInput):
     try:
         return revenue_calc(payload)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.post("/feasibility")
+def feasibility(payload: FeasibilityInput):
+    try:
+        return feasibility_calc(payload)
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 

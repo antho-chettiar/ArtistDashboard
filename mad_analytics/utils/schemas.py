@@ -332,3 +332,37 @@ class RepeatVisitRateOutput(BaseModel):
     repeat_cities: int
     repeat_rate: float = Field(..., ge=0, le=1)
     computed_at: str
+
+
+# ── Feasibility (TOPSIS, Phase C, 2026-09) ──────────────────────────────────
+#
+# "Is this artist feasible for this city" (Anthony, 2026-09) is inherently a
+# RELATIVE question -- TOPSIS needs multiple alternatives to rank against, so
+# this ranks the requested city against every other city this product has
+# real market data for (the NCCS-covered city universe already trusted for
+# City Affinity), for this one artist. See feasibility/topsis.py for the WHY
+# behind each criterion and its weight.
+
+class FeasibilityInput(BaseModel):
+    artist_id: str
+    city: str
+    country: str = Field(default="India")
+
+
+class FeasibilityCriteria(BaseModel):
+    """The four raw (pre-normalization) criterion values used for the
+    REQUESTED city specifically -- for transparency, not for recomputation."""
+    artist_power: float          # Popularity score, 0-100 -- see topsis.py's WHY for why
+    city_affinity: float         # 0-100
+    touring_precedent_visits: int
+    venue_fit_index: float       # 0-100
+
+
+class FeasibilityOutput(BaseModel):
+    artist_id: str
+    city: str
+    score: float = Field(..., ge=0, le=1)      # TOPSIS closeness coefficient
+    rank: int                                   # 1 = most feasible among all compared cities
+    total_cities_compared: int
+    components: FeasibilityCriteria
+    computed_at: str

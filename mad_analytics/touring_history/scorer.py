@@ -81,15 +81,15 @@ def touring_precedent(
     )
 
 
-def repeat_visit_rate(
+def visit_counts_by_city(
     artist_id: str,
     db_url: Optional[str] = None,
-) -> RepeatVisitRateOutput:
-    """Of every city this artist has ever performed in, what fraction did
-    they play more than once. 0.0 if they have zero logged concerts (not
-    fabricated as "average" or renormalized against anything) -- an artist
-    with no history should read as exactly that, not as a plausible middle
-    score."""
+) -> dict[str, int]:
+    """This artist's logged concert count per normalized city, in ONE query --
+    the shared building block for repeat_visit_rate() below and for the
+    feasibility/TOPSIS Touring Precedent criterion (which needs this same
+    breakdown for every candidate city and must not re-fetch the artist's
+    full history once per city, see feasibility/topsis.py)."""
     engine = get_engine(db_url)
     try:
         with engine.connect() as conn:
@@ -107,7 +107,19 @@ def repeat_visit_rate(
         if not key:
             continue
         counts[key] = counts.get(key, 0) + 1
+    return counts
 
+
+def repeat_visit_rate(
+    artist_id: str,
+    db_url: Optional[str] = None,
+) -> RepeatVisitRateOutput:
+    """Of every city this artist has ever performed in, what fraction did
+    they play more than once. 0.0 if they have zero logged concerts (not
+    fabricated as "average" or renormalized against anything) -- an artist
+    with no history should read as exactly that, not as a plausible middle
+    score."""
+    counts = visit_counts_by_city(artist_id, db_url=db_url)
     distinct_cities = len(counts)
     repeat_cities = sum(1 for c in counts.values() if c > 1)
     rate = (repeat_cities / distinct_cities) if distinct_cities > 0 else 0.0
