@@ -86,7 +86,10 @@ export const analyticsController = {
         const platformUpper = String(platform).toUpperCase();
         const dayCount = Math.min(Math.max(parseInt(days as string) || 30, 1), 400);
 
-        const cacheKey = `trends:day:${platformUpper}:${dayCount}:${artistId || 'all'}`;
+        // v2: bumped 2026-09 to invalidate cached trend windows computed
+        // before a platform_metrics cleanup (accidental partial-day rows
+        // from an unintended local scheduler run were removed).
+        const cacheKey = `trends:day:v2:${platformUpper}:${dayCount}:${artistId || 'all'}`;
         const cached = await redis.get(cacheKey);
         if (cached) {
           return res.status(200).json({ success: true, data: { trends: JSON.parse(cached) }, cached: true });
@@ -152,7 +155,8 @@ export const analyticsController = {
         const platformUpper = String(platform).toUpperCase();
         const monthCount = Math.min(parseInt(months as string) || 12, 36);
 
-        const cacheKey = `trends:agg:${platformUpper}:${monthCount}:${artistId || 'all'}`;
+        // v2: same cache-bust as the day-granularity path above.
+        const cacheKey = `trends:agg:v2:${platformUpper}:${monthCount}:${artistId || 'all'}`;
         const cached = await redis.get(cacheKey);
         if (cached) {
           return res.status(200).json({ success: true, data: { trends: JSON.parse(cached) }, cached: true });
