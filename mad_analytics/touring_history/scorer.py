@@ -38,9 +38,10 @@ from sqlalchemy import text
 from ..utils.db import get_engine
 from ..utils.schemas import (
     DashboardHighlightsOutput, RepeatVisitRateOutput, TouringHighlight,
-    TouringHistoryOutput, TouringVisit,
+    TouringHistoryOutput, TouringInsight, TouringVisit,
 )
 from ..demand.scorer import _normalize_city_key
+from ..audience_city.scorer import city_audience_presence
 
 
 def touring_precedent(
@@ -149,20 +150,60 @@ def repeat_visit_rate(
 DEFAULT_REVISIT_THRESHOLD_DAYS = 545  # ~18 months -- a reasonable touring-cycle gap, not derived from data
 
 
+def _as_date(value):
+    """Postgres (production) returns a real `date` for a DATE column;
+    SQLite (this file's own test fixtures) returns plain text -- normalize
+    once here rather than assume the caller's DB backend."""
+    if isinstance(value, str):
+        return datetime.fromisoformat(value[:10]).date()
+    if hasattr(value, "hour"):  # a datetime, not a plain date -- narrow it
+        return value.date()
+    return value
+
+
+def _biggest_verified_show(rows) -> Optional[TouringInsight]:
+    """The single largest-capacity real show in the roster -- a concrete,
+    unambiguous "how big does this roster actually play" fact. Requires both
+    a real venue name and a positive capacity on the same row (no fallback,
+    no estimate substituted just to always have an answer)."""
+    candidates = [r for r in rows if r["venueName"] and (r["capacity"] or 0) > 0]
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda r: r["capacity"])
+    return TouringInsight(
+        insight_type="biggest_show",
+        headline=f'The biggest verified show in this roster: {best["artistName"]} at {best["venueName"]}, {best["city"].title()}',
+        detail=f'{int(best["capacity"]):,} capacity, played {_as_date(best["concertDate"]).strftime("%d %b %Y")}',
+    )
+
+
 def dashboard_highlights(
     revisit_threshold_days: int = DEFAULT_REVISIT_THRESHOLD_DAYS,
     db_url: Optional[str] = None,
 ) -> DashboardHighlightsOutput:
-    """spotlight: the single most-repeated real artist+city pair roster-wide
-    (the strongest real touring-precedent story to headline). revisit_reminders:
-    every artist+city pair whose last visit is more than revisit_threshold_days
-    ago, longest-overdue first, capped at 5."""
+    """highlights: up to 5 distinct, real, plain-fact insights about the
+    roster's actual touring history (most-repeated pair, longest-running
+    relationship, widest reach, biggest verified show, most consistent
+    touring pattern) -- each independently true, none a scored prediction.
+
+    revisit_reminders: artist+city pairs overdue by more than
+    revisit_threshold_days, cross-checked against audience_city's real
+    per-city digital-demand data where available. A long gap alone is NOT
+    evidence of an overlooked opportunity -- an artist can just as easily have
+    stopped drawing real interest in a city as have been merely overlooked.
+    Pairs with a corroborating digital-demand signal are surfaced first (an
+    actual reason to believe it's an oversight); the rest still show, but
+    without a demand_signal_pct their card reads as an open question, not a
+    confirmed opportunity. Widen the elapsed-time candidate pool before this
+    re-rank, or a corroborated-but-shorter-gap pair could never out-rank a
+    much longer, uncorroborated one."""
     engine = get_engine(db_url)
     try:
         with engine.connect() as conn:
             rows = conn.execute(
                 text(
-                    'SELECT a."artistName", c."artistId", c.city, c."concertDate" '
+                    'SELECT a."artistName", c."artistId", c.city, c."concertDate", '
+                    'c."venueName", c.capacity '
                     'FROM concerts c JOIN artists a ON a.id = c."artistId" '
                     'WHERE c.city IS NOT NULL AND c."concertDate" IS NOT NULL '
                     'AND c."concertDate" <= CURRENT_DATE'
@@ -178,12 +219,14 @@ def dashboard_highlights(
         if not city_key:
             continue
         key = (r["artistId"], r["artistName"], city_key)
-        groups.setdefault(key, []).append(r["concertDate"])
+        groups.setdefault(key, []).append(_as_date(r["concertDate"]))
 
     today = datetime.now(timezone.utc).date()
     pairs: list[TouringHighlight] = []
+    first_visits: dict[tuple[str, str, str], "date"] = {}
     for (artist_id, artist_name, city_key), dates in groups.items():
         dates.sort()
+        first_visits[(artist_id, artist_name, city_key)] = dates[0]
         last_visit = dates[-1]
         pairs.append(TouringHighlight(
             artist_id=artist_id,
@@ -194,10 +237,89 @@ def dashboard_highlights(
             days_since_last_visit=(today - last_visit).days,
         ))
 
-    spotlight = max(pairs, key=lambda p: p.visit_count) if pairs else None
-    revisit_reminders = sorted(
+    # ── 1. Most-repeated pair ──
+    highlights: list[TouringInsight] = []
+    most_repeated = max(pairs, key=lambda p: p.visit_count) if pairs else None
+    if most_repeated:
+        highlights.append(TouringInsight(
+            insight_type="most_repeated",
+            headline=f'{most_repeated.artist_name} has played {most_repeated.city.title()} {most_repeated.visit_count} times — the most of any pairing in the roster',
+            detail=f'Last visit {datetime.fromisoformat(most_repeated.last_visit).strftime("%d %b %Y")}',
+        ))
+
+    # ── 2. Longest-running relationship (span, not just count) ──
+    repeat_pairs = [p for p in pairs if p.visit_count > 1]
+    if repeat_pairs:
+        longest = max(
+            repeat_pairs,
+            key=lambda p: (datetime.fromisoformat(p.last_visit).date()
+                           - first_visits[(p.artist_id, p.artist_name, p.city)]).days,
+        )
+        first = first_visits[(longest.artist_id, longest.artist_name, longest.city)]
+        last = datetime.fromisoformat(longest.last_visit).date()
+        years = round((last - first).days / 365.25, 1)
+        highlights.append(TouringInsight(
+            insight_type="longest_relationship",
+            headline=f'{longest.artist_name} has been touring {longest.city.title()} for {years} years',
+            detail=f'First played {first.strftime("%d %b %Y")}, most recently {last.strftime("%d %b %Y")} — {longest.visit_count} visits total',
+        ))
+
+    # ── 3. Widest reach (most distinct cities, one artist) ──
+    artist_cities: dict[str, set[str]] = {}
+    artist_names: dict[str, str] = {}
+    for (artist_id, artist_name, city_key) in groups:
+        artist_names[artist_id] = artist_name
+        artist_cities.setdefault(artist_id, set()).add(city_key)
+    if artist_cities:
+        widest_id = max(artist_cities, key=lambda a: len(artist_cities[a]))
+        widest_count = len(artist_cities[widest_id])
+        if widest_count > 1:
+            highlights.append(TouringInsight(
+                insight_type="widest_reach",
+                headline=f'{artist_names[widest_id]} has performed in {widest_count} different cities — the widest reach in the roster',
+                detail="No other tracked artist has toured that many distinct cities",
+            ))
+
+    # ── 4. Biggest verified show ──
+    biggest_show = _biggest_verified_show(rows)
+    if biggest_show:
+        highlights.append(biggest_show)
+
+    # ── 5. Most consistent touring artist (repeat-rate, min 3 cities so a
+    # 1-for-1 artist can't show a hollow 100%) ──
+    best_consistency = None
+    for artist_id, cities in artist_cities.items():
+        counts = {c: 0 for c in cities}
+        for (aid, _name, city_key), dates in groups.items():
+            if aid == artist_id:
+                counts[city_key] = len(dates)
+        distinct = len(counts)
+        if distinct < 3:
+            continue
+        repeat = sum(1 for c in counts.values() if c > 1)
+        rate = repeat / distinct
+        if best_consistency is None or rate > best_consistency[1]:
+            best_consistency = (artist_id, rate, repeat, distinct)
+    if best_consistency:
+        artist_id, rate, repeat, distinct = best_consistency
+        highlights.append(TouringInsight(
+            insight_type="most_consistent",
+            headline=f'{artist_names[artist_id]} returns to {round(rate * 100)}% of the cities they\'ve ever played',
+            detail=f'{repeat} of {distinct} cities visited more than once — the most consistent touring pattern in the roster',
+        ))
+
+    # ── Revisit reminders, corroborated against real digital-demand data ──
+    overdue = sorted(
         (p for p in pairs if p.days_since_last_visit > revisit_threshold_days),
         key=lambda p: -p.days_since_last_visit,
+    )[:15]  # widen the pool before re-ranking by corroboration, see docstring
+    for p in overdue:
+        presence = city_audience_presence(p.artist_id, p.city, db_url=db_url)
+        if presence.available and presence.monthly_listeners_pct is not None:
+            p.demand_signal_pct = presence.monthly_listeners_pct
+    revisit_reminders = sorted(
+        overdue,
+        key=lambda p: (p.demand_signal_pct is None, -(p.demand_signal_pct or 0), -p.days_since_last_visit),
     )[:5]
 
     # Roster-wide (not per-artist): every distinct city ANY artist has played,
@@ -211,7 +333,7 @@ def dashboard_highlights(
     cities_with_repeat_visit = sum(1 for count in cities_played.values() if count > 1)
 
     return DashboardHighlightsOutput(
-        spotlight=spotlight,
+        highlights=highlights,
         revisit_reminders=revisit_reminders,
         distinct_cities_played=distinct_cities_played,
         cities_with_repeat_visit=cities_with_repeat_visit,

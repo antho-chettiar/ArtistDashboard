@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import {
-  Users, Music2, TrendingUp, Building2, History,
+  Users, Music2, History,
 } from 'lucide-react'
 import PageHeader from '../components/ui/PageHeader'
 import KpiCard from '../components/ui/KpiCard'
@@ -11,7 +11,7 @@ import RoGBadge from '../components/ui/RoGBadge'
 import SyncPopularityButton from '../components/ui/SyncPopularityButton'
 import useFilterStore from '../store/useFilterStore'
 import { useDashboardData } from '../hooks/useDashboardData'
-import { formatNumber, formatCurrency, formatDate } from '../utils/formatters'
+import { formatNumber, formatDate } from '../utils/formatters'
 import { classifyVenue } from '../utils/venueClassifier'
 
 const TIME_FILTERS = [
@@ -37,6 +37,36 @@ const TREND_RANGES = [
 ]
 
 const capitalizeCity = (city = '') => city.charAt(0).toUpperCase() + city.slice(1)
+
+// Full category names (see venueClassifier.js) read fine in a sentence but
+// wrap into a mangled 3-line mess in the chart's fixed-width axis label --
+// shortened purely for the chart tick; topVenueCategory's headline sentence
+// below still uses the full, unambiguous name.
+const VENUE_CATEGORY_SHORT_LABEL = {
+  'Stadium / Arena': 'Stadium/Arena',
+  'Auditorium / Theatre / Hall': 'Auditorium/Theatre',
+  'Educational Institution': 'Educational',
+  'Outdoor Grounds / Park / Lawn': 'Outdoor/Park',
+  'Mall / Corporate / Hotel': 'Mall/Corporate',
+  'Other': 'Other',
+}
+
+const HIGHLIGHT_ICON = {
+  most_repeated: '🔁',
+  longest_relationship: '📈',
+  widest_reach: '🗺️',
+  biggest_show: '🏟️',
+  most_consistent: '🎯',
+}
+
+// A future concert can never have real ticket/revenue data yet -- showing
+// "Not available" for something that structurally cannot exist yet reads as
+// broken, not honest. A countdown is always real and always computable.
+const daysUntil = (dateStr) => {
+  if (!dateStr) return null
+  const diff = Math.ceil((new Date(dateStr) - new Date()) / (1000 * 60 * 60 * 24))
+  return diff
+}
 
 function Dashboard() {
   const { artistType } = useFilterStore()
@@ -75,12 +105,10 @@ function Dashboard() {
   // artistIdToType,
   // } = data || {}
       const {
-        kpis = {},
         topArtistsPool = [],
         allConcerts = [],
         allArtists = [],
         followerTrends = [],
-        genres: genreData = [],
         artistIdToType = {},
         highlights = {},
       } = data || {}
@@ -157,15 +185,19 @@ function Dashboard() {
       counts[category] = (counts[category] || 0) + 1
     })
     return Object.entries(counts)
-      .map(([category, count]) => ({ category, count }))
+      .map(([category, count]) => ({
+        category: VENUE_CATEGORY_SHORT_LABEL[category] || category,
+        fullCategory: category,
+        count,
+      }))
       .sort((a, b) => b.count - a.count)
   }, [filteredConcerts])
 
   const topVenueCategory = useMemo(() => {
     if (!venueCategoryData.length) return null
     const total = venueCategoryData.reduce((sum, v) => sum + v.count, 0)
-    const { category, count } = venueCategoryData[0]
-    return { category, count, total, pct: Math.round((count / total) * 100) }
+    const { fullCategory, count } = venueCategoryData[0]
+    return { category: fullCategory, count, total, pct: Math.round((count / total) * 100) }
   }, [venueCategoryData])
 
   // Cap at one concert per artist so a single artist's cluster of scheduled
@@ -220,22 +252,33 @@ function Dashboard() {
       .sort((a, b) => b.count - a.count)
   }, [filteredConcerts, allArtists])
 
+  // Real, but genuinely coarse: this roster is tagged into only 2 genres, so
+  // a full bar chart for 2 values is mostly empty space. A one-line fact
+  // says the same thing honestly, in less room, and explains WHY it looks
+  // that way instead of leaving it to look broken.
+  const genreSummary = useMemo(() => {
+    if (!concertGenreData.length) return null
+    const total = concertGenreData.reduce((sum, g) => sum + g.count, 0)
+    return concertGenreData
+      .map(g => `${g.genre} (${Math.round((g.count / total) * 100)}%)`)
+      .join(' · ')
+  }, [concertGenreData])
+
   // NOTE: Demographics (age/gender) charts hidden by product decision
   // (Demographics is out of scope for the current Artist Analytics product).
   // useDashboardData() still fetches ageData/genderData internally — only
   // this page's rendering of them was removed.
 
-  const genreChartData = useMemo(() => (genreData || []).map(d => ({
-    genre: d.genre ?? d.name ?? 'Unknown',
-    streams: Number(d.streams ?? d.value ?? d.count ?? 0)
-  })), [genreData])
-
+  // Trimmed to the two counts that are always meaningful on their own, with
+  // no chart to pair them with. Venue Type and Repeat-Visit each moved next
+  // to their own supporting chart below (same card, not a separate tile
+  // scattered elsewhere on the page) -- a number and the chart that explains
+  // it should be adjacent, not just visually similar-looking boxes.
   const KPI_CONFIG = [
     {
       title: 'Total Artists',
       value: totalArtistsCount,
       subtitle: `${marketLabel} artists`,
-      //rog: 8.3,
       icon: Users,
       accentColor: '#818CF8',
       delay: 0,
@@ -244,48 +287,10 @@ function Dashboard() {
       title: 'Total Concerts',
       value: filteredConcerts.length,
       subtitle: 'All time',
-      //rog: 12.5,
       icon: Music2,
       accentColor: '#FBBF24',
       delay: 80,
     },
-    {
-      // Replaces the old Tickets Sold YTD / Revenue YTD cards (2026-09
-      // dashboard-authenticity redesign). Leads with what we DO know --
-      // where concerts actually happen -- rather than a bare "X verified"
-      // fraction, which reads as a failure rate even though it's honest.
-      // Full per-venue breakdown (capacity, indoor/outdoor) lives on the
-      // Venues tab.
-      title: 'Most Common Venue Type',
-      value: topVenueCategory ? `${topVenueCategory.pct}%` : '—',
-      subtitle: topVenueCategory
-        ? `${topVenueCategory.category} (${topVenueCategory.count} of ${topVenueCategory.total} identified venues)`
-        : 'Not available',
-      icon: Building2,
-      accentColor: '#34D399',
-      delay: 160,
-    },
-    {
-      // Replaces Ticket/Revenue Data Coverage (archived 2026-09) -- this
-      // platform genuinely has no real ticket/revenue data, and a
-      // permanently-0 KPI is dead weight, not information. Real touring
-      // reach is a signal this roster actually has in full.
-      title: 'Cities With a Repeat Visit',
-      value: `${formatNumber(highlights?.cities_with_repeat_visit || 0)} / ${formatNumber(highlights?.distinct_cities_played || 0)}`,
-      subtitle: 'Real touring reach across the roster',
-      icon: History,
-      accentColor: '#F87171',
-      delay: 240,
-    },
-    // {
-    //   title: 'Avg Social RoG',
-    //   value: `${kpis?.avgRoG || 0}%`,
-    //   subtitle: 'All platforms',
-    //   rog: kpis?.avgRoG || 0,
-    //   icon: TrendingUp,
-    //   accentColor: '#A78BFA',
-    //   delay: 320,
-    // },
   ]
 
   return (
@@ -320,7 +325,7 @@ function Dashboard() {
       />
 
       {/* ── KPI Strip ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 gap-3 mb-6 max-w-xl">
         {KPI_CONFIG.map((kpi, i) => (
           <KpiCard key={i} {...kpi} />
         ))}
@@ -497,41 +502,77 @@ function Dashboard() {
         </div>
       </div>
 
-      {/* ── Row 2: Concerts by City + Genre Representation + Recent Concerts ── */}
-      {/* NOTE: Audience Age Distribution / Gender Distribution charts hidden
-          by product decision (Demographics is out of scope for the current
-          Artist Analytics product). Data-fetch in useDashboardData() unchanged.
-          The three remaining cards below share one row (previously "Concerts
-          by City" sat alone in a 3-column grid, leaving two columns empty). */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+      {/* ── Row 2: City touring patterns + Venue types ── */}
+      {/* Each headline stat now lives INSIDE the same card as the chart that
+          explains it, not scattered in a KPI strip elsewhere on the page. */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
         <ChartContainer title="Concerts by City" subtitle="Top 10 cities by concert count" delay={150}>
+          <div className="flex items-end gap-3 mb-4 flex-wrap">
+            <p className="font-display font-bold text-3xl" style={{ color: 'var(--text-primary)' }}>
+              {formatNumber(highlights?.cities_with_repeat_visit || 0)}
+              <span className="text-base font-normal" style={{ color: 'var(--text-muted)' }}>
+                {' '}/ {formatNumber(highlights?.distinct_cities_played || 0)}
+              </span>
+            </p>
+            <p className="text-xs pb-1 flex-1" style={{ color: 'var(--text-muted)', minWidth: '160px' }}>
+              cities played have seen the <strong style={{ color: 'var(--text-secondary)' }}>same artist invited back</strong> more than once — not just any concert happening there again
+            </p>
+          </div>
           <BarChart data={concertsByCity} xKey="name" layout="horizontal"
-            bars={[{ key: 'count', label: 'Concerts', color: '#818CF8' }]} height={260} />
+            bars={[{ key: 'count', label: 'Concerts', color: '#818CF8' }]} height={220} />
         </ChartContainer>
 
-        <ChartContainer title="Concert Genre Representation" subtitle="Concerts by artist genre" delay={200}>
-          <BarChart data={concertGenreData} xKey="genre" layout="vertical"
-            bars={[{ key: 'count', label: 'Concerts' }]} multiColor={true} height={260} />
-        </ChartContainer>
-
-        {/* Recent Concerts */}
-        <div className="glass-card p-5 animate-fade-up"
-          style={{ animationDelay: '280ms', animationFillMode: 'both', opacity: 0 }}>
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <h3 className="font-display font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
-                Concerts
-              </h3>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                {marketLabel} Artist events at a glance
+        <ChartContainer title="Venue Type Distribution" subtitle="Classified from venue name — an estimate, not a verified survey" delay={200}>
+          {topVenueCategory && (
+            <div className="flex items-end gap-3 mb-4 flex-wrap">
+              <p className="font-display font-bold text-3xl" style={{ color: 'var(--text-primary)' }}>
+                {topVenueCategory.pct}%
+              </p>
+              <p className="text-xs pb-1 flex-1" style={{ color: 'var(--text-muted)', minWidth: '160px' }}>
+                of identified venues are a <strong style={{ color: 'var(--text-secondary)' }}>{topVenueCategory.category}</strong> ({topVenueCategory.count} of {topVenueCategory.total})
               </p>
             </div>
-            {/* <span className="text-xs px-2.5 py-1 rounded-full font-semibold"
-              style={{ background: 'rgba(99,102,241,0.12)', color: 'var(--accent-indigo)' }}>
-              {filteredConcerts.length} events
-              Upcoming events
-            </span> */}
-          </div>
+          )}
+          <BarChart data={venueCategoryData} xKey="category" layout="vertical"
+            bars={[{ key: 'count', label: 'Concerts' }]} multiColor={true} height={220} />
+        </ChartContainer>
+      </div>
+
+      {/* ── Row 2.5: Genre mix (real, but coarse -- a one-line fact instead of
+          a chart that's mostly empty space) + Next Concert Per Artist ── */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
+        <div className="glass-card p-5 animate-fade-up"
+          style={{ animationDelay: '230ms', animationFillMode: 'both', opacity: 0 }}>
+          <h3 className="font-display font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+            Genre Mix
+          </h3>
+          <p className="text-xs mt-0.5 mb-4" style={{ color: 'var(--text-muted)' }}>
+            By artist, not by concert count
+          </p>
+          {genreSummary ? (
+            <>
+              <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{genreSummary}</p>
+              <p className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>
+                This roster's genre tagging is coarse, not broken — most artists share one broad label, so a bar chart here would mostly show one giant bar next to a sliver.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-center py-8" style={{ color: 'var(--text-muted)' }}>No genre data available</p>
+          )}
+        </div>
+
+        {/* Next Concert Per Artist */}
+        <div className="glass-card p-5 animate-fade-up xl:col-span-2"
+          style={{ animationDelay: '280ms', animationFillMode: 'both', opacity: 0 }}>
+          <h3 className="font-display font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+            Next Concert — Per Artist
+          </h3>
+          <p className="text-xs mt-0.5 mb-4" style={{ color: 'var(--text-muted)' }}>
+            {/* A scheduled show genuinely can't have real ticket/revenue data
+                yet -- a countdown is always real, unlike a "Not available"
+                line that reads as broken rather than honest. */}
+            Nearest scheduled show per {marketLabel} artist — or their most recent one, if nothing's upcoming
+          </p>
 
           <div className="space-y-2 overflow-y-auto pr-2" style={{ maxHeight: '260px' }}>
             {filteredConcerts.length === 0 ? (
@@ -539,53 +580,43 @@ function Dashboard() {
                 No concerts found for selected market
               </p>
             ) : (
-              recentConcerts.map((c, i) => (
-                <div key={c.id}
-                  className="flex items-center gap-3 p-3 rounded-xl transition-all duration-200 cursor-pointer"
-                  onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-secondary)'}
-                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                >
-                  <span className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0"
-                    style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
-                    {i + 1}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
-                      {c.artist}
-                    </p>
-                    <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
-                      {c.city} · {formatDate(c.date)}
-                    </p>
+              recentConcerts.map((c, i) => {
+                const days = daysUntil(c.date)
+                const upcoming = days != null && days >= 0
+                return (
+                  <div key={c.id}
+                    className="flex items-center gap-3 p-3 rounded-xl transition-all duration-200 cursor-pointer"
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-secondary)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <span className="w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0"
+                      style={{ background: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
+                      {i + 1}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
+                        {c.artist}
+                      </p>
+                      <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                        {c.city} · {formatDate(c.date)}
+                      </p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-sm font-bold font-display"
+                        style={{ color: upcoming ? 'var(--accent-indigo)' : 'var(--text-muted)' }}>
+                        {days == null ? '—' : upcoming ? `in ${days}d` : `${Math.abs(days)}d ago`}
+                      </p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        {upcoming ? 'upcoming' : 'most recent'}
+                      </p>
+                    </div>
                   </div>
-                  <div className="text-right flex-shrink-0">
-                    {/* Imported historical concerts often have revenue/tickets
-                        stored as a literal 0 rather than left unset -- treat
-                        0 the same as missing here (matching the Revenue YTD/
-                        Tickets Sold YTD KPI cards above) so we never display
-                        a real concert as if it earned nothing. */}
-                    <p className="text-sm font-bold font-display" style={{ color: 'var(--accent-gold)' }}>
-                      {c.totalRevenue > 0 ? formatCurrency(c.totalRevenue, { country: c.country }) : '—'}
-                    </p>
-                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      {c.ticketsSold > 0 ? `${formatNumber(c.ticketsSold)} tickets` : 'Not available'}
-                    </p>
-                  </div>
-                </div>
-              ))
+                )
+              })
             )}
           </div>
         </div>
       </div>
-
-      {/* ── Row 2.5: Venue Type Distribution ── */}
-      {/* Full breakdown behind the "Most Common Venue Type" KPI card above --
-          leads with what we DO know (where concerts actually happen) instead
-          of a bare capacity-verified fraction. See Venues.jsx for the
-          per-city, per-venue detail including indoor/outdoor and capacity. */}
-      <ChartContainer title="Venue Type Distribution" subtitle="Classified from venue name — an estimate, not a verified survey" delay={230}>
-        <BarChart data={venueCategoryData} xKey="category" layout="vertical"
-          bars={[{ key: 'count', label: 'Concerts' }]} multiColor={true} height={220} />
-      </ChartContainer>
 
       {/* ── Row 3: Touring Spotlight + Revisit Reminders ── */}
       {/* 2026-09 dashboard-authenticity redesign: a plain fact ("it's been
@@ -598,19 +629,23 @@ function Dashboard() {
             <History size={16} /> Touring Spotlight
           </h3>
           <p className="text-xs mt-0.5 mb-4" style={{ color: 'var(--text-muted)' }}>
-            Real, most-repeated artist-city relationship in the roster
+            Real facts pulled straight from logged concert history — no scored prediction
           </p>
-          {highlights?.spotlight ? (
-            <div>
-              <p className="text-lg font-bold font-display" style={{ color: 'var(--text-primary)' }}>
-                {highlights.spotlight.artist_name}
-              </p>
-              <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
-                Played {capitalizeCity(highlights.spotlight.city)} {highlights.spotlight.visit_count} times
-              </p>
-              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                Last visit: {formatDate(highlights.spotlight.last_visit)}
-              </p>
+          {highlights?.highlights?.length ? (
+            <div className="space-y-3.5">
+              {highlights.highlights.map((h, i) => (
+                <div key={i} className="flex items-start gap-2.5">
+                  <span className="text-base flex-shrink-0 leading-tight" aria-hidden="true">
+                    {HIGHLIGHT_ICON[h.insight_type] || '•'}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold leading-snug" style={{ color: 'var(--text-primary)' }}>
+                      {h.headline}
+                    </p>
+                    <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{h.detail}</p>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
             <p className="text-sm text-center py-8" style={{ color: 'var(--text-muted)' }}>
@@ -625,29 +660,41 @@ function Dashboard() {
             Worth Revisiting
           </h3>
           <p className="text-xs mt-0.5 mb-4" style={{ color: 'var(--text-muted)' }}>
-            {/* Our concert data isn't exhaustive -- a long gap here can mean
-                a real gap, or just a show we haven't logged yet. This is a
-                cue to check, never a claim that nothing happened. */}
-            Based on concerts logged in this database, which may be incomplete — a long gap here is a cue to check, not a confirmed fact
+            {/* A long gap alone isn't evidence of an overlooked opportunity --
+                it's equally consistent with real interest having cooled off.
+                Each reminder below is cross-checked against real per-city
+                digital-demand data where it exists, so "worth revisiting" is
+                a claim backed by something more than elapsed time. */}
+            A long gap can mean an oversight, or it can mean real demand has cooled — each one below shows which
           </p>
           {highlights?.revisit_reminders?.length ? (
             <div className="space-y-2">
               {highlights.revisit_reminders.map((r) => (
                 <div key={`${r.artist_id}-${r.city}`}
-                  className="flex items-center justify-between p-3 rounded-xl"
-                  style={{ background: 'var(--bg-secondary)' }}>
-                  <div>
-                    <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-                      {r.artist_name} · {capitalizeCity(r.city)}
-                    </p>
-                    <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                      Last played {formatDate(r.last_visit)} ({r.visit_count} visit{r.visit_count === 1 ? '' : 's'} total)
-                    </p>
+                  className="p-3 rounded-xl" style={{ background: 'var(--bg-secondary)' }}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
+                        {r.artist_name} · {capitalizeCity(r.city)}
+                      </p>
+                      <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                        Last played {formatDate(r.last_visit)} ({r.visit_count} visit{r.visit_count === 1 ? '' : 's'} total)
+                      </p>
+                    </div>
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0"
+                      style={{ background: 'rgba(251,191,36,0.12)', color: 'var(--accent-gold)' }}>
+                      {Math.round(r.days_since_last_visit / 365 * 10) / 10}y ago
+                    </span>
                   </div>
-                  <span className="text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0"
-                    style={{ background: 'rgba(251,191,36,0.12)', color: 'var(--accent-gold)' }}>
-                    {Math.round(r.days_since_last_visit / 365 * 10) / 10}y ago
-                  </span>
+                  {r.demand_signal_pct != null ? (
+                    <p className="text-xs mt-2" style={{ color: '#34D399' }}>
+                      ✓ Real digital demand still here — {r.demand_signal_pct}% of monthly listeners are from {capitalizeCity(r.city)}
+                    </p>
+                  ) : (
+                    <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+                      No corroborating demand signal found — treat this as an open question, not a confirmed opportunity
+                    </p>
+                  )}
                 </div>
               ))}
             </div>

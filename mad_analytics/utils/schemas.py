@@ -397,10 +397,27 @@ class TouringHighlight(BaseModel):
     visit_count: int
     last_visit: str
     days_since_last_visit: int
+    # Only populated for revisit_reminders, from audience_city.city_audience_presence.
+    # A long gap alone is NOT evidence of an overlooked opportunity -- it's equally
+    # consistent with the artist no longer having real pull there. This is the
+    # one piece of real, independent corroboration this platform has for telling
+    # those two cases apart, so a reminder gets to claim "worth revisiting" only
+    # when it's actually present.
+    demand_signal_pct: Optional[float] = None
+
+
+class TouringInsight(BaseModel):
+    """One card in the Touring Spotlight list -- a plain, pre-formatted fact,
+    not a scored prediction. insight_type lets the frontend pick an icon;
+    headline/detail are fully formatted server-side (the date/count math
+    already lives here) so the frontend never re-derives or reformats a number."""
+    insight_type: str
+    headline: str
+    detail: str
 
 
 class DashboardHighlightsOutput(BaseModel):
-    spotlight: Optional[TouringHighlight] = None            # most-repeated real artist+city pair, roster-wide
+    highlights: list[TouringInsight] = Field(default_factory=list)
     revisit_reminders: list[TouringHighlight] = Field(default_factory=list)
     # Replaces the Ticket/Revenue Data Coverage KPI (2026-09) -- a real,
     # always-nonzero signal instead of a permanently-0 metric that reads as
