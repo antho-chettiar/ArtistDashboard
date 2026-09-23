@@ -389,4 +389,9 @@ class TouringHighlight(BaseModel):
 class DashboardHighlightsOutput(BaseModel):
     spotlight: Optional[TouringHighlight] = None            # most-repeated real artist+city pair, roster-wide
     revisit_reminders: list[TouringHighlight] = Field(default_factory=list)
+    # Replaces the Ticket/Revenue Data Coverage KPI (2026-09) -- a real,
+    # always-nonzero signal instead of a permanently-0 metric that reads as
+    # a shortfall rather than useful information.
+    distinct_cities_played: int = 0
+    cities_with_repeat_visit: int = 0
     computed_at: str

@@ -89,7 +89,7 @@ export const analyticsController = {
         // v2: bumped 2026-09 to invalidate cached trend windows computed
         // before a platform_metrics cleanup (accidental partial-day rows
         // from an unintended local scheduler run were removed).
-        const cacheKey = `trends:day:v2:${platformUpper}:${dayCount}:${artistId || 'all'}`;
+        const cacheKey = `trends:day:v3:${platformUpper}:${dayCount}:${artistId || 'all'}`;
         const cached = await redis.get(cacheKey);
         if (cached) {
           return res.status(200).json({ success: true, data: { trends: JSON.parse(cached) }, cached: true });
@@ -111,8 +111,15 @@ export const analyticsController = {
           select: { metricDate: true, followers: true, streams: true, artistId: true },
         });
 
-        const streamPlatforms = new Set(['SPOTIFY', 'APPLE_MUSIC']);
-        const useStreams = streamPlatforms.has(platformUpper);
+        // Always use followers (for Spotify/Apple Music this is really
+        // Monthly Listeners, synced separately from raw streams -- see
+        // sync.ts's followersMetric: 'spotify_listeners') -- never raw
+        // streams here. This chart plots reach/audience-size growth across
+        // 4 platforms on one axis; streams is a lifetime PLAY COUNT (tens of
+        // billions), not a reach metric, and showing it next to Instagram/
+        // YouTube/Facebook's follower counts (millions) misrepresents what's
+        // being compared even though the %-change axis itself still renders.
+        const useStreams = false;
 
         // Sum across artists per real calendar day (aggregate roster reach).
         // Also track which artists reported on each day: the scraper ingests
@@ -156,7 +163,7 @@ export const analyticsController = {
         const monthCount = Math.min(parseInt(months as string) || 12, 36);
 
         // v2: same cache-bust as the day-granularity path above.
-        const cacheKey = `trends:agg:v2:${platformUpper}:${monthCount}:${artistId || 'all'}`;
+        const cacheKey = `trends:agg:v3:${platformUpper}:${monthCount}:${artistId || 'all'}`;
         const cached = await redis.get(cacheKey);
         if (cached) {
           return res.status(200).json({ success: true, data: { trends: JSON.parse(cached) }, cached: true });
@@ -183,11 +190,10 @@ export const analyticsController = {
           },
         });
 
-        // Pick the right metric per platform:
-        //   Spotify / Apple Music → streams
-        //   everything else       → followers
-        const streamPlatforms = new Set(['SPOTIFY', 'APPLE_MUSIC']);
-        const useStreams = streamPlatforms.has(platformUpper);
+        // Always use followers -- see the day-granularity path above for
+        // the WHY (streams is a lifetime play count, not a reach metric,
+        // and doesn't belong on this cross-platform reach comparison).
+        const useStreams = false;
 
         // followers/streams are CUMULATIVE lifetime totals, not daily deltas --
         // so a month's value must be each artist's latest cumulative reading

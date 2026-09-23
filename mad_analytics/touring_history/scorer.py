@@ -200,8 +200,20 @@ def dashboard_highlights(
         key=lambda p: -p.days_since_last_visit,
     )[:5]
 
+    # Roster-wide (not per-artist): every distinct city ANY artist has played,
+    # and how many of those cities have seen a repeat visit from the SAME
+    # artist -- a real, always-computable signal, unlike ticket/revenue data
+    # which this platform genuinely doesn't have.
+    cities_played: dict[str, int] = {}
+    for (_artist_id, _artist_name, city_key), dates in groups.items():
+        cities_played[city_key] = max(cities_played.get(city_key, 0), len(dates))
+    distinct_cities_played = len(cities_played)
+    cities_with_repeat_visit = sum(1 for count in cities_played.values() if count > 1)
+
     return DashboardHighlightsOutput(
         spotlight=spotlight,
         revisit_reminders=revisit_reminders,
+        distinct_cities_played=distinct_cities_played,
+        cities_with_repeat_visit=cities_with_repeat_visit,
         computed_at=datetime.now(timezone.utc).isoformat(),
     )

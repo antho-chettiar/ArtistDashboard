@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import {
-  Users, Music2, Ticket, TrendingUp, Building2, History,
+  Users, Music2, TrendingUp, Building2, History,
 } from 'lucide-react'
 import PageHeader from '../components/ui/PageHeader'
 import KpiCard from '../components/ui/KpiCard'
@@ -145,18 +145,28 @@ function Dashboard() {
 
   // Venue-type breakdown -- leads with what we DO know (where concerts
   // actually happen) instead of a bare capacity-verified fraction, which
-  // reads as a failure rate. See Venues.jsx for the full per-city breakdown.
-  const topVenueCategory = useMemo(() => {
+  // reads as a failure rate. Full breakdown (venueCategoryData) feeds the
+  // chart below; topVenueCategory is just its headline for the KPI card.
+  // See Venues.jsx for the full per-city, per-venue detail.
+  const venueCategoryData = useMemo(() => {
     const withVenue = filteredConcerts.filter(c => c.venue)
-    if (!withVenue.length) return null
+    if (!withVenue.length) return []
     const counts = {}
     withVenue.forEach(c => {
       const { category } = classifyVenue(c.venue)
       counts[category] = (counts[category] || 0) + 1
     })
-    const [category, count] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]
-    return { category, count, total: withVenue.length, pct: Math.round((count / withVenue.length) * 100) }
+    return Object.entries(counts)
+      .map(([category, count]) => ({ category, count }))
+      .sort((a, b) => b.count - a.count)
   }, [filteredConcerts])
+
+  const topVenueCategory = useMemo(() => {
+    if (!venueCategoryData.length) return null
+    const total = venueCategoryData.reduce((sum, v) => sum + v.count, 0)
+    const { category, count } = venueCategoryData[0]
+    return { category, count, total, pct: Math.round((count / total) * 100) }
+  }, [venueCategoryData])
 
   // Cap at one concert per artist so a single artist's cluster of scheduled
   // shows (e.g. many future tour dates logged for one artist, none yet for
@@ -256,10 +266,14 @@ function Dashboard() {
       delay: 160,
     },
     {
-      title: 'Ticket/Revenue Data Coverage',
-      value: `${formatNumber(kpis?.concertsWithTicketOrRevenueData || 0)} / ${formatNumber(filteredConcerts.length)}`,
-      subtitle: 'Concerts with real reported sales data',
-      icon: Ticket,
+      // Replaces Ticket/Revenue Data Coverage (archived 2026-09) -- this
+      // platform genuinely has no real ticket/revenue data, and a
+      // permanently-0 KPI is dead weight, not information. Real touring
+      // reach is a signal this roster actually has in full.
+      title: 'Cities With a Repeat Visit',
+      value: `${formatNumber(highlights?.cities_with_repeat_visit || 0)} / ${formatNumber(highlights?.distinct_cities_played || 0)}`,
+      subtitle: 'Real touring reach across the roster',
+      icon: History,
       accentColor: '#F87171',
       delay: 240,
     },
@@ -562,6 +576,16 @@ function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* ── Row 2.5: Venue Type Distribution ── */}
+      {/* Full breakdown behind the "Most Common Venue Type" KPI card above --
+          leads with what we DO know (where concerts actually happen) instead
+          of a bare capacity-verified fraction. See Venues.jsx for the
+          per-city, per-venue detail including indoor/outdoor and capacity. */}
+      <ChartContainer title="Venue Type Distribution" subtitle="Classified from venue name — an estimate, not a verified survey" delay={230}>
+        <BarChart data={venueCategoryData} xKey="category" layout="vertical"
+          bars={[{ key: 'count', label: 'Concerts' }]} multiColor={true} height={220} />
+      </ChartContainer>
 
       {/* ── Row 3: Touring Spotlight + Revisit Reminders ── */}
       {/* 2026-09 dashboard-authenticity redesign: a plain fact ("it's been
