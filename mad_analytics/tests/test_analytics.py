@@ -1190,6 +1190,37 @@ class TestFeasibilityLanguageFactor:
             )
             assert neutral == revenue_predictor.LANGUAGE_NEUTRAL_FACTOR
 
+    def test_regional_trend_score_wins_over_national_popularity_when_supplied(self):
+        """A strong regional (state-level) reading softens Tier 2 even when
+        national Popularity alone would NOT have cleared the threshold --
+        the more precise, city-specific signal is preferred, not just
+        additive with the national one."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/feas.db"
+            _seed_concerts_table(db_url, [])
+            factor = revenue_predictor._feasibility_language_factor(
+                "artist-1", frozenset({"hindi"}), "Chennai",
+                40.0,  # national popularity alone would NOT trigger Tier 2
+                85.0,  # but a strong regional reading does
+                db_url=db_url,
+            )
+            assert factor == revenue_predictor.LANGUAGE_MISMATCH_SOFTENED_FACTOR
+
+    def test_weak_regional_trend_score_does_not_fall_back_to_national(self):
+        """Once a regional reading is supplied, it's authoritative for Tier
+        2 -- a weak regional score must not let a high national Popularity
+        sneak the softening back in."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/feas.db"
+            _seed_concerts_table(db_url, [])
+            factor = revenue_predictor._feasibility_language_factor(
+                "artist-1", frozenset({"hindi"}), "Chennai",
+                95.0,  # high national popularity
+                20.0,  # but a weak regional reading -- this should win
+                db_url=db_url,
+            )
+            assert factor == revenue_predictor.LANGUAGE_MISMATCH_FACTOR
+
 
 class TestCannibalizationFactor:
     """See revenue/predictor.py's "Cannibalization" section for the WHY."""

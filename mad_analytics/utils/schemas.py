@@ -178,6 +178,11 @@ class RevenueInput(BaseModel):
     # activate; it falls through to the flat Tier 3 heuristic instead of
     # guessing a value.
     popularity_score: Optional[float] = None
+    # Pre-computed only, same reasoning as popularity_score above -- a live
+    # pytrends fetch is too slow/rate-limited to run inline. When supplied,
+    # takes priority over popularity_score for Tier 2 (see
+    # revenue/predictor.py) since it's the more precise, city-specific signal.
+    regional_trend_score: Optional[float] = None
 
     @field_validator("concert")
     @classmethod

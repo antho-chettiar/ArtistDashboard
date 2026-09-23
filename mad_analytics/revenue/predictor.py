@@ -135,7 +135,8 @@ def _build_feature_row(payload: RevenueInput) -> dict:
     # stays a pure function that only reads from feature_dict.
     artist_languages = _artist_languages_for(concert.artist_id)
     features["language_affinity_factor"] = _feasibility_language_factor(
-        concert.artist_id, artist_languages, concert.city, payload.popularity_score
+        concert.artist_id, artist_languages, concert.city,
+        payload.popularity_score, payload.regional_trend_score,
     )
 
     # Price-vs-city-income friction — see the "Price-vs-City-Income Friction"
@@ -286,8 +287,12 @@ def _artist_languages_for(artist_id: str) -> Optional[frozenset[str]]:
 # stronger than any language guess. Agreed hierarchy (Anthony, 2026-09):
 #   1. Real touring precedent for this artist+city -> use it directly,
 #      overriding the language heuristic entirely.
-#   2. No precedent yet, but broad reach (high Popularity) -> soften the
-#      mismatch penalty rather than fully applying an unproven assumption.
+#   2. No precedent yet, but broad reach (high Popularity, OR -- 2026-09 --
+#      high REGIONAL search interest in this city's own state, when supplied)
+#      -> soften the mismatch penalty rather than fully applying an unproven
+#      assumption. Regional interest is preferred when available: it answers
+#      "does fame transcend language HERE" directly for the actual city,
+#      instead of inferring it from a national number.
 #   3. No precedent, no broad reach -> fall back to the flat heuristic above.
 POPULARITY_BROAD_REACH_THRESHOLD = 70.0  # 0-100 scale; only genuinely broad-reach artists get Tier 2
 LANGUAGE_MISMATCH_SOFTENED_FACTOR = 0.90  # halfway between neutral (1.0) and full mismatch (0.80)
@@ -298,6 +303,7 @@ def _feasibility_language_factor(
     artist_languages: Optional[frozenset[str]],
     city: str,
     popularity_score: Optional[float],
+    regional_trend_score: Optional[float] = None,
     db_url: Optional[str] = None,
 ) -> float:
     """Tiered replacement for a bare _language_affinity_factor() call --
@@ -311,13 +317,19 @@ def _feasibility_language_factor(
         return LANGUAGE_MATCH_FACTOR  # Tier 1: real ticket-sold evidence beats a language guess
 
     base_factor = _language_affinity_factor(artist_languages, city)
-    if (
-        base_factor == LANGUAGE_MISMATCH_FACTOR
-        and popularity_score is not None
-        and popularity_score >= POPULARITY_BROAD_REACH_THRESHOLD
-    ):
-        return LANGUAGE_MISMATCH_SOFTENED_FACTOR  # Tier 2
-    return base_factor  # Tier 3 (already match/neutral, or no broad-reach signal available)
+    if base_factor != LANGUAGE_MISMATCH_FACTOR:
+        return base_factor  # already match/neutral -- Tier 2 never upgrades these
+
+    # Tier 2: regional interest (this city's own state) is the more precise
+    # signal and wins when supplied; national Popularity is the fallback
+    # only when regional data wasn't provided at all (never both checked --
+    # that would let a weak national score sneak in after a real regional
+    # reading already said "no").
+    if regional_trend_score is not None:
+        return LANGUAGE_MISMATCH_SOFTENED_FACTOR if regional_trend_score >= POPULARITY_BROAD_REACH_THRESHOLD else base_factor
+    if popularity_score is not None and popularity_score >= POPULARITY_BROAD_REACH_THRESHOLD:
+        return LANGUAGE_MISMATCH_SOFTENED_FACTOR
+    return base_factor  # Tier 3 -- no broad-reach signal available
 
 
 # ── Cannibalization (Phase B, 2026-09) ──────────────────────────────────────
