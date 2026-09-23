@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import client from '../api/client'
 
 export function useAutoPredict(artistId, city, capacity, enabled, options = {}) {
@@ -122,6 +122,108 @@ export function useMadVenueCapacity(venueName, city, enabled, options = {}) {
     enabled,
     staleTime: 5 * 60 * 1000,
     retry: false,
+  })
+}
+
+// Engagement ratios (YouTube like-rate, Spotify follow-rate) -- see
+// mad_analytics/engagement/scorer.py for the WHY each ratio pairs the
+// specific metrics it does, and which platforms (Instagram, Facebook) have
+// no honest ratio available at all (always null, never a fabricated 0%).
+export function useEngagement(artistId, enabled) {
+  return useQuery({
+    queryKey: ['engagement', artistId],
+    queryFn: async () => {
+      if (!artistId) return null
+      const { data } = await client.get('/analytics/ml/engagement', { params: { artist_id: artistId } })
+      return data.data
+    },
+    enabled,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  })
+}
+
+// State-level (NOT city-level) Google Trends search interest -- see
+// mad_analytics/trends/regional.py: Google Trends' public API doesn't go
+// finer than state/region for India, so this is always labelled by the
+// resolved state name, never presented as city-specific.
+export function useMadRegionalTrend(artistName, city, enabled) {
+  return useQuery({
+    queryKey: ['madRegionalTrend', artistName, city],
+    queryFn: async () => {
+      if (!artistName || !city) return null
+      const { data } = await client.get('/analytics/ml/regional-trends', { params: { artist_name: artistName, city } })
+      return data.data
+    },
+    enabled,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  })
+}
+
+// Per-artist repeat-visit rate -- of every city this artist has ever played,
+// what fraction did they return to more than once. See
+// mad_analytics/touring_history/scorer.py's repeat_visit_rate() for the WHY
+// (a real touring-precedent signal, not another Popularity/Demand estimate).
+export function useRepeatVisitRate(artistId, enabled) {
+  return useQuery({
+    queryKey: ['repeatVisitRate', artistId],
+    queryFn: async () => {
+      if (!artistId) return null
+      const { data } = await client.get('/analytics/ml/touring-history/repeat-visit-rate', { params: { artist_id: artistId } })
+      return data.data
+    },
+    enabled,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  })
+}
+
+// TOPSIS-ranked "how feasible is this city for this artist, vs. every other
+// candidate city" -- see mad_analytics/feasibility/topsis.py for the WHY
+// behind each of the 5 criteria (Artist Power, Engagement, City Affinity,
+// Touring Precedent, Venue Fit) and their weights. rank/total_cities_compared
+// reflect the FULL NCCS-covered candidate-city universe, not just whichever
+// city this one call happens to ask about.
+export function useFeasibility(artistId, city, country, enabled) {
+  return useQuery({
+    queryKey: ['feasibility', artistId, city, country],
+    queryFn: async () => {
+      if (!artistId || !city) return null
+      const { data } = await client.post('/analytics/ml/feasibility', {
+        artist_id: artistId,
+        city,
+        country: country || 'India',
+      })
+      return data.data
+    },
+    enabled,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  })
+}
+
+// Fan-out helper: fetches Feasibility for the SAME artist across several
+// candidate cities in parallel (used to build a ranked city-comparison view).
+// Each individual response is still the real, independent TOPSIS output for
+// that one city -- this never reshapes or recomputes anything client-side,
+// it just lets the UI issue several of the single-city calls above at once.
+export function useFeasibilityForCities(artistId, cities, country, enabled) {
+  return useQueries({
+    queries: (cities || []).map((city) => ({
+      queryKey: ['feasibility', artistId, city, country],
+      queryFn: async () => {
+        const { data } = await client.post('/analytics/ml/feasibility', {
+          artist_id: artistId,
+          city,
+          country: country || 'India',
+        })
+        return data.data
+      },
+      enabled: Boolean(enabled && artistId && city),
+      staleTime: 5 * 60 * 1000,
+      retry: false,
+    })),
   })
 }
 

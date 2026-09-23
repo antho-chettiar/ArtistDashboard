@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   TrendingUp, MapPin, DollarSign, Users,
   BarChart3, Zap, Trophy, ArrowRight,
-  Star, Ticket, Music2, Activity
+  Star, Ticket, Music2, Activity, Compass
 } from 'lucide-react'
 import PageHeader from '../components/ui/PageHeader'
 import ChartContainer from '../components/charts/ChartContainer'
@@ -16,13 +16,15 @@ import {
   useMadDemand,
   useMadPopularity,
   useMadLlmPrediction,
+  useMadRegionalTrend,
+  useFeasibilityForCities,
 } from '../hooks/usePredictions'
 // NOTE: useMadGrowth (Growth/RoG) is intentionally no longer imported here — the
 // Growth Score tile was removed from this screen by product decision (RoG is
 // archived, not deleted; see mad_analytics/legacy/growth_calculator.py). The
 // hook itself is left intact in usePredictions.js in case it's needed again.
 
-const TABS = ['Profitability Predictor', 'Artist Comparison']
+const TABS = ['Profitability Predictor', 'Artist Comparison', 'Where To Tour Next']
 
 const CITIES = [
   { name: 'Mumbai', multiplier: 1.4, demand: 92, population: 20700000 },
@@ -148,14 +150,33 @@ function ScoreBar({ label, value, max = 100, color }) {
 }
 
 // Stat box
-function StatBox({ label, value, sub, color, delay = 0 }) {
+function StatBox({ label, value, sub, color, delay = 0, badge }) {
   return (
     <div className="glass-card p-4 animate-fade-up"
       style={{ animationDelay: `${delay}ms`, animationFillMode: 'both', opacity: 0 }}>
-      <p className="text-xs uppercase tracking-widest mb-1" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{label}</p>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <p className="text-xs uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{label}</p>
+        {badge}
+      </div>
       <p className="font-display font-bold text-xl" style={{ color: color || 'var(--text-primary)' }}>{value}</p>
       {sub && <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{sub}</p>}
     </div>
+  )
+}
+
+// Provenance badge — verified (real/event-specific) vs. estimated, matching
+// the exact visual language Venues.jsx already uses for its capacity
+// verified/estimated badges (same rgba backgrounds + colors), so "verified"
+// vs. "estimated" reads identically everywhere in the app.
+function ProvenanceBadge({ verified, label }) {
+  return (
+    <span className="text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0"
+      style={{
+        background: verified ? 'rgba(52,211,153,0.12)' : 'rgba(148,163,184,0.12)',
+        color: verified ? '#34D399' : 'var(--text-muted)',
+      }}>
+      {label || (verified ? 'Verified' : 'Estimated')}
+    </span>
   )
 }
 
@@ -234,6 +255,11 @@ function ProfitabilityPredictor({ artists, concerts }) {
     venueName,
     venueType: 'arena',
   })
+  // State-level (NOT city-level) Google Trends interest -- previously only
+  // consumed internally by the revenue predictor's Tier 2 language-affinity
+  // softening; surfaced here next to Popularity so it's no longer invisible.
+  // Keyed by artist NAME (regional_trend_score's own signature), not id.
+  const regionalTrend = useMadRegionalTrend(artist?.name, selectedCity, Boolean(artist?.name && selectedCity))
   // NOTE: the "Venue Capacity" stat below is sourced from `pred` (the same
   // canonical revenue call above), not a separate resolver call — a separate
   // useMadVenueCapacity call here previously passed the client-side synthetic
@@ -389,7 +415,13 @@ function ProfitabilityPredictor({ artists, concerts }) {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
               <StatBox label="Revenue Potential" value={formatCurrency(pred.totalRevenue, pred.currency)} sub={revenueIsHeuristic ? (pred.dataQuality === 'full' ? 'Heuristic estimate' : 'Heuristic estimate · assumed inputs') : undefined} color="var(--accent-gold)" delay={0} />
               <StatBox label="Est. Tickets Sold" value={formatNumber(pred.ticketsSold)} color="var(--accent-indigo)" delay={80} />
-              <StatBox label="Avg. Ticket Price" value={formatCurrency(pred.atp, pred.currency)} color="var(--accent-green)" delay={160} />
+              <StatBox
+                label="Avg. Ticket Price"
+                value={formatCurrency(pred.atp, pred.currency)}
+                color="var(--accent-green)"
+                delay={160}
+                badge={<ProvenanceBadge verified={!pred.ticketPriceIsEstimated} />}
+              />
               <StatBox
                 label={pred.modelSource ? 'Model Confidence' : 'Projected ROI'}
                 value={pred.modelSource ? `${pred.confidence}%` : `${pred.roi.toFixed(1)}%`}
@@ -439,6 +471,25 @@ function ProfitabilityPredictor({ artists, concerts }) {
               sub={popularity.data?.platform_weights ? 'Entropy weighted' : 'No popularity data'}
               color="var(--accent-green)"
             />
+            {/* Regional (state-level) Google Trends -- deliberately never
+                mislabelled as city-level; Google Trends' public API doesn't
+                resolve finer than state/region for India (see
+                mad_analytics/trends/regional.py). */}
+            <StatBox
+              label="Regional Search Interest"
+              value={
+                !regionalTrend.data ? '—'
+                  : regionalTrend.data.score != null ? `${regionalTrend.data.score.toFixed?.(1) ?? regionalTrend.data.score}`
+                  : 'Not available'
+              }
+              sub={
+                !regionalTrend.data ? 'No regional trend data'
+                  : regionalTrend.data.score != null
+                    ? `State-level search interest in ${regionalTrend.data.state_name || regionalTrend.data.geo_code}`
+                    : `No state-level mapping for ${selectedCity}`
+              }
+              color="var(--accent-indigo)"
+            />
             {/* Renamed from "Signal Completeness" — same High/Medium/Low logic
                 underneath (compute_confidence in demand/scorer.py), just a label a
                 stakeholder reads more naturally as "how much data backed this score." */}
@@ -463,6 +514,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
                   : 'Event-specific')
                 : 'No venue data'}
               color="var(--accent-indigo)"
+              badge={hasModel ? <ProvenanceBadge verified={!pred.capacityIsEstimated} /> : null}
             />
           </div>
 
@@ -908,6 +960,224 @@ function ArtistComparison({ artists, concerts }) {
   )
 }
 
+// ── WHERE TO TOUR NEXT (Feasibility, TOPSIS) ──
+// Surfaces mad_analytics/feasibility/topsis.py — the most complete,
+// decision-grade signal in the system (5 real, weighted criteria) — which
+// previously had a working endpoint nobody in the product could reach.
+// Candidate cities reuse this page's existing CITIES list (already the
+// city universe "Best Cities for {artist}" above compares against); each
+// city gets its own live /feasibility call, run in parallel, and each
+// response still carries its TRUE rank against the full NCCS-covered
+// candidate-city universe (total_cities_compared), not just the cities
+// queried here.
+const FEASIBILITY_CITY_NAMES = CITIES.map(c => c.name)
+
+function CityFeasibility({ artists }) {
+  const [selectedArtist, setArtist] = useState('')
+  const [detailCity, setDetailCity] = useState('')
+
+  const artist = artists.find(a => a.id === selectedArtist)
+
+  const queries = useFeasibilityForCities(
+    selectedArtist,
+    FEASIBILITY_CITY_NAMES,
+    'India',
+    Boolean(selectedArtist)
+  )
+
+  const cityResults = FEASIBILITY_CITY_NAMES.map((city, i) => ({ city, query: queries[i] }))
+  const isLoading = Boolean(selectedArtist) && queries.some(q => q.isLoading || q.isFetching)
+  const succeeded = cityResults
+    .filter(r => r.query.data)
+    .map(r => ({ city: r.city, ...r.query.data }))
+    .sort((x, y) => y.score - x.score)
+  const failedCount = cityResults.filter(r => r.query.isError).length
+  const allFailed = Boolean(selectedArtist) && !isLoading && succeeded.length === 0 && failedCount > 0
+
+  // Auto-select the top-ranked city for the detail panel once results land,
+  // but never overwrite a city the user deliberately clicked on.
+  useEffect(() => {
+    // Wait for every candidate city's call to settle before picking a default
+    // — the 8 calls resolve at different times (each is its own live TOPSIS
+    // computation), so setting this as soon as the FIRST one lands would
+    // "stick" on whichever city happened to answer fastest, not the actual
+    // top-ranked one.
+    if (!isLoading && succeeded.length && !succeeded.some(r => r.city === detailCity)) {
+      setDetailCity(succeeded[0].city)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading, succeeded.length, selectedArtist])
+
+  const active = succeeded.find(r => r.city === detailCity) || succeeded[0] || null
+
+  const chartData = succeeded.map(r => ({ name: r.city, value: Math.round(r.score * 1000) / 10 }))
+
+  return (
+    <div>
+      {/* Selector */}
+      <div className="glass-card p-5 mb-6 animate-fade-up">
+        <h3 className="font-display font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
+          Configure Feasibility Ranking
+        </h3>
+        <div className="max-w-sm">
+          <label className="text-xs font-semibold uppercase tracking-widest block mb-2"
+            style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
+            Select Artist
+          </label>
+          <select
+            value={selectedArtist}
+            onChange={e => { setArtist(e.target.value); setDetailCity('') }}
+            className="w-full rounded-xl px-4 py-3 text-sm outline-none transition-all duration-200"
+            style={{
+              background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+              color: 'var(--text-primary)', fontFamily: 'Satoshi'
+            }}
+          >
+            <option value="">Choose an artist...</option>
+            {artists.map(a => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Empty state */}
+      {!selectedArtist && (
+        <div className="glass-card p-16 text-center animate-fade-up">
+          <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center"
+            style={{ background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.2)' }}>
+            <Compass size={28} style={{ color: '#34D399' }} />
+          </div>
+          <h3 className="font-display font-semibold text-lg mb-2" style={{ color: 'var(--text-primary)' }}>
+            Select an Artist
+          </h3>
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            TOPSIS-ranks candidate cities by real touring precedent, city affinity,
+            venue fit, artist power and engagement — see which city this artist is
+            actually most feasible to tour in next.
+          </p>
+        </div>
+      )}
+
+      {/* Loading */}
+      {selectedArtist && isLoading && (
+        <div className="glass-card p-10 text-center animate-fade-up">
+          <p className="text-sm font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+            Ranking {FEASIBILITY_CITY_NAMES.length} candidate cities for {artist?.name}…
+          </p>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            Each city runs a live TOPSIS computation (including a fresh Popularity /
+            Google Trends read) — this can take up to 30 seconds.
+          </p>
+        </div>
+      )}
+
+      {/* Fully unavailable */}
+      {allFailed && (
+        <div className="glass-card p-6 mb-6 animate-fade-up"
+          style={{ border: '1px solid rgba(245,158,11,0.25)', background: 'rgba(245,158,11,0.06)' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <Zap size={15} style={{ color: 'var(--accent-gold)' }} />
+            <span className="text-sm font-bold" style={{ color: 'var(--accent-gold)' }}>
+              Feasibility ranking unavailable
+            </span>
+          </div>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            The analytics service didn't return a result for any candidate city.
+            No feasibility ranking is shown.
+          </p>
+        </div>
+      )}
+
+      {/* Results */}
+      {selectedArtist && !isLoading && succeeded.length > 0 && (
+        <>
+          {failedCount > 0 && (
+            <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+              {failedCount} of {FEASIBILITY_CITY_NAMES.length} candidate cities couldn't be scored
+              (analytics service unavailable for that request) and are omitted below.
+            </p>
+          )}
+
+          {/* Honest caveat, matching this project's established disclosure tone
+              (see estimatedInputsNote above / Popularity's own docstrings) --
+              Artist Power and Engagement describe the ARTIST, not the city, so
+              they are identical across every row here and contribute nothing
+              to which city ranks higher (see mad_analytics/feasibility/topsis.py). */}
+          <p className="text-xs mb-6 -mt-2" style={{ color: 'var(--text-muted)' }}>
+            Artist Power and Engagement are the same for {artist?.name} in every city below —
+            they measure the artist, not the city, so they mathematically can't move this
+            ranking (see topsis.py). Only when comparing different artists against one fixed
+            city would they start to matter. City Affinity, Touring Precedent and Venue Fit are
+            what actually separates these cities here.
+          </p>
+
+          <ChartContainer
+            title={`Where To Tour Next — ${artist?.name}`}
+            subtitle="TOPSIS closeness score (0–100) across candidate cities — higher is more feasible"
+            delay={0}
+          >
+            <BarChart
+              data={chartData}
+              xKey="name"
+              layout="horizontal"
+              bars={[{ key: 'value', label: 'Feasibility Score', color: '#34D399' }]}
+              height={260}
+            />
+          </ChartContainer>
+
+          {/* Per-city rank chips */}
+          <div className="flex flex-wrap gap-2 mt-4 mb-6">
+            {succeeded.map((r, i) => (
+              <button
+                key={r.city}
+                onClick={() => setDetailCity(r.city)}
+                className="text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200"
+                style={r.city === detailCity ? {
+                  background: 'rgba(52,211,153,0.15)', color: '#34D399', border: '1px solid rgba(52,211,153,0.35)'
+                } : {
+                  background: 'var(--bg-secondary)', color: 'var(--text-muted)', border: '1px solid var(--border)'
+                }}
+              >
+                #{i + 1} {r.city} · {(r.score * 100).toFixed(1)}
+              </button>
+            ))}
+          </div>
+
+          {/* Detail panel for the selected city */}
+          {active && (
+            <div className="glass-card p-5 animate-fade-up">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-display font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+                    {active.city} — Feasibility Breakdown
+                  </h3>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    Ranked #{active.rank} of {active.total_cities_compared} NCCS-covered candidate cities nationally
+                  </p>
+                </div>
+                <div className="px-3 py-1.5 rounded-xl text-right"
+                  style={{ background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.2)' }}>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Closeness Score</p>
+                  <p className="font-display font-bold" style={{ color: '#34D399' }}>{(active.score * 100).toFixed(1)}%</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                <StatBox label="Artist Power" value={active.components.artist_power.toFixed(1)} sub="Popularity · constant here" color="var(--accent-indigo)" />
+                <StatBox label="Engagement" value={`${(active.components.engagement_score * 100).toFixed(2)}%`} sub="Fan-quality ratio · constant here" color="var(--accent-indigo)" />
+                <StatBox label="City Affinity" value={active.components.city_affinity.toFixed(1)} sub="NCCS market activity" color="#818CF8" />
+                <StatBox label="Touring Precedent" value={active.components.touring_precedent_visits} sub={active.components.city_audience_monthly_listeners_pct != null ? `+digital audience boost (${active.components.city_audience_monthly_listeners_pct.toFixed(1)}% monthly listeners)` : 'Real past visits'} color="#FBBF24" />
+                <StatBox label="Venue Fit" value={active.components.venue_fit_index.toFixed(1)} sub="Avg. known venue capacity index" color="#F87171" />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── MAIN PAGE ──
 function Analysis() {
   const [activeTab, setTab] = useState('Profitability Predictor')
@@ -962,13 +1232,14 @@ function Analysis() {
               background: 'transparent'
             }}
           >
-            {tab === 'Profitability Predictor' ? '🎯 ' : '⚔️ '}{tab}
+            {tab === 'Profitability Predictor' ? '🎯 ' : tab === 'Artist Comparison' ? '⚔️ ' : '🧭 '}{tab}
           </button>
         ))}
       </div>
 
       {activeTab === 'Profitability Predictor' && <ProfitabilityPredictor artists={safeArtists} concerts={safeConcerts} />}
       {activeTab === 'Artist Comparison' && <ArtistComparison artists={safeArtists} concerts={safeConcerts} />}
+      {activeTab === 'Where To Tour Next' && <CityFeasibility artists={safeArtists} />}
     </div>
   )
 }

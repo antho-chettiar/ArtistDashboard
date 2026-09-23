@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Building2, Loader2, MapPin, Sun, Home } from 'lucide-react'
+import { Loader2, MapPin, Sun, Home, ShieldCheck } from 'lucide-react'
 import PageHeader from '../components/ui/PageHeader'
 import EmptyState from '../components/ui/EmptyState'
 import { useVenues } from '../hooks/useVenues'
@@ -21,6 +21,22 @@ function Venues() {
   const cities = useMemo(() => {
     const set = new Set(venues.map(v => v.city))
     return ['All', ...[...set].sort()]
+  }, [venues])
+
+  // Roster-wide capacity stat (discussed earlier this session, never
+  // shipped): a simple verified-vs-estimated split across every venue
+  // currently shown, reusing the same isVerifiedCapacity field the per-card
+  // badges below already compute -- so this number and those badges can
+  // never disagree with each other.
+  const capacityStats = useMemo(() => {
+    let verified = 0
+    let estimated = 0
+    venues.forEach(v => {
+      if (v.capacity <= 0) return
+      if (v.isVerifiedCapacity) verified += 1
+      else estimated += 1
+    })
+    return { verified, estimated, total: verified + estimated }
   }, [venues])
 
   // Venue-type breakdown: leads with what we DO know (where concerts
@@ -61,7 +77,24 @@ function Venues() {
 
   return (
     <div className="flex flex-col gap-4 px-6 py-6">
-      <PageHeader title="Venues" subtitle="Every known concert venue, grouped by city" />
+      <PageHeader title="Venues" subtitle="Venues with tracked concerts, plus cross-verified venues in the same cities without one yet" />
+
+      {/* Roster-wide capacity stat -- how much of what's shown below has a
+          cross-verified capacity number vs. a keyword-heuristic estimate. */}
+      <div className="glass-card p-5 flex flex-wrap items-center gap-6">
+        <div className="flex items-center gap-2">
+          <ShieldCheck size={18} style={{ color: '#34D399' }} />
+          <span className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>{capacityStats.verified}</span>
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>verified capacity</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>{capacityStats.estimated}</span>
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>estimated capacity</span>
+        </div>
+        <p className="text-xs ml-auto" style={{ color: 'var(--text-muted)' }}>
+          {capacityStats.total} of {venues.length} venues shown have a capacity figure at all
+        </p>
+      </div>
 
       {/* Venue-type breakdown -- the honest replacement for a bare capacity-
           coverage fraction (see Dashboard's KPI row). */}
@@ -114,7 +147,11 @@ function Venues() {
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {cityVenues.map(v => (
                 <div key={`${v.venueName}-${v.city}`} className="p-3 rounded-xl"
-                  style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+                  style={{
+                    background: 'var(--bg-secondary)',
+                    border: v.noTrackedConcerts ? '1px dashed var(--border)' : '1px solid var(--border)',
+                    opacity: v.noTrackedConcerts ? 0.7 : 1,
+                  }}>
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{v.venueName}</p>
                     {v.isOutdoor !== null && (
@@ -127,9 +164,15 @@ function Venues() {
                     {v.category}
                   </p>
                   <div className="flex items-center justify-between mt-2">
-                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      {v.concertCount} concert{v.concertCount === 1 ? '' : 's'}
-                    </span>
+                    {v.noTrackedConcerts ? (
+                      <span className="text-xs italic" style={{ color: 'var(--text-muted)' }}>
+                        No tracked concert yet
+                      </span>
+                    ) : (
+                      <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        {v.concertCount} concert{v.concertCount === 1 ? '' : 's'}
+                      </span>
+                    )}
                     {v.capacity > 0 ? (
                       <span className="text-xs font-bold px-2 py-0.5 rounded-full"
                         style={{

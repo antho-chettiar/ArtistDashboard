@@ -201,6 +201,12 @@ export interface DemandPayload {
   days_since_last_show?: number;
 }
 
+export interface FeasibilityPayload {
+  artist_id: string;
+  city: string;
+  country?: string;
+}
+
 export interface VenueCapacityPayload {
   venue_name: string;
   city?: string;
@@ -763,6 +769,36 @@ export const madAnalyticsService = {
     }
   },
 
+  // State-level (NOT city-level) Google Trends search interest -- see
+  // mad_analytics/trends/regional.py for why this can never be sharper than
+  // state/region for India. Was previously only consumed internally by the
+  // revenue predictor's Tier 2 softening; proxied here so the Analysis page
+  // can show the same real signal instead of it being invisible.
+  getRegionalTrend: async (artistName: string, city: string) => {
+    try {
+      return await getAnalytics(
+        `/regional-trends?artist_name=${encodeURIComponent(artistName)}&city=${encodeURIComponent(city)}`
+      );
+    } catch (error) {
+      console.error('Error fetching regional trend from mad_analytics:', error);
+      throw error;
+    }
+  },
+
+  // Per-artist repeat-visit rate (of every city this artist has played, what
+  // fraction did they return to more than once) -- see
+  // mad_analytics/touring_history/scorer.py for the WHY. Previously only
+  // wired roster-wide via dashboard-highlights; proxied per-artist here for
+  // the Artist Profile page.
+  getRepeatVisitRate: async (artistId: string) => {
+    try {
+      return await getAnalytics(`/touring-history/repeat-visit-rate?artist_id=${encodeURIComponent(artistId)}`);
+    } catch (error) {
+      console.error('Error fetching repeat-visit rate from mad_analytics:', error);
+      throw error;
+    }
+  },
+
   // Curated venue capacities -- lets the Venues tab show which capacities
   // are real/verified vs. a keyword heuristic estimate.
   getKnownVenueCapacities: async () => {
@@ -770,6 +806,27 @@ export const madAnalyticsService = {
       return await getAnalytics('/venue-capacity/known-list');
     } catch (error) {
       console.error('Error fetching known venue capacities from mad_analytics:', error);
+      throw error;
+    }
+  },
+
+  // TOPSIS-ranked "how feasible is this city for this artist, vs. every
+  // other NCCS-covered candidate city" -- see mad_analytics/feasibility/
+  // topsis.py for the WHY behind each of the 5 criteria and their weights.
+  // Same extended timeout as Popularity/Revenue above: calculate() always
+  // runs a live Popularity computation (Google Trends) as part of the
+  // Artist Power criterion, which reliably exceeds the default timeout.
+  getFeasibility: async (payload: FeasibilityPayload) => {
+    try {
+      if (!payload.artist_id) throw new Error('artist_id is required');
+      if (!payload.city) throw new Error('city is required');
+      return await postAnalytics('/feasibility', {
+        artist_id: payload.artist_id,
+        city: payload.city,
+        country: payload.country || DEFAULT_COUNTRY,
+      }, ANALYTICS_EXTENDED_TIMEOUT_MS);
+    } catch (error) {
+      console.error('Error fetching feasibility score from mad_analytics:', error);
       throw error;
     }
   },

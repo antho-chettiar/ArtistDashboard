@@ -120,6 +120,29 @@ router.get('/ml/venue-capacity/known-list', authenticate, madAnalyticsController
 router.get('/ml/engagement', authenticate, madAnalyticsController.getEngagement);
 
 /**
+ * @route GET /api/v1/analytics/ml/regional-trends?artist_name=...&city=...
+ * @desc State-level (NOT city-level) Google Trends search interest -- see
+ *       mad_analytics/trends/regional.py for the granularity limitation
+ * @access Public (authenticated)
+ */
+router.get('/ml/regional-trends', authenticate, madAnalyticsController.getRegionalTrend);
+
+/**
+ * @route GET /api/v1/analytics/ml/touring-history/repeat-visit-rate?artist_id=...
+ * @desc Per-artist repeat-visit rate (of cities played, fraction revisited)
+ * @access Public (authenticated)
+ */
+router.get('/ml/touring-history/repeat-visit-rate', authenticate, madAnalyticsController.getRepeatVisitRate);
+
+/**
+ * @route POST /api/v1/analytics/ml/feasibility
+ * @desc TOPSIS-ranked city feasibility for one artist against every other
+ *       NCCS-covered candidate city -- see mad_analytics/feasibility/topsis.py
+ * @access Public (authenticated)
+ */
+router.post('/ml/feasibility', authenticate, madAnalyticsController.getFeasibility);
+
+/**
  * @route POST /api/v1/analytics/ml/popularity/all/save
  * @desc Save popularity scores for all artists using ML
  * @access Public (authenticated)

@@ -1,16 +1,17 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, MapPin, Music, TrendingUp, DollarSign, Users, Ticket } from 'lucide-react'
+import { ArrowLeft, MapPin, Music, TrendingUp, DollarSign, Users, Ticket, Youtube, Repeat } from 'lucide-react'
 import PageHeader from '../components/ui/PageHeader'
 import RoGBadge from '../components/ui/RoGBadge'
 import ChartContainer from '../components/charts/ChartContainer'
 import LineChart from '../components/charts/LineChart'
 import EmptyState from '../components/ui/EmptyState'
 import client from '../api/client'
-import { formatNumber, formatCurrency, formatDate } from '../utils/formatters'
+import { formatNumber, formatCurrency, formatDate, formatPercent } from '../utils/formatters'
 import ViberateTrends from '../components/viberate/ViberateTrends'
 import ScoreBreakdown from '../components/viberate/ScoreBreakdown'
+import { useEngagement, useRepeatVisitRate } from '../hooks/usePredictions'
 
 // NOTE: 'Demographics' tab hidden by product decision (Demographics is out of
 // scope for the current Artist Analytics product). The underlying data-fetch
@@ -82,6 +83,14 @@ function ArtistProfile() {
     enabled: !!id,
   })
 
+
+  // Engagement ratios (true-fan proxy, real ratios or honest nulls -- see
+  // mad_analytics/engagement/scorer.py) and per-artist repeat-visit rate
+  // (real touring precedent -- see mad_analytics/touring_history/scorer.py).
+  // Both fetched independently of the artist/concerts queries above so a
+  // slow/unavailable analytics call never blocks the rest of the page.
+  const engagement = useEngagement(id, !!id)
+  const repeatVisit = useRepeatVisitRate(id, !!id)
 
   const isLoading = artistLoading || concertsLoading
   const error = artistError
@@ -305,6 +314,100 @@ function ArtistProfile() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Engagement & Touring Precedent — real, already-computed signals that
+          previously had zero frontend presence (2026-09 display-gap audit).
+          "Not available" is rendered explicitly wherever the underlying
+          metric is genuinely unavailable (Instagram/Facebook engagement have
+          no honest ratio at all — see mad_analytics/engagement/scorer.py) —
+          never a guessed 0% standing in for missing data. */}
+      <div className="glass-card p-5 mb-6 animate-fade-up">
+        <h3 className="font-display font-semibold text-sm mb-1" style={{ color: 'var(--text-primary)' }}>
+          Engagement & Touring Precedent
+        </h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+          True-fan engagement ratios and real repeat-booking history — not another popularity estimate
+        </p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          {[
+            {
+              label: 'YouTube Like Rate',
+              rate: engagement.data?.youtube_like_rate,
+              icon: Youtube,
+              color: '#FF0000',
+            },
+            {
+              label: 'Spotify Follow Rate',
+              rate: engagement.data?.spotify_follow_rate,
+              icon: TrendingUp,
+              color: '#1DB954',
+            },
+            {
+              label: 'Instagram Engagement',
+              rate: engagement.data?.instagram_engagement_rate,
+              icon: Users,
+              color: '#E1306C',
+            },
+            {
+              label: 'Facebook Engagement',
+              rate: engagement.data?.facebook_engagement_rate,
+              icon: Users,
+              color: '#1877F2',
+            },
+          ].map((stat) => {
+            const isAvailable = stat.rate != null
+            return (
+              <div key={stat.label} className="rounded-xl p-3"
+                style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <stat.icon size={12} style={{ color: stat.color }} />
+                  <p className="text-xs uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
+                    {stat.label}
+                  </p>
+                </div>
+                <p className="font-display font-bold text-base"
+                  style={{
+                    color: isAvailable ? 'var(--text-primary)' : 'var(--text-muted)',
+                    fontStyle: isAvailable ? 'normal' : 'italic',
+                  }}>
+                  {!engagement.data ? '—' : isAvailable ? formatPercent(stat.rate) : 'Not available'}
+                </p>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Repeat-visit rate: real numbers first (per the honest-disclosure
+            discipline — a bare % on a small sample is easy to misread), the
+            rate itself as supporting context. */}
+        <div className="rounded-xl p-3 flex items-center gap-3"
+          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+            style={{ background: 'rgba(99,102,241,0.12)' }}>
+            <Repeat size={16} style={{ color: 'var(--accent-indigo)' }} />
+          </div>
+          <div>
+            {!repeatVisit.data ? (
+              <p className="text-sm font-semibold" style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                {repeatVisit.isLoading ? 'Loading touring history…' : 'Not available'}
+              </p>
+            ) : repeatVisit.data.distinct_cities === 0 ? (
+              <p className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>
+                No logged concerts for this artist yet
+              </p>
+            ) : (
+              <>
+                <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                  Revisited {repeatVisit.data.repeat_cities} of {repeatVisit.data.distinct_cities} cities played
+                </p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {formatPercent(repeatVisit.data.repeat_rate)} repeat-visit rate — real booking history, not a formula estimate
+                </p>
+              </>
+            )}
           </div>
         </div>
       </div>

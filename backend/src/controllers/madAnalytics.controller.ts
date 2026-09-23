@@ -149,6 +149,45 @@ export const madAnalyticsController = {
     }
   },
 
+  getRegionalTrend: async (req: Request, res: Response) => {
+    try {
+      const artistName = String(req.query.artist_name || '');
+      const city = String(req.query.city || '');
+      if (!artistName || !city) throw new Error('artist_name and city are required');
+      const result = await madAnalyticsService.getRegionalTrend(artistName, city);
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      return handleAnalyticsError(res, error, 'getRegionalTrend');
+    }
+  },
+
+  getRepeatVisitRate: async (req: Request, res: Response) => {
+    try {
+      const artistId = String(req.query.artist_id || '');
+      if (!artistId) throw new Error('artist_id is required');
+      const result = await madAnalyticsService.getRepeatVisitRate(artistId);
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      return handleAnalyticsError(res, error, 'getRepeatVisitRate');
+    }
+  },
+
+  // TOPSIS-ranked city feasibility for one artist -- see
+  // mad_analytics/feasibility/topsis.py for the WHY. Ranks payload.city
+  // against every other NCCS-covered candidate city for this same artist.
+  getFeasibility: async (req: Request, res: Response) => {
+    try {
+      const { artist_id, city, country } = req.body;
+      if (!artist_id || !city) {
+        return res.status(400).json({ success: false, message: 'artist_id and city are required' });
+      }
+      const result = await madAnalyticsService.getFeasibility({ artist_id, city, country });
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      return handleAnalyticsError(res, error, 'getFeasibility');
+    }
+  },
+
   getKnownVenueCapacities: async (_req: Request, res: Response) => {
     try {
       const result = await madAnalyticsService.getKnownVenueCapacities();
