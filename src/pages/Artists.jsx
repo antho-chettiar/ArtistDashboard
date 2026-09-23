@@ -382,7 +382,7 @@ function Artists() {
             className="bg-transparent text-sm outline-none w-full"
             style={{ color: 'var(--text-primary)', fontFamily: 'Satoshi' }} />
         </div>
-        {/* <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
           <Filter size={14} style={{ color: 'var(--text-muted)' }} />
           {GENRES.map(g => (
             <button key={g} onClick={() => setGenre(g)}
@@ -396,7 +396,7 @@ function Artists() {
               {g}
             </button>
           ))}
-        </div> */}
+        </div>
       </div>
 
       <p className="text-xs mb-4 uppercase tracking-widest"

@@ -3,15 +3,14 @@ import { useNavigate } from 'react-router-dom'
 import {
   AlertCircle,
   ArrowUpDown,
+  Building2,
   Calendar,
   ChevronRight,
-  DollarSign,
   Loader2,
   MapPin,
   Music2,
   Search,
   SlidersHorizontal,
-  Ticket,
   TrendingUp,
   X,
 } from 'lucide-react'
@@ -19,27 +18,7 @@ import PageHeader from '../components/ui/PageHeader'
 import EmptyState from '../components/ui/EmptyState'
 import { useConcerts } from '../hooks/useConcerts'
 import { formatNumber, formatCurrency, formatDate } from '../utils/formatters'
-
-// Exchange rates: 1 unit of currency = X INR
-const RATES_TO_INR = {
-  INR: 1,
-  USD: 84.0,
-  EUR: 91.0,
-  GBP: 106.0,
-  AUD: 55.0,
-  CAD: 61.0,
-  AED: 22.9,
-  SGD: 63.0,
-  NZD: 51.0,
-  JPY: 0.54,
-  KRW: 0.062,
-}
-
-function convertToINR(amount, currency) {
-  if (!amount) return 0
-  const rate = RATES_TO_INR[currency] || RATES_TO_INR['USD']
-  return amount * rate
-}
+import { sumCapacity, sumRevenueINR, sumTickets } from '../utils/concertMetrics'
 
 const DEFAULT_CITIES = ['Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Kolkata']
 
@@ -271,31 +250,50 @@ function Concerts() {
   }, [activeCity, concerts, queryYear, search, sortBy])
 
   const metrics = useMemo(() => {
-    const totalTickets = filtered.reduce((sum, concert) => sum + Number(concert.ticketsSold || 0), 0)
-    const totalCapacity = filtered.reduce((sum, concert) => sum + Number(concert.capacity || 0), 0)
+    // Shared with ArtistProfile.jsx / MapView.jsx -- null (not 0) when the
+    // filtered set has no real revenue/ticket/capacity data at all.
+    const totalTickets = sumTickets(filtered)
+    const totalCapacity = sumCapacity(filtered)
+    const totalRevenueINR = sumRevenueINR(filtered)
 
-    // Convert all revenues to INR before summing for accurate total
-    const totalRevenueINR = filtered.reduce((sum, concert) => {
-      const revenue = Number(concert.totalRevenue || 0)
-      const currency = (concert.currency || 'INR').toUpperCase()
-      return sum + convertToINR(revenue, currency)
-    }, 0)
+    const capacityLoggedCount = filtered.filter(concert => Number(concert.capacity || 0) > 0).length
+    const avgCapacity = totalCapacity != null && capacityLoggedCount > 0
+      ? totalCapacity / capacityLoggedCount
+      : null
 
-    const topCity = Object.values(filtered.reduce((acc, concert) => {
+    const avgTicketPrice = totalTickets && totalRevenueINR != null
+      ? totalRevenueINR / totalTickets
+      : null
+
+    const avgSellThrough = totalTickets && totalCapacity
+      ? (totalTickets / totalCapacity) * 100
+      : null
+
+    // Real, always-computable: which city has the most logged events in the
+    // current filter. Ranking by revenue would surface an arbitrary "leader"
+    // today -- ticket/revenue figures are absent for effectively this entire
+    // dataset (see Tickets Sold / Revenue KPI tiles below, which were removed
+    // for the same reason), so count is the only honest ranking available.
+    const cityCounts = {}
+    filtered.forEach(concert => {
       const city = concert.city || 'Unknown'
-      if (!acc[city]) acc[city] = { city, revenue: 0, count: 0 }
-      const revenue = Number(concert.totalRevenue || 0)
-      const currency = (concert.currency || 'INR').toUpperCase()
-      acc[city].revenue += convertToINR(revenue, currency)
-      acc[city].count += 1
-      return acc
-    }, {})).sort((a, b) => b.revenue - a.revenue)[0]
+      cityCounts[city] = (cityCounts[city] || 0) + 1
+    })
+    const topCityEntry = Object.entries(cityCounts).sort((a, b) => b[1] - a[1])[0]
+    const topCity = topCityEntry ? { city: topCityEntry[0], count: topCityEntry[1] } : null
+
+    const distinctCities = new Set(filtered.map(concert => concert.city).filter(Boolean)).size
+    const distinctVenues = new Set(filtered.map(concert => concert.venue).filter(Boolean)).size
 
     return {
       totalTickets,
       totalRevenue: totalRevenueINR,
-      avgTicketPrice: totalTickets > 0 ? totalRevenueINR / totalTickets : 0,
-      avgSellThrough: totalCapacity > 0 ? (totalTickets / totalCapacity) * 100 : 0,
+      avgTicketPrice,
+      avgSellThrough,
+      avgCapacity,
+      capacityLoggedCount,
+      distinctCities,
+      distinctVenues,
       topCity,
     }
   }, [filtered])
@@ -348,36 +346,47 @@ function Concerts() {
         )}
       </PageHeader>
 
+      {/* Tickets Sold / Revenue / Sell-Through were dropped from this strip --
+          ticket and revenue figures are absent for effectively every concert
+          currently logged, so those tiles would read "0"/"—" no matter which
+          filter is applied (the same hollow-KPI problem Dashboard.jsx already
+          solved for its own YTD tiles). Replaced with facts that are always
+          real for whatever's currently filtered: city/venue counts, and a
+          capacity coverage stat modeled on Venues.jsx's own verified/estimated
+          disclosure -- honest about what's missing without reading as a
+          failure rate. */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
         <MetricCard
           icon={Music2}
           label="Events"
           value={formatNumber(resultCount)}
-          helper={metrics.topCity ? `${metrics.topCity.city} leads revenue` : 'No city leader yet'}
+          helper={metrics.topCity ? `${metrics.topCity.city} leads with ${metrics.topCity.count} events` : 'No events for current filters'}
           color="#818CF8"
           delay={0}
         />
-            <MetricCard
-              icon={Ticket}
-              label="Tickets Sold"
-              value={formatNumber(metrics.totalTickets)}
-              helper={`${metrics.avgSellThrough.toFixed(1)}% average sell-through`}
-              color="#F59E0B"
-              delay={70}
-            />
-            <MetricCard
-              icon={DollarSign}
-              label="Revenue"
-              value={formatCurrency(metrics.totalRevenue, 'INR')}
-              helper={`${formatCurrency(metrics.avgTicketPrice, 'INR')} average ticket`}
-              color="#10B981"
-              delay={140}
-            />
+        <MetricCard
+          icon={MapPin}
+          label="Cities"
+          value={formatNumber(metrics.distinctCities)}
+          helper={`${formatNumber(metrics.distinctVenues)} venues across these cities`}
+          color="#F59E0B"
+          delay={70}
+        />
+        <MetricCard
+          icon={Building2}
+          label="Venues"
+          value={formatNumber(metrics.distinctVenues)}
+          helper={metrics.topCity ? `Most active in ${metrics.topCity.city}` : 'No venue data yet'}
+          color="#10B981"
+          delay={140}
+        />
         <MetricCard
           icon={TrendingUp}
-          label="Sell-Through"
-          value={`${metrics.avgSellThrough.toFixed(1)}%`}
-          helper={metrics.avgSellThrough >= 80 ? 'Healthy demand' : 'Demand still building'}
+          label="Avg Capacity"
+          value={metrics.avgCapacity != null ? formatNumber(Math.round(metrics.avgCapacity)) : '—'}
+          helper={metrics.capacityLoggedCount > 0
+            ? `Logged for ${metrics.capacityLoggedCount} of ${formatNumber(resultCount)} events`
+            : 'No capacity data logged yet'}
           color="#6366F1"
           delay={210}
         />

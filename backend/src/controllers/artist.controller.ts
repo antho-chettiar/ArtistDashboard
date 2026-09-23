@@ -42,12 +42,12 @@ export const artistController = {
       }
 
       if (genre) {
-        const genreRecord = await prisma.genre.findFirst({
-          where: { name: { equals: genre as string, mode: 'insensitive' as const } },
-        });
-        if (genreRecord) {
-          where.genres = { some: { genreId: genreRecord.id } };
-        }
+        // The legacy Genre/ArtistGenre join table is effectively unused (it
+        // was never backfilled for this roster), so filtering through it
+        // silently matched nothing and the filter appeared to do nothing.
+        // The real, backfilled genre values (e.g. "Indian Pop", "Indian
+        // Folk") live directly on Artist.genre -- match that instead.
+        where.genre = { equals: genre as string, mode: 'insensitive' as const };
       }
 
       const [artists, total] = await Promise.all([

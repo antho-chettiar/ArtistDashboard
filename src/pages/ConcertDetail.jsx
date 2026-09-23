@@ -1,7 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Calendar, MapPin, Users, Ticket, DollarSign, TrendingUp, Star, Loader2, AlertCircle } from 'lucide-react'
-import ChartContainer from '../components/charts/ChartContainer'
-import BarChart from '../components/charts/BarChart'
 import EmptyState from '../components/ui/EmptyState'
 import { useConcertDetail } from '../hooks/useConcerts'
 import { formatNumber, formatCurrency, formatDate } from '../utils/formatters'
@@ -27,11 +25,23 @@ function ConcertDetail() {
     </div>
   )
 
-  const st             = ((concert.ticketsSold / concert.capacity) * 100)
-  const sponsorRevenue = (concert.totalRevenue || 0) * 0.15
-  const ticketRevenue  = (concert.totalRevenue || 0) - sponsorRevenue
+  // No real sponsor-revenue data exists anywhere in this system -- there's no
+  // sponsor-revenue column, and concert.sponsors is just a list of names with
+  // no dollar figures attached. A flat 15% split was fabricated here; removed
+  // rather than replaced with a different guess (see the removed "Revenue
+  // Breakdown" chart below). Total revenue is still shown, honestly, in the
+  // KPI cards.
 
-  const stColor = st >= 95 ? 'var(--accent-green)' : st >= 75 ? 'var(--accent-gold)' : 'var(--accent-red)'
+  // Sell-through is only a real number when both capacity AND a real ticket
+  // count are known -- either being missing/zero must read as "unknown", not
+  // collapse into the red "poor performance" bucket (imported historical
+  // concerts often store 0 where the real value was never recorded).
+  const hasSellThroughData = Boolean(concert.capacity) && Boolean(concert.ticketsSold)
+  const st = hasSellThroughData ? (concert.ticketsSold / concert.capacity) * 100 : null
+
+  const stColor = !hasSellThroughData
+    ? 'var(--text-muted)'
+    : st >= 95 ? 'var(--accent-green)' : st >= 75 ? 'var(--accent-gold)' : 'var(--accent-red)'
 
   // Imported historical concerts often store 0 where the real value was
   // never recorded -- treat 0 as missing here too, not a real zero.
@@ -85,10 +95,10 @@ function ConcertDetail() {
             <p className="text-xs uppercase tracking-widest mb-1"
               style={{ color: 'var(--text-muted)', fontSize: '10px' }}>Sell-Through</p>
             <p className="font-display font-bold text-4xl" style={{ color: stColor }}>
-              {st.toFixed(1)}%
+              {hasSellThroughData ? `${st.toFixed(1)}%` : '—'}
             </p>
             <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-              {st >= 95 ? '🔥 Sold Out' : st >= 75 ? '✅ Strong' : '⚠️ Moderate'}
+              {!hasSellThroughData ? 'Capacity unknown' : st >= 95 ? '🔥 Sold Out' : st >= 75 ? '✅ Strong' : '⚠️ Moderate'}
             </p>
           </div>
         </div>
@@ -111,47 +121,37 @@ function ConcertDetail() {
         ))}
       </div>
 
-      {/* Revenue + Sponsors */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
-        <ChartContainer title="Revenue Breakdown" subtitle="Ticket vs sponsor revenue" delay={100}>
-          <BarChart
-            data={[
-              { name: 'Ticket Revenue',  value: Math.round(ticketRevenue)  },
-              { name: 'Sponsor Revenue', value: Math.round(sponsorRevenue) },
-            ]}
-            xKey="name" layout="horizontal"
-            bars={[{ key: 'value', label: 'Revenue (INR)', color: '#818CF8' }]}
-            height={220}
-          />
-        </ChartContainer>
-
-        <div className="glass-card p-5 animate-fade-up" style={{ animationDelay: '150ms', animationFillMode: 'both', opacity: 0 }}>
-          <h3 className="font-display font-semibold text-sm mb-4" style={{ color: 'var(--text-primary)' }}>
-            Sponsors
-          </h3>
-          {concert.sponsors.length === 0 ? (
-            <EmptyState title="No sponsors" />
-          ) : (
-            <div className="space-y-3">
-              {concert.sponsors.map((sponsor, i) => (
-                <div key={i} className="flex items-center justify-between p-3 rounded-xl"
-                  style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl flex items-center justify-center text-white text-sm font-bold"
-                      style={{ background: 'linear-gradient(135deg, #6366F1, #818CF8)' }}>
-                      {sponsor[0]}
-                    </div>
-                    <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{sponsor}</span>
+      {/* Sponsors. No real sponsor-revenue data exists in this system (see
+          note above) -- the fabricated "Revenue Breakdown: Ticket vs Sponsor
+          Revenue" chart that used to sit next to this card was removed
+          rather than replaced with a different guess. This card only ever
+          shows real brand-partner names, never a dollar figure. */}
+      <div className="glass-card p-5 mb-6 animate-fade-up" style={{ animationDelay: '100ms', animationFillMode: 'both', opacity: 0 }}>
+        <h3 className="font-display font-semibold text-sm mb-4" style={{ color: 'var(--text-primary)' }}>
+          Sponsors
+        </h3>
+        {concert.sponsors.length === 0 ? (
+          <EmptyState title="No sponsors" />
+        ) : (
+          <div className="space-y-3">
+            {concert.sponsors.map((sponsor, i) => (
+              <div key={i} className="flex items-center justify-between p-3 rounded-xl"
+                style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center text-white text-sm font-bold"
+                    style={{ background: 'linear-gradient(135deg, #6366F1, #818CF8)' }}>
+                    {sponsor[0]}
                   </div>
-                  <span className="text-xs px-2.5 py-1 rounded-full font-medium"
-                    style={{ background: 'rgba(99,102,241,0.1)', color: 'var(--accent-indigo)' }}>
-                    Brand Partner
-                  </span>
+                  <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{sponsor}</span>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
+                <span className="text-xs px-2.5 py-1 rounded-full font-medium"
+                  style={{ background: 'rgba(99,102,241,0.1)', color: 'var(--accent-indigo)' }}>
+                  Brand Partner
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Location */}

@@ -3,6 +3,7 @@ import { MapContainer, TileLayer, CircleMarker, Tooltip } from 'react-leaflet'
 import PageHeader from '../components/ui/PageHeader'
 import { useConcerts } from '../hooks/useConcerts'
 import { formatNumber, formatCurrency, formatDate } from '../utils/formatters'
+import { sumTickets, sumRevenueINR } from '../utils/concertMetrics'
 import { MapPin, Ticket, DollarSign, Music2, Loader2 } from 'lucide-react'
 import L from 'leaflet'
 
@@ -14,8 +15,15 @@ L.Icon.Default.mergeOptions({
 })
 
 function getRadius(t) { return t >= 50000 ? 28 : t >= 30000 ? 22 : t >= 15000 ? 16 : 12 }
+
+// Unknown sell-through (missing capacity OR missing ticket count) must never
+// collapse into the same red used for a genuinely poor-performing show --
+// same "unknown != bad" principle as ConcertDetail.jsx's sell-through ring.
+// Ticket counts are unrecorded for the large majority of concerts in this
+// dataset today, so this guard is what keeps the map from painting nearly
+// every pin the "bad" color.
 function getColor(s, c) {
-  if (!c || c === 0) return '#F87171'
+  if (!c || !s) return '#94A3B8'
   const p = s / c
   return p >= 0.95 ? '#34D399' : p >= 0.75 ? '#FBBF24' : '#F87171'
 }
@@ -32,8 +40,10 @@ function MapView() {
     selectedArtist === 'All Artists' || c.artist === selectedArtist
   )
 
-  const totalTickets  = filtered.reduce((a, c) => a + (c.ticketsSold || 0), 0)
-  const totalRevenue  = filtered.reduce((a, c) => a + (c.totalRevenue || 0), 0)
+  // Shared with Concerts.jsx / ArtistProfile.jsx -- sums to null (never a
+  // fabricated 0) when nothing in the filtered set has a real recorded value.
+  const totalTickets  = sumTickets(filtered)
+  const totalRevenue  = sumRevenueINR(filtered)
 
   if (isLoading) return (
     <div className="flex flex-col items-center justify-center py-20 gap-4 glass-card mx-6 my-10">
@@ -51,30 +61,22 @@ function MapView() {
 
       {/* Controls */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
-        <select
-          value={selectedArtist}
-          onChange={e => setArtist(e.target.value)}
-          className="text-sm rounded-xl px-4 py-2.5 outline-none"
-          style={{
-            background: '#1e293b',   // ❗ hardcode instead of var
-            border: '1px solid #334155',
-            color: '#ffffff',
-            fontFamily: 'Satoshi'
-          }}
+        <div
+          className="flex items-center gap-2 rounded-xl px-4 py-2.5"
+          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
         >
-          {artists.map(a => (
-            <option
-              key={a}
-              value={a}
-              style={{
-                backgroundColor: '#1e293b',
-                color: '#ffffff'
-              }}
-            >
-              {a}
-            </option>
-          ))}
-        </select>
+          <MapPin size={16} className="flex-shrink-0" style={{ color: 'var(--text-muted)' }} />
+          <select
+            value={selectedArtist}
+            onChange={e => setArtist(e.target.value)}
+            className="bg-transparent outline-none text-sm w-full"
+            style={{ color: 'var(--text-primary)', fontFamily: 'Satoshi' }}
+          >
+            {artists.map(a => (
+              <option key={a} value={a}>{a}</option>
+            ))}
+          </select>
+        </div>
 
         <div className="flex gap-3 flex-wrap">
           {[
@@ -160,7 +162,7 @@ function MapView() {
                       { label: 'Tickets Sold', value: selectedConcert.ticketsSold > 0 ? formatNumber(selectedConcert.ticketsSold) : '—' },
                       { label: 'ATP',          value: selectedConcert.avgTicketPrice > 0 ? formatCurrency(selectedConcert.avgTicketPrice, { country: selectedConcert.country }) : '—' },
                       { label: 'Revenue',      value: selectedConcert.totalRevenue > 0 ? formatCurrency(selectedConcert.totalRevenue, { country: selectedConcert.country }) : '—' },
-                      { label: 'Sell-Through', value: selectedConcert.capacity > 0 ? ((selectedConcert.ticketsSold / selectedConcert.capacity) * 100).toFixed(1) + '%' : '—' },
+                      { label: 'Sell-Through', value: selectedConcert.capacity > 0 && selectedConcert.ticketsSold > 0 ? ((selectedConcert.ticketsSold / selectedConcert.capacity) * 100).toFixed(1) + '%' : '—' },
                 ].map((item, i) => (
                   <div key={i} className="rounded-xl p-2" style={{ background: 'var(--bg-secondary)' }}>
                     <p className="text-xs" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{item.label}</p>
@@ -222,6 +224,7 @@ function MapView() {
           { color: '#34D399', label: '≥ 95% Sold Out' },
           { color: '#FBBF24', label: '75–95%'         },
           { color: '#F87171', label: '< 75%'          },
+          { color: '#94A3B8', label: 'Capacity/tickets unknown' },
         ].map((item, i) => (
           <div key={i} className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full" style={{ background: item.color }} />
