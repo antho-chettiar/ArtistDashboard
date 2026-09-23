@@ -113,6 +113,13 @@ router.get('/ml/dashboard-highlights', authenticate, madAnalyticsController.getD
 router.get('/ml/venue-capacity/known-list', authenticate, madAnalyticsController.getKnownVenueCapacities);
 
 /**
+ * @route GET /api/v1/analytics/ml/engagement?artist_id=...
+ * @desc Engagement ratios (YouTube like-rate, Spotify follow-rate)
+ * @access Public (authenticated)
+ */
+router.get('/ml/engagement', authenticate, madAnalyticsController.getEngagement);
+
+/**
  * @route POST /api/v1/analytics/ml/popularity/all/save
  * @desc Save popularity scores for all artists using ML
  * @access Public (authenticated)

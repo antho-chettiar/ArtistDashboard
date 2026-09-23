@@ -61,6 +61,7 @@ from .venue_capacity import calculate as venue_capacity_calc
 from .venue_capacity.resolver import fetch_saved_capacity_resolutions
 from .feasibility import calculate as feasibility_calc
 from .touring_history import dashboard_highlights
+from .engagement import engagement_rate
 
 
 # ── Background Scheduler ───────────────────────────────────────────────────────
@@ -760,6 +761,14 @@ def feasibility(payload: FeasibilityInput):
 def dashboard_highlights_endpoint():
     try:
         return dashboard_highlights()
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/engagement")
+def engagement_endpoint(artist_id: str = Query(...)):
+    try:
+        return engagement_rate(artist_id)
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 

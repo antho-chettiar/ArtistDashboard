@@ -350,9 +350,10 @@ class FeasibilityInput(BaseModel):
 
 
 class FeasibilityCriteria(BaseModel):
-    """The four raw (pre-normalization) criterion values used for the
+    """The five raw (pre-normalization) criterion values used for the
     REQUESTED city specifically -- for transparency, not for recomputation."""
     artist_power: float          # Popularity score, 0-100 -- see topsis.py's WHY for why
+    engagement_score: float      # mean of available engagement ratios -- see topsis.py's WHY
     city_affinity: float         # 0-100
     touring_precedent_visits: int
     venue_fit_index: float       # 0-100
@@ -394,4 +395,17 @@ class DashboardHighlightsOutput(BaseModel):
     # a shortfall rather than useful information.
     distinct_cities_played: int = 0
     cities_with_repeat_visit: int = 0
+    computed_at: str
+
+
+# ── Engagement Rate (2026-09) ────────────────────────────────────────────────
+# "True fan" proxy -- see engagement/scorer.py's module docstring for the WHY
+# and the Instagram-is-structurally-unavailable limitation.
+
+class EngagementOutput(BaseModel):
+    artist_id: str
+    youtube_like_rate: Optional[float] = None          # youtube_likes / youtube_views (both lifetime-cumulative)
+    spotify_follow_rate: Optional[float] = None        # spotify_followers / spotify_listeners (both current snapshots)
+    instagram_engagement_rate: Optional[float] = None  # always None -- see scorer.py
+    facebook_engagement_rate: Optional[float] = None   # always None -- see scorer.py
     computed_at: str

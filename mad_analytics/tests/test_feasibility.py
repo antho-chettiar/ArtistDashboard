@@ -13,7 +13,10 @@ import mad_analytics.feasibility.topsis as topsis
 
 
 def _seed_concerts_with_capacity(db_url: str, rows: list[tuple[str, str, str, str, int]]):
-    """rows: (concert_id, artist_id, city, date, capacity)."""
+    """rows: (concert_id, artist_id, city, date, capacity). Also creates an
+    empty viberate_metrics_daily -- calculate() now also queries it (for the
+    Engagement criterion), and an honest "no rows" table is what production
+    looks like for an artist with no Viberate data, not a schema error."""
     engine = create_engine(db_url)
     with engine.begin() as conn:
         conn.execute(text(
@@ -25,6 +28,17 @@ def _seed_concerts_with_capacity(db_url: str, rows: list[tuple[str, str, str, st
                 "concertDate" TEXT,
                 "venueName" TEXT,
                 capacity INTEGER
+            )
+            '''
+        ))
+        conn.execute(text(
+            '''
+            CREATE TABLE viberate_metrics_daily (
+                id TEXT PRIMARY KEY,
+                "artistId" TEXT NOT NULL,
+                "metricName" TEXT,
+                date TEXT,
+                "totalValue" REAL
             )
             '''
         ))

@@ -752,6 +752,17 @@ export const madAnalyticsService = {
     }
   },
 
+  // Engagement ratios (YouTube like-rate, Spotify follow-rate) -- see
+  // mad_analytics/engagement/scorer.py for the WHY and platform limitations.
+  getEngagement: async (artistId: string) => {
+    try {
+      return await getAnalytics(`/engagement?artist_id=${encodeURIComponent(artistId)}`);
+    } catch (error) {
+      console.error('Error fetching engagement rate from mad_analytics:', error);
+      throw error;
+    }
+  },
+
   // Curated venue capacities -- lets the Venues tab show which capacities
   // are real/verified vs. a keyword heuristic estimate.
   getKnownVenueCapacities: async () => {

@@ -24,11 +24,18 @@ cost-criteria inversion is needed):
      distance contribution is 0 for every row) -- see _topsis()'s docstring.
      It only starts to matter if this module is ever extended to also rank
      multiple ARTISTS against one fixed city, which is not built here.
-  2. City Affinity (0-100) -- the existing NCCS-backed market-activity signal.
-  3. Touring Precedent (raw visit count) -- Tier 1 from the feasibility
+  2. Engagement (2026-09, mad_analytics/engagement/scorer.py) -- mean of the
+     available same-basis engagement ratios (YouTube like-rate, Spotify
+     follow-rate). Same constant-per-artist characteristic and same caveat
+     as Artist Power above: it's a real, honestly-derived measure of fan
+     quality (not just reach volume), included for when this module ranks
+     artists against each other, inert for the current single-artist
+     city-ranking use case.
+  3. City Affinity (0-100) -- the existing NCCS-backed market-activity signal.
+  4. Touring Precedent (raw visit count) -- Tier 1 from the feasibility
      hierarchy (see revenue/predictor.py): real past visits are the strongest
      ground-truth signal this product has, so this gets the heaviest weight.
-  4. Venue Fit (0-100) -- this city's average KNOWN concert venue capacity
+  5. Venue Fit (0-100) -- this city's average KNOWN concert venue capacity
      (any artist, not just this one), normalized against the strongest city.
      This is a market-size proxy ("can this city's venues support a large
      show at all"), NOT this specific artist's fit to one exact venue --
@@ -49,7 +56,8 @@ from typing import Optional
 
 from ..utils.schemas import FeasibilityInput, FeasibilityOutput, FeasibilityCriteria
 
-ARTIST_POWER_WEIGHT = 0.10
+ARTIST_POWER_WEIGHT = 0.05
+ENGAGEMENT_WEIGHT = 0.05
 CITY_AFFINITY_WEIGHT = 0.30
 TOURING_PRECEDENT_WEIGHT = 0.40
 VENUE_FIT_WEIGHT = 0.20
@@ -149,6 +157,7 @@ def calculate(payload: FeasibilityInput, db_url: Optional[str] = None) -> Feasib
     from ..demand.scorer import city_affinity_scores, _normalize_city_key
     from ..touring_history import visit_counts_by_city
     from ..popularity.calculator import calculate as popularity_calculate
+    from ..engagement import engagement_rate
     from ..utils.schemas import PopularityInput
 
     affinity = city_affinity_scores()
@@ -167,17 +176,22 @@ def calculate(payload: FeasibilityInput, db_url: Optional[str] = None) -> Feasib
         PopularityInput(artist_id=payload.artist_id)
     ).popularity_score
 
+    engagement = engagement_rate(payload.artist_id, db_url=db_url)
+    engagement_ratios = [r for r in (engagement.youtube_like_rate, engagement.spotify_follow_rate) if r is not None]
+    engagement_score = sum(engagement_ratios) / len(engagement_ratios) if engagement_ratios else 0.0
+
     city_keys = list(candidate_affinity.keys())
     matrix = [
         [
             popularity_score,
+            engagement_score,
             candidate_affinity[city_key],
             float(visit_counts.get(city_key, 0)),
             venue_index.get(city_key, 0.0),
         ]
         for city_key in city_keys
     ]
-    weights = [ARTIST_POWER_WEIGHT, CITY_AFFINITY_WEIGHT, TOURING_PRECEDENT_WEIGHT, VENUE_FIT_WEIGHT]
+    weights = [ARTIST_POWER_WEIGHT, ENGAGEMENT_WEIGHT, CITY_AFFINITY_WEIGHT, TOURING_PRECEDENT_WEIGHT, VENUE_FIT_WEIGHT]
     scores = _topsis(matrix, weights)
 
     ranked = sorted(zip(city_keys, scores), key=lambda pair: -pair[1])
@@ -192,6 +206,7 @@ def calculate(payload: FeasibilityInput, db_url: Optional[str] = None) -> Feasib
         total_cities_compared=len(city_keys),
         components=FeasibilityCriteria(
             artist_power=popularity_score,
+            engagement_score=round(engagement_score, 4),
             city_affinity=candidate_affinity[target_key],
             touring_precedent_visits=visit_counts.get(target_key, 0),
             venue_fit_index=venue_index.get(target_key, 0.0),

@@ -138,6 +138,17 @@ export const madAnalyticsController = {
     }
   },
 
+  getEngagement: async (req: Request, res: Response) => {
+    try {
+      const artistId = String(req.query.artist_id || '');
+      if (!artistId) throw new Error('artist_id is required');
+      const result = await madAnalyticsService.getEngagement(artistId);
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      return handleAnalyticsError(res, error, 'getEngagement');
+    }
+  },
+
   getKnownVenueCapacities: async (_req: Request, res: Response) => {
     try {
       const result = await madAnalyticsService.getKnownVenueCapacities();
