@@ -60,8 +60,9 @@ from .utils.db import persist_popularity_scores, fetch_saved_popularity, _normal
 from .venue_capacity import calculate as venue_capacity_calc
 from .venue_capacity.resolver import fetch_saved_capacity_resolutions
 from .feasibility import calculate as feasibility_calc
-from .touring_history import dashboard_highlights
+from .touring_history import dashboard_highlights, repeat_visit_rate
 from .engagement import engagement_rate
+from .trends.regional import regional_trend_score, city_to_geo_code, geo_code_to_state_name
 
 
 # ── Background Scheduler ───────────────────────────────────────────────────────
@@ -255,87 +256,59 @@ def _run_fix_capacities_job():
         logger.error(f"[Scheduler] Fix capacities error: {e}")
 
 
-def _run_predict_empty_concerts_job():
-    """Predict tickets_sold and revenue for concerts that have capacity but no revenue."""
-    db_url = os.environ.get("DATABASE_URL")
-    if not db_url:
-        return
-
-    try:
-        from sqlalchemy import create_engine, text as sql_text
-
-        normalized = _normalize_db_url(db_url)
-        engine = create_engine(normalized)
-
-        with engine.connect() as conn:
-            # Find concerts with capacity but no revenue/tickets
-            rows = conn.execute(sql_text("""
-                SELECT id, "artistId", city, country, capacity, "avgTicketPrice", "concertDate"
-                FROM concerts
-                WHERE capacity > 0
-                  AND ("totalRevenue" IS NULL OR "totalRevenue" = 0)
-                  AND ("ticketsSold" IS NULL OR "ticketsSold" = 0)
-                LIMIT 50
-            """)).mappings().all()
-
-        if not rows:
-            logger.info("[Scheduler] No empty concerts to predict.")
-            engine.dispose()
-            return
-
-        logger.info(f"[Scheduler] Predicting revenue for {len(rows)} empty concerts...")
-        predicted = 0
-
-        for row in rows:
-            capacity = int(row["capacity"])
-            atp = float(row["avgTicketPrice"] or 0)
-            artist_id = row["artistId"]
-
-            # If no ATP, estimate from artist's other concerts
-            if atp <= 0:
-                with engine.connect() as conn:
-                    avg = conn.execute(sql_text("""
-                        SELECT AVG("avgTicketPrice") FROM concerts
-                        WHERE "artistId" = :aid AND "avgTicketPrice" > 0
-                    """), {"aid": artist_id}).scalar()
-                atp = float(avg or 1500)
-
-            # Get artist popularity for sell-through estimation
-            with engine.connect() as conn:
-                pop = conn.execute(sql_text("""
-                    SELECT popularity FROM artists WHERE id = :aid
-                """), {"aid": artist_id}).scalar()
-            popularity = float(pop or 50)
-
-            # Sell-through based on artist popularity:
-            # popularity 100 → 95%, 80 → 80%, 60 → 65%, 40 → 50%, 20 → 35%
-            sell_through = min(0.95, max(0.30, 0.30 + (popularity / 100) * 0.65))
-
-            tickets_sold = min(int(capacity * sell_through), capacity)
-            revenue = round(tickets_sold * atp, 2)
-
-            with engine.begin() as conn:
-                conn.execute(sql_text("""
-                    UPDATE concerts
-                    SET "ticketsSold" = :tickets, "totalRevenue" = :revenue,
-                        "avgTicketPrice" = :atp
-                    WHERE id = :id AND ("totalRevenue" IS NULL OR "totalRevenue" = 0)
-                """), {
-                    "tickets": tickets_sold,
-                    "revenue": revenue,
-                    "atp": round(atp, 2),
-                    "id": row["id"],
-                })
-                predicted += 1
-
-        engine.dispose()
-        logger.info(f"[Scheduler] Predicted revenue for {predicted} concerts.")
-    except Exception as e:
-        logger.error(f"[Scheduler] Prediction error: {e}")
+# ── REMOVED: _run_predict_empty_concerts_job (2026-09) ─────────────────────────
+# This job used to invent ticketsSold/totalRevenue/avgTicketPrice for any
+# concert with a real capacity but no real sales data: it defaulted
+# avgTicketPrice to a flat 1500 when none existed (`atp = float(avg or
+# 1500)`), then derived a "sell_through" purely from the artist's Popularity
+# score (0.30 + popularity/100 * 0.65) with no connection to actual ticket
+# sales, and wrote the resulting fabricated numbers straight into the real
+# `concerts` columns. This was the root cause of the incident where 100
+# concerts were found with avgTicketPrice = 1500.00, a formula-computed
+# ticketsSold/totalRevenue, and a mislabeled verificationStatus = 'VERIFIED'
+# (see backend/src/controllers/dashboard.controller.ts's getKPIs, which still
+# carries a `NOT: { avgTicketPrice: 1500 }` filter as the visible scar of this
+# exact bug). Per this project's "never fabricate data" rule (every KPI must
+# be real or an honestly-disclosed estimate, never a silent placeholder), a
+# concert with capacity but no genuine revenue/ticket figures must simply
+# stay that way -- NULL/0, i.e. "not available" -- rather than be filled in
+# with a guess indistinguishable from real data downstream.
+#
+# Removed entirely (not just gated) per the same reasoning already applied
+# elsewhere in this file: this is the same category of mistake as the
+# now-removed Growth/RoG dependency and the engagement-ratio unit-mismatch
+# bug documented in engagement/scorer.py -- a number that *looks* plausible
+# but was never actually measured. Also removed: both scheduler call sites
+# (STARTUP PIPELINE and the 12h periodic block in _scheduler_loop below) and
+# the manual-trigger endpoint POST /scheduler/predict-empty
+# (trigger_predict_empty) -- confirmed via repo-wide search that nothing in
+# backend/src or src ever called that endpoint, so there was no caller to
+# preserve a no-op for.
 
 
 def _run_data_validation_job():
-    """Validate all concert data: tickets <= capacity, revenue = tickets * price."""
+    """Validate all concert data: tickets <= capacity, revenue = tickets * price.
+
+    2026-09 audit note -- this function used to have five "Fix" blocks. Two of
+    them (the original Fix 3 and Fix 5 below) were removed/narrowed because
+    they belong to the SAME category of bug as the now-removed
+    _run_predict_empty_concerts_job(): silently overwriting a field with a
+    formula-derived guess rather than leaving genuinely-missing data marked as
+    missing. The dividing line applied throughout this function (per this
+    project's "never fabricate data" rule):
+      - Enforcing an arithmetic/physical invariant between fields that are
+        ALREADY real (e.g. capacity is a hard ceiling; revenue = tickets x
+        price when both factors are already on record) is a legitimate
+        consistency repair -- it never invents a number, it just keeps
+        derived fields in sync with fields that were already trustworthy.
+      - Overwriting a field because its current (possibly genuine) value
+        looks statistically unusual -- e.g. "sell-through seems too low for
+        this artist's popularity, recompute it from popularity instead" -- is
+        fabrication wearing a repair's clothes. A real show CAN under-sell;
+        silently replacing that real number with a popularity-derived guess
+        is exactly the mistake that produced the original avgTicketPrice=1500
+        incident, just triggered by a different condition.
+    """
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
         return
@@ -348,7 +321,9 @@ def _run_data_validation_job():
         fixed = 0
 
         with engine.begin() as conn:
-            # Fix 1: tickets_sold > capacity (cap at 85%)
+            # Fix 1: tickets_sold > capacity is a physical impossibility (you
+            # cannot sell more tickets than the venue holds) -- capping it is a
+            # sanity constraint on an already-real number, not fabrication.
             oversold = conn.execute(sql_text("""
                 UPDATE concerts
                 SET "ticketsSold" = CAST(capacity * 0.85 AS INTEGER)
@@ -357,38 +332,44 @@ def _run_data_validation_job():
             """)).fetchall()
             fixed += len(oversold)
 
-            # Fix 2: Recalculate revenue where tickets were capped
+            # Fix 2: Recalculate revenue where tickets were just capped above,
+            # but ONLY when a real avgTicketPrice is on record. The old
+            # `COALESCE("avgTicketPrice", 1500)` fallback here was itself a
+            # fabrication path -- the exact same flat placeholder price as the
+            # original incident. When no real price exists we no longer trust
+            # the pre-cap totalRevenue either (it was derived from the
+            # now-known-impossible ticketsSold), so it's nulled out as
+            # honestly "not available" instead of being recomputed from an
+            # invented price.
             if oversold:
                 for row in oversold:
                     conn.execute(sql_text("""
                         UPDATE concerts
-                        SET "totalRevenue" = "ticketsSold" * COALESCE("avgTicketPrice", 1500)
-                        WHERE id = :id
+                        SET "totalRevenue" = "ticketsSold" * "avgTicketPrice"
+                        WHERE id = :id AND "avgTicketPrice" IS NOT NULL AND "avgTicketPrice" > 0
+                    """), {"id": row[0]})
+                    conn.execute(sql_text("""
+                        UPDATE concerts
+                        SET "totalRevenue" = NULL
+                        WHERE id = :id AND ("avgTicketPrice" IS NULL OR "avgTicketPrice" <= 0)
                     """), {"id": row[0]})
 
-            # Fix 3: Unrealistically low sell-through on predicted concerts (< 20%)
-            # Recalculate using artist popularity
-            low_st_rows = conn.execute(sql_text("""
-                SELECT c.id, c.capacity, c."avgTicketPrice", c."artistId", a.popularity
-                FROM concerts c
-                JOIN artists a ON a.id = c."artistId"
-                WHERE c.capacity > 0
-                  AND c."ticketsSold" > 0
-                  AND (c."ticketsSold"::float / c.capacity) < 0.20
-                  AND c.source IN ('setlistfm', 'songkick', 'bookmyshow', 'district')
-            """)).mappings().all()
+            # Fix 3 (REMOVED, 2026-09): used to treat "< 20% sell-through" as
+            # a data error and recompute ticketsSold/totalRevenue from the
+            # SAME popularity-based formula as the removed
+            # _run_predict_empty_concerts_job(). A low sell-through can be
+            # genuinely real (an under-booked show, an oversized venue, a
+            # cancelled tour leg) -- there is no way to distinguish "this
+            # number is wrong" from "this show really did under-sell" without
+            # an actual second data source, and guessing wrong overwrites a
+            # true number with a fabricated one. Removed rather than narrowed:
+            # unlike Fix 2 above, there is no real-data condition that rescues
+            # this block, because the thing it's "fixing" (an unusual but
+            # possibly-true value) isn't a data error in the first place.
 
-            for r in low_st_rows:
-                pop = float(r["popularity"] or 50)
-                sell_through = min(0.95, max(0.30, 0.30 + (pop / 100) * 0.65))
-                new_tix = min(int(int(r["capacity"]) * sell_through), int(r["capacity"]))
-                new_rev = round(new_tix * float(r["avgTicketPrice"] or 1500), 2)
-                conn.execute(sql_text("""
-                    UPDATE concerts SET "ticketsSold" = :tix, "totalRevenue" = :rev WHERE id = :id
-                """), {"tix": new_tix, "rev": new_rev, "id": r["id"]})
-                fixed += 1
-
-            # Fix 4: Revenue = 0 but tickets > 0 and price > 0
+            # Fix 4: Revenue = 0 but tickets > 0 and price > 0 -- both factors
+            # are ALREADY real, on-record values; this only keeps the derived
+            # totalRevenue column in sync with them. No new data is invented.
             conn.execute(sql_text("""
                 UPDATE concerts
                 SET "totalRevenue" = "ticketsSold" * "avgTicketPrice"
@@ -397,13 +378,28 @@ def _run_data_validation_job():
                   AND "avgTicketPrice" > 0
             """))
 
-            # Fix 5: Mark verified/pending status
-            conn.execute(sql_text("""
-                UPDATE concerts SET "verificationStatus" = 'VERIFIED'
-                WHERE "totalRevenue" > 0 AND "ticketsSold" > 0 AND capacity > 0
-                  AND "verificationStatus" = 'PENDING'
-                  AND source IS NOT NULL AND source != 'setlistfm'
-            """))
+            # Fix 5 (REMOVED, 2026-09): used to auto-promote any concert with
+            # non-zero revenue/tickets/capacity to verificationStatus =
+            # 'VERIFIED' the moment those three numbers were non-zero -- with
+            # no check on whether those numbers were ever real. This is
+            # exactly what re-VERIFIED the fabricated rows written by the
+            # (now-removed) _run_predict_empty_concerts_job() every 12h.
+            # Narrowing it to "a real source" was considered, but none of the
+            # sources this pipeline currently writes (setlistfm, songkick,
+            # bookmyshow, district -- see scrapers/) are actual ticket-sales
+            # feeds; they're event/attendance listings, so a concert's
+            # revenue/ticket figures on any of them are themselves either a
+            # manual research entry or (until this fix) a formula guess --
+            # there is no `source` value here that can be trusted as "this
+            # revenue number came from a real sale." The Concert model
+            # already has verifiedBy/verifiedAt fields for exactly this
+            # purpose: VERIFIED is a human judgment (a person or a genuine
+            # sales-data integration confirming the number), and no automated
+            # job should award it just because three fields happen to be
+            # non-zero. (NOTE: mad_analytics/training/verify_concerts.py's
+            # run_verification() Step 5 has the same pattern -- flagged
+            # separately, out of scope for this fix since it wasn't part of
+            # the reported incident, but it should get the same treatment.)
 
         engine.dispose()
         if fixed:
@@ -562,7 +558,8 @@ def _scheduler_loop():
     _run_verification_job()            # 2. Deduplicate concerts
     _run_fix_capacities_job()          # 3. Fix capacities from known venues DB
     _run_venue_capacity_job()          # 4. Resolve remaining unknown venues (web search)
-    _run_predict_empty_concerts_job()  # 5. Predict revenue for empty concerts
+    # 5. (removed 2026-09) used to be _run_predict_empty_concerts_job() here --
+    #    see its removal note above _run_data_validation_job for why.
     _run_data_validation_job()         # 6. Validate all data (tickets <= capacity, revenue consistency)
     _run_scraper_job()                 # 7. Scrape new concerts
     _run_retrain_job()                 # 8. Retrain ML model (self-learning: more data = better model)
@@ -592,7 +589,7 @@ def _scheduler_loop():
             _run_verification_job()
             _run_fix_capacities_job()
             _run_venue_capacity_job()
-            _run_predict_empty_concerts_job()
+            # (removed 2026-09) used to be _run_predict_empty_concerts_job() here.
             _run_data_validation_job()
             hours_since_scrape = 0
 
@@ -765,10 +762,49 @@ def dashboard_highlights_endpoint():
         raise HTTPException(status_code=422, detail=str(e))
 
 
+@app.get("/touring-history/repeat-visit-rate")
+def repeat_visit_rate_endpoint(artist_id: str = Query(...)):
+    """Per-artist repeat-visit rate (see touring_history/scorer.py) -- was
+    previously only consumed internally by dashboard_highlights' roster-wide
+    aggregate; exposed here per-artist for the Artist Profile page (2026-09
+    display-gap audit)."""
+    try:
+        return repeat_visit_rate(artist_id)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 @app.get("/engagement")
 def engagement_endpoint(artist_id: str = Query(...)):
     try:
         return engagement_rate(artist_id)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/regional-trends")
+def regional_trends_endpoint(artist_name: str = Query(...), city: str = Query(...)):
+    """State-level (NOT city-level) Google Trends search interest -- see
+    trends/regional.py's module docstring for why this can never be sharper
+    than state/region for India. Previously only consumed internally by
+    revenue/predictor.py's Tier 2 softening; exposed here so the Analysis
+    page can surface the same real signal instead of it being invisible to
+    the user (2026-09 display-gap audit)."""
+    try:
+        geo_code = city_to_geo_code(city)
+        score = regional_trend_score(artist_name, city)
+        return {
+            "artist_name": artist_name,
+            "city": city,
+            "geo_code": geo_code,
+            "state_name": geo_code_to_state_name(geo_code),
+            # None (never a fabricated 0) when the city has no known state
+            # mapping, or when the artist genuinely has no measurable search
+            # interest there -- these are pytrends'-native semantics, not
+            # something this endpoint adds ambiguity to (see regional.py).
+            "score": score,
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+        }
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 
@@ -865,13 +901,6 @@ def trigger_venue_capacity():
 def trigger_verify():
     """Manually trigger concert verification and deduplication."""
     _run_verification_job()
-    return {"status": "done"}
-
-
-@app.post("/scheduler/predict-empty")
-def trigger_predict_empty():
-    """Manually trigger revenue prediction for empty concerts."""
-    _run_predict_empty_concerts_job()
     return {"status": "done"}
 
 

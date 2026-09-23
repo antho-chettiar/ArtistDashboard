@@ -85,6 +85,41 @@ Consolidation-first, correctness before features:
 - Run scorer manually: cd backend && npx ts-node src/services/scrapers/viberate/scorer.ts
 - API smoke test: GET /api/v1/artists/leaderboard
 
+## Ticket price / revenue / verification — read before touching these fields (2026-09)
+
+This project has almost no real ticket-sales or revenue data. There is no working
+scraper for BookMyShow/District ticket prices (blocked by anti-bot rate-limiting;
+SerpAPI is a possible future unblock, not yet in place). **A concert with
+`avgTicketPrice IS NULL`, `ticketsSold = 0`, `totalRevenue = 0` is not missing
+work or a bug — it's the honest, correct state for "we don't have real sales
+data yet."** A future contributor with a real ticketing data source is meant to
+backfill these with genuine values, not a formula.
+
+**Incident history:** a scheduler job (`mad_analytics/server.py::
+_run_predict_empty_concerts_job`, now DELETED) used to silently invent
+`avgTicketPrice` (defaulting to a flat 1500), `ticketsSold`, and `totalRevenue`
+for any concert with a capacity but no real sales data. A second bug
+(`_run_data_validation_job`'s "Fix 5", and an identical copy in
+`mad_analytics/training/verify_concerts.py`'s "Step 5", both also DELETED) then
+auto-promoted those fabricated rows to `verificationStatus = 'VERIFIED'` just
+because the three numbers were non-zero — no human ever confirmed them. 100
+production concerts were affected; all three code paths are now removed, and
+those 100 rows were reset to the honest state described above
+(`verificationStatus` back to `PENDING`).
+
+**Do not reintroduce this pattern:**
+- Never write a formula-derived/estimated number into a concert's real
+  `avgTicketPrice`/`ticketsSold`/`totalRevenue` columns. An estimate belongs in
+  a prediction response only (`mad_analytics/revenue/predictor.py`'s
+  `RevenueOutput`, already carries `data_quality`/`capacity_is_estimated`/
+  `ticket_price_is_estimated` for exactly this) — never silently promoted into
+  the concert's own fields.
+- Never set `verificationStatus = 'VERIFIED'` automatically. It requires a human
+  (or a genuine real-time sales integration) via the `verifiedBy`/`verifiedAt`
+  fields already on the `Concert` model. If you're backfilling real ticketing
+  data later: write the real numbers, set `verifiedBy`, then set VERIFIED —
+  never the other way around.
+
 ## Rules
 - Never modify or commit viberate-session.json.
 - Don't create migrations or edit schema.prisma unless explicitly asked.

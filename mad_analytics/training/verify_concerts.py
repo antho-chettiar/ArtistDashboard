@@ -288,15 +288,23 @@ def run_verification(db_url: str, dry_run: bool = False) -> dict:
             """)).scalar()
             stats["empty_flagged"] = count
 
-    # Step 5: Mark concerts with revenue as VERIFIED
-    if not dry_run:
-        with engine.begin() as conn:
-            conn.execute(text("""
-                UPDATE concerts
-                SET "verificationStatus" = 'VERIFIED'
-                WHERE "totalRevenue" > 0 AND "ticketsSold" > 0
-                  AND "verificationStatus" = 'PENDING'
-            """))
+    # Step 5 (REMOVED, 2026-09): used to auto-promote any PENDING concert to
+    # verificationStatus = 'VERIFIED' the moment totalRevenue and ticketsSold
+    # were both non-zero -- with no check on whether those numbers ever came
+    # from a real sale. This is the identical pattern that server.py's
+    # _run_data_validation_job() "Fix 5" had (see that function's docstring
+    # for the full incident writeup: it re-VERIFIED rows that
+    # _run_predict_empty_concerts_job() had itself fabricated), except this
+    # copy was worse -- it didn't even carry the `source != 'setlistfm'`
+    # guard the server.py version had, and it runs every scheduler cycle via
+    # _run_verification_job(). None of the sources this pipeline writes
+    # (setlistfm, songkick, bookmyshow, district, HISTORICAL_EXCEL,
+    # news-search) are genuine real-time sales-data feeds, so there is no
+    # `source` value this can be safely scoped to either. The Concert model's
+    # verifiedBy/verifiedAt fields exist for exactly this purpose: VERIFIED
+    # is a human judgment call (a person, or a genuine sales-data integration
+    # confirming the number), never an automated inference from two fields
+    # happening to be non-zero.
 
     engine.dispose()
     return stats

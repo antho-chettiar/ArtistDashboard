@@ -71,6 +71,27 @@ def city_to_geo_code(city: str) -> Optional[str]:
     return CITY_TO_STATE_CODE.get(_normalize_city_key(city))
 
 
+# Human-readable state/UT name for each geo code above -- used only to label
+# the score honestly in the UI ("state-level search interest in Maharashtra",
+# never "in Mumbai") so the granularity limitation is never mistaken for
+# city-level precision. Kept in lockstep with CITY_TO_STATE_CODE's codes.
+GEO_CODE_TO_STATE_NAME: dict[str, str] = {
+    "IN-MH": "Maharashtra", "IN-DL": "Delhi", "IN-KA": "Karnataka",
+    "IN-TG": "Telangana", "IN-TN": "Tamil Nadu", "IN-WB": "West Bengal",
+    "IN-GJ": "Gujarat", "IN-RJ": "Rajasthan", "IN-CH": "Chandigarh",
+    "IN-UP": "Uttar Pradesh", "IN-MP": "Madhya Pradesh", "IN-AS": "Assam",
+    "IN-CT": "Chhattisgarh", "IN-JH": "Jharkhand", "IN-PB": "Punjab",
+    "IN-UK": "Uttarakhand", "IN-AR": "Arunachal Pradesh", "IN-AP": "Andhra Pradesh",
+    "IN-HR": "Haryana", "IN-OR": "Odisha",
+}
+
+
+def geo_code_to_state_name(geo_code: Optional[str]) -> Optional[str]:
+    if not geo_code:
+        return None
+    return GEO_CODE_TO_STATE_NAME.get(geo_code)
+
+
 def regional_trend_score(
     artist_name: str,
     city: str,
