@@ -135,6 +135,16 @@ router.get('/ml/regional-trends', authenticate, madAnalyticsController.getRegion
 router.get('/ml/touring-history/repeat-visit-rate', authenticate, madAnalyticsController.getRepeatVisitRate);
 
 /**
+ * @route GET /api/v1/analytics/ml/touring-history/insights?artist_id=...
+ * @desc Every real, data-grounded insight this engine can find for one
+ *       artist -- the per-artist surface of the same engine
+ *       dashboard-highlights draws its roster-wide "best of" picks from.
+ *       See mad_analytics/touring_history/scorer.py::artist_insights()
+ * @access Public (authenticated)
+ */
+router.get('/ml/touring-history/insights', authenticate, madAnalyticsController.getArtistInsights);
+
+/**
  * @route POST /api/v1/analytics/ml/feasibility
  * @desc TOPSIS-ranked city feasibility for one artist against every other
  *       NCCS-covered candidate city -- see mad_analytics/feasibility/topsis.py

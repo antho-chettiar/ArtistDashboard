@@ -11,7 +11,24 @@ import client from '../api/client'
 import { formatNumber, formatCurrency, formatDate, formatPercent } from '../utils/formatters'
 import ViberateTrends from '../components/viberate/ViberateTrends'
 import ScoreBreakdown from '../components/viberate/ScoreBreakdown'
-import { useEngagement, useRepeatVisitRate } from '../hooks/usePredictions'
+import { useEngagement, useRepeatVisitRate, useArtistInsights } from '../hooks/usePredictions'
+
+// Same icon set as Dashboard.jsx's Touring Spotlight -- this page is the
+// other surface of the same engine (mad_analytics/touring_history/scorer.py
+// ::artist_insights()), so the visual language should match exactly.
+const INSIGHT_ICON = {
+  most_repeated: '🔁',
+  longest_relationship: '📈',
+  widest_reach: '🗺️',
+  biggest_show: '🏟️',
+  most_consistent: '🎯',
+  career_origin: '🌱',
+  longest_dry_spell: '🕳️',
+  busiest_year: '⚡',
+  geographic_breadth: '🧭',
+  overdue_with_demand: '📍',
+  untested_promising: '✨',
+}
 
 // NOTE: 'Demographics' tab hidden by product decision (Demographics is out of
 // scope for the current Artist Analytics product). The underlying data-fetch
@@ -91,6 +108,7 @@ function ArtistProfile() {
   // slow/unavailable analytics call never blocks the rest of the page.
   const engagement = useEngagement(id, !!id)
   const repeatVisit = useRepeatVisitRate(id, !!id)
+  const artistInsights = useArtistInsights(id, !!id)
 
   const isLoading = artistLoading || concertsLoading
   const error = artistError
@@ -410,6 +428,45 @@ function ArtistProfile() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Real, data-grounded facts found for this artist specifically -- the
+          per-artist surface of the same engine behind Dashboard's Touring
+          Spotlight (mad_analytics/touring_history/scorer.py::artist_insights()).
+          Only insight types with real data behind them appear -- never padded
+          to hit a count. */}
+      <div className="glass-card p-5 mb-6 animate-fade-up">
+        <h3 className="font-display font-semibold text-sm mb-1" style={{ color: 'var(--text-primary)' }}>
+          Insights
+        </h3>
+        <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+          Real facts pulled straight from logged concert and audience history — no scored prediction
+        </p>
+        {!artistInsights.data ? (
+          <p className="text-sm" style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+            {artistInsights.isLoading ? 'Finding insights…' : 'Not available'}
+          </p>
+        ) : artistInsights.data.insights.length === 0 ? (
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            Not enough logged history yet for a real insight about this artist
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3.5">
+            {artistInsights.data.insights.map((ins, i) => (
+              <div key={i} className="flex items-start gap-2.5">
+                <span className="text-base flex-shrink-0 leading-tight" aria-hidden="true">
+                  {INSIGHT_ICON[ins.insight_type] || '•'}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold leading-snug" style={{ color: 'var(--text-primary)' }}>
+                    {ins.headline}
+                  </p>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{ins.detail}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Tabs */}

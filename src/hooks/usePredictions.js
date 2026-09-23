@@ -179,6 +179,24 @@ export function useRepeatVisitRate(artistId, enabled) {
   })
 }
 
+// Every real, data-grounded insight the touring-history engine can find for
+// ONE artist -- the per-artist surface of the same engine Dashboard's
+// Touring Spotlight draws its roster-wide "best of" picks from. See
+// mad_analytics/touring_history/scorer.py::artist_insights().
+export function useArtistInsights(artistId, enabled) {
+  return useQuery({
+    queryKey: ['artistInsights', artistId],
+    queryFn: async () => {
+      if (!artistId) return null
+      const { data } = await client.get('/analytics/ml/touring-history/insights', { params: { artist_id: artistId } })
+      return data.data
+    },
+    enabled,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  })
+}
+
 // TOPSIS-ranked "how feasible is this city for this artist, vs. every other
 // candidate city" -- see mad_analytics/feasibility/topsis.py for the WHY
 // behind each of the 5 criteria (Artist Power, Engagement, City Affinity,

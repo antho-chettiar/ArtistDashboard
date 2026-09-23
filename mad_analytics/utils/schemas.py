@@ -427,6 +427,17 @@ class DashboardHighlightsOutput(BaseModel):
     computed_at: str
 
 
+class ArtistInsightsOutput(BaseModel):
+    """The per-artist surface of the same insight engine dashboard_highlights()
+    draws its roster-wide 'best of' picks from -- every insight type that
+    genuinely has real data behind it for THIS artist, never padded to hit a
+    count (see touring_history/scorer.py::artist_insights())."""
+    artist_id: str
+    artist_name: str
+    insights: list[TouringInsight] = Field(default_factory=list)
+    computed_at: str
+
+
 # ── Engagement Rate (2026-09) ────────────────────────────────────────────────
 # "True fan" proxy -- see engagement/scorer.py's module docstring for the WHY
 # and the Instagram-is-structurally-unavailable limitation.

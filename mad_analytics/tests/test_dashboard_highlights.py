@@ -78,7 +78,7 @@ def test_biggest_verified_show_is_none_when_nothing_qualifies():
     assert _biggest_verified_show(rows) is None
 
 
-def test_dashboard_highlights_produces_five_distinct_real_insights():
+def test_dashboard_highlights_produces_nine_distinct_real_insights():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_url = f"sqlite+pysqlite:///{tmpdir}/dh.db"
         _seed(db_url, [
@@ -105,11 +105,17 @@ def test_dashboard_highlights_produces_five_distinct_real_insights():
     insight_types = {h.insight_type for h in result.highlights}
     assert insight_types == {
         "most_repeated", "longest_relationship", "widest_reach",
-        "biggest_show", "most_consistent",
+        "biggest_show", "most_consistent", "career_origin",
+        "longest_dry_spell", "busiest_year", "geographic_breadth",
     }
-    assert "Loyal Artist" in next(h.headline for h in result.highlights if h.insight_type == "most_repeated")
-    assert "Wide Reach Artist" in next(h.headline for h in result.highlights if h.insight_type == "widest_reach")
-    assert "Stadium Artist" in next(h.headline for h in result.highlights if h.insight_type == "biggest_show")
+    by_type = {h.insight_type: h for h in result.highlights}
+    assert "Loyal Artist" in by_type["most_repeated"].headline
+    assert "Wide Reach Artist" in by_type["widest_reach"].headline
+    assert "Stadium Artist" in by_type["biggest_show"].headline
+    assert "01 Jan 2015" in by_type["career_origin"].detail  # earliest of all seeded dates
+    assert "3.0 years" in by_type["longest_dry_spell"].headline  # Loyal Artist: Jan 2020 -> Jan 2023
+    assert "2022" in by_type["busiest_year"].headline and "4 shows" in by_type["busiest_year"].detail
+    assert "4 different states" in by_type["geographic_breadth"].headline  # Wide Reach: Delhi/Chennai/Kolkata/Pune
 
 
 def test_revisit_reminders_prioritize_corroborated_demand_signal_over_raw_elapsed_time():

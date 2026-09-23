@@ -799,6 +799,20 @@ export const madAnalyticsService = {
     }
   },
 
+  // Every real, data-grounded insight this engine can find for ONE artist --
+  // the per-artist surface of the same engine dashboard-highlights draws its
+  // roster-wide "best of" picks from. See
+  // mad_analytics/touring_history/scorer.py::artist_insights() for the full
+  // list of insight types and the no-fabrication discipline behind each one.
+  getArtistInsights: async (artistId: string) => {
+    try {
+      return await getAnalytics(`/touring-history/insights?artist_id=${encodeURIComponent(artistId)}`);
+    } catch (error) {
+      console.error('Error fetching artist insights from mad_analytics:', error);
+      throw error;
+    }
+  },
+
   // Curated venue capacities -- lets the Venues tab show which capacities
   // are real/verified vs. a keyword heuristic estimate.
   getKnownVenueCapacities: async () => {

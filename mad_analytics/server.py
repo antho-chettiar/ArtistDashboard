@@ -60,7 +60,7 @@ from .utils.db import persist_popularity_scores, fetch_saved_popularity, _normal
 from .venue_capacity import calculate as venue_capacity_calc
 from .venue_capacity.resolver import fetch_saved_capacity_resolutions
 from .feasibility import calculate as feasibility_calc
-from .touring_history import dashboard_highlights, repeat_visit_rate
+from .touring_history import dashboard_highlights, repeat_visit_rate, artist_insights
 from .engagement import engagement_rate
 from .trends.regional import regional_trend_score, city_to_geo_code, geo_code_to_state_name
 
@@ -770,6 +770,18 @@ def repeat_visit_rate_endpoint(artist_id: str = Query(...)):
     display-gap audit)."""
     try:
         return repeat_visit_rate(artist_id)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/touring-history/insights")
+def artist_insights_endpoint(artist_id: str = Query(...)):
+    """The per-artist surface of the same insight engine dashboard_highlights()
+    draws its roster-wide 'best of' picks from -- see
+    touring_history/scorer.py::artist_insights() for the full list of insight
+    types and the no-fabrication discipline behind each one."""
+    try:
+        return artist_insights(artist_id)
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 

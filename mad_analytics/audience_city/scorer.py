@@ -97,6 +97,14 @@ def city_audience_index(
         key = _normalize_city_key(raw_city)
         bucket = index.setdefault(key, {})
         bucket[metric_name] = bucket.get(metric_name, 0.0) + value
+    # Round once here, not at every display call site: summing two real alias
+    # rows (e.g. "Delhi" + "New Delhi") hits ordinary IEEE-754 float noise
+    # (7.9 + 8.0 -> 15.899999999999999) that has nothing to do with the real
+    # data -- it's an artifact of the addition, not a genuinely precise
+    # reading, so display precision beyond 1dp would be fake precision either way.
+    for bucket in index.values():
+        for metric_name, value in bucket.items():
+            bucket[metric_name] = round(value, 1)
     return index
 
 

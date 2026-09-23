@@ -57,6 +57,12 @@ const HIGHLIGHT_ICON = {
   widest_reach: '🗺️',
   biggest_show: '🏟️',
   most_consistent: '🎯',
+  career_origin: '🌱',
+  longest_dry_spell: '🕳️',
+  busiest_year: '⚡',
+  geographic_breadth: '🧭',
+  overdue_with_demand: '📍',
+  untested_promising: '✨',
 }
 
 // A future concert can never have real ticket/revenue data yet -- showing
