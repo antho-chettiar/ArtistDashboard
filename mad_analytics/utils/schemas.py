@@ -362,6 +362,13 @@ class FeasibilityCriteria(BaseModel):
     city_affinity: float         # 0-100
     touring_precedent_visits: int
     venue_fit_index: float       # 0-100
+    # Not one of the five TOPSIS criteria (it never gets its own weight) --
+    # surfaced here purely for transparency, since it silently boosts the
+    # touring_precedent_visits value actually fed into the TOPSIS matrix (see
+    # feasibility/topsis.py's _city_audience_boost()). None when unavailable
+    # for this artist+city -- the boost is then exactly 0, i.e. Touring
+    # Precedent behaves exactly as it did before this signal existed.
+    city_audience_monthly_listeners_pct: Optional[float] = None
 
 
 class FeasibilityOutput(BaseModel):
@@ -413,4 +420,21 @@ class EngagementOutput(BaseModel):
     spotify_follow_rate: Optional[float] = None        # spotify_followers / spotify_listeners (both current snapshots)
     instagram_engagement_rate: Optional[float] = None  # always None -- see scorer.py
     facebook_engagement_rate: Optional[float] = None   # always None -- see scorer.py
+    computed_at: str
+
+
+# ── City Audience Presence (2026-09) ─────────────────────────────────────────
+# Real, city-resolved digital-audience reading from Viberate's "Audience by
+# City" table -- see audience_city/scorer.py's module docstring for the WHY
+# (it covers Touring Precedent's "never toured but has a real digital
+# audience there" blind spot, see feasibility/topsis.py) and the observed
+# per-artist, over-time availability fluctuation.
+
+class CityAudiencePresenceOutput(BaseModel):
+    artist_id: str
+    city: str
+    monthly_listeners_pct: Optional[float] = None  # % of Spotify monthly listeners in this city
+    monthly_views: Optional[float] = None          # absolute YouTube monthly views from this city
+    total_followers_pct: Optional[float] = None    # % of Instagram followers in this city
+    available: bool                                # False when all three above are None -- not offered for this artist right now, never a fabricated 0
     computed_at: str

@@ -447,12 +447,23 @@ model ViberateMetricDaily {
   totalValue Float?
   apiVersion String   @default("unknown")
   fetchedAt  DateTime @default(now())
+  // NULL for every existing national-level metric row (spotify_followers,
+  // youtube_views, etc). Non-null only for the audience_city_* metrics
+  // (see scrapers/viberate audience-city collector) -- one row per
+  // artist+city+metric+day, e.g. metricName="audience_city_monthly_listeners_pct",
+  // city="bengaluru". Nullable and folded into the unique constraint below
+  // (not a separate table) so this rides the exact same upsert/query pipeline
+  // as every other Viberate metric -- see mad_analytics/engagement/scorer.py's
+  // engagement_rate() for the precedent of reading this table by metricName
+  // without needing to know about city at all.
+  city       String?
   artist     Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
 
-  @@unique([artistId, metricName, date])
+  @@unique([artistId, metricName, date, city])
   @@index([artistId, metricName, date])
   @@index([artistId, date])
   @@index([date])
+  @@index([artistId, city])
   @@map("viberate_metrics_daily")
 }
 

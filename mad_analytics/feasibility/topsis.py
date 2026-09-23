@@ -32,8 +32,9 @@ cost-criteria inversion is needed):
      artists against each other, inert for the current single-artist
      city-ranking use case.
   3. City Affinity (0-100) -- the existing NCCS-backed market-activity signal.
-  4. Touring Precedent (raw visit count) -- Tier 1 from the feasibility
-     hierarchy (see revenue/predictor.py): real past visits are the strongest
+  4. Touring Precedent (raw visit count, optionally boosted -- see
+     _city_audience_boost() below) -- Tier 1 from the feasibility hierarchy
+     (see revenue/predictor.py): real past visits are the strongest
      ground-truth signal this product has, so this gets the heaviest weight.
   5. Venue Fit (0-100) -- this city's average KNOWN concert venue capacity
      (any artist, not just this one), normalized against the strongest city.
@@ -48,6 +49,24 @@ WEIGHTS are an explicitly labeled calibration assumption (same convention as
 revenue/predictor.py's AFFORDABLE_REFERENCE_PRICE_INR) -- not derived from
 real ticket-sales data, because none exists yet. Revisit once real concerts
 accumulate.
+
+CITY AUDIENCE PRESENCE BOOST (2026-09): Touring Precedent's one blind spot is
+that an artist who has NEVER toured a city but has a large, real digital
+audience there looks identical to an artist with zero interest in that city --
+pure historical-visit-count scoring can't tell them apart. audience_city/
+(Viberate's "Audience by City" table) fixes this for whichever artist+city
+pairs it actually has data for. _city_audience_boost() below adds a small,
+capped nudge to the raw visit count that's fed into the TOPSIS matrix --
+capped well under the weight of a single real visit, so this Tier-2 digital
+signal can never outrank Tier-1 real touring precedent, only break a 0-visit
+tie. Same "authoritative if present, no silent guess if absent" pattern as
+regional_trend_score's fallback to national Popularity in
+revenue/predictor.py's _feasibility_language_factor: when no audience-city
+reading exists for that artist+city, the boost is exactly 0 and Touring
+Precedent behaves exactly as it did before this signal existed. The raw
+touring_precedent_visits value reported in FeasibilityCriteria is NEVER
+altered by this boost -- it stays the honest, real visit count; the boost
+only ever affects the TOPSIS ranking math itself.
 """
 from __future__ import annotations
 
@@ -61,6 +80,26 @@ ENGAGEMENT_WEIGHT = 0.05
 CITY_AFFINITY_WEIGHT = 0.30
 TOURING_PRECEDENT_WEIGHT = 0.40
 VENUE_FIT_WEIGHT = 0.20
+
+# A full-strength digital audience presence boosts the TOPSIS-matrix visit
+# count by at most half of one real recorded visit's worth -- keeps this
+# Tier-2 signal from ever outranking a single Tier-1 real visit, only
+# resolving a 0-visit tie. Explicitly labeled calibration assumptions (same
+# convention as the WEIGHTS above), not derived from real ticket data.
+CITY_AUDIENCE_BOOST_CAP = 0.5
+# % monthly-listeners share treated as "strong enough" digital presence to
+# earn the full boost above; scales linearly below this.
+CITY_AUDIENCE_BOOST_REFERENCE_PCT = 20.0
+
+
+def _city_audience_boost(monthly_listeners_pct: Optional[float]) -> float:
+    """0.0 when unavailable for this artist+city -- Touring Precedent then
+    behaves exactly as it did before this signal existed (see module
+    docstring's CITY AUDIENCE PRESENCE BOOST section)."""
+    if monthly_listeners_pct is None:
+        return 0.0
+    fraction = min(1.0, monthly_listeners_pct / CITY_AUDIENCE_BOOST_REFERENCE_PCT)
+    return fraction * CITY_AUDIENCE_BOOST_CAP
 
 
 def _topsis(matrix: list[list[float]], weights: list[float]) -> list[float]:
@@ -158,6 +197,7 @@ def calculate(payload: FeasibilityInput, db_url: Optional[str] = None) -> Feasib
     from ..touring_history import visit_counts_by_city
     from ..popularity.calculator import calculate as popularity_calculate
     from ..engagement import engagement_rate
+    from ..audience_city import city_audience_index, METRIC_MONTHLY_LISTENERS_PCT
     from ..utils.schemas import PopularityInput
 
     affinity = city_affinity_scores()
@@ -171,6 +211,7 @@ def calculate(payload: FeasibilityInput, db_url: Optional[str] = None) -> Feasib
         candidate_affinity[target_key] = 0.0
 
     visit_counts = visit_counts_by_city(payload.artist_id, db_url=db_url)
+    audience_index = city_audience_index(payload.artist_id, db_url=db_url)
     venue_index = _city_venue_capacity_index(db_url=db_url)
     popularity_score = popularity_calculate(
         PopularityInput(artist_id=payload.artist_id)
@@ -186,7 +227,8 @@ def calculate(payload: FeasibilityInput, db_url: Optional[str] = None) -> Feasib
             popularity_score,
             engagement_score,
             candidate_affinity[city_key],
-            float(visit_counts.get(city_key, 0)),
+            float(visit_counts.get(city_key, 0))
+            + _city_audience_boost(audience_index.get(city_key, {}).get(METRIC_MONTHLY_LISTENERS_PCT)),
             venue_index.get(city_key, 0.0),
         ]
         for city_key in city_keys
@@ -210,6 +252,7 @@ def calculate(payload: FeasibilityInput, db_url: Optional[str] = None) -> Feasib
             city_affinity=candidate_affinity[target_key],
             touring_precedent_visits=visit_counts.get(target_key, 0),
             venue_fit_index=venue_index.get(target_key, 0.0),
+            city_audience_monthly_listeners_pct=audience_index.get(target_key, {}).get(METRIC_MONTHLY_LISTENERS_PCT),
         ),
         computed_at=datetime.now(timezone.utc).isoformat(),
     )

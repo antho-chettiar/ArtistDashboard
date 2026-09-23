@@ -213,29 +213,46 @@ async function upsertRows(
   // For ~150-200 rows per artist this is fast enough.
   // If you have 100+ artists, consider raw SQL COPY or chunked createMany.
   for (const row of rows) {
-    await prisma.viberateMetricDaily.upsert({
+    // city is now part of the compound unique key (see schema.prisma) so
+    // every row this collector writes (national-level metrics only) can be
+    // identified as artistId+metricName+date+city=NULL. Prisma's generated
+    // compound-unique input types a nullable key column as non-null `string`
+    // (a known Prisma limitation, not fixable from this file), so `upsert`'s
+    // typed where can't express city: null here -- find-then-write instead,
+    // using the plain (nullable-friendly) WhereInput. The city="bengaluru"
+    // etc. rows come from the separate audienceCity.ts collector, never this one.
+    const existing = await prisma.viberateMetricDaily.findFirst({
       where: {
-        artistId_metricName_date: {
-          artistId: row.artistId,
-          metricName: row.metricName,
-          date: row.date,
-        },
-      },
-      update: {
-        diffValue: row.diffValue,
-        totalValue: row.totalValue,
-        apiVersion: row.apiVersion,
-        fetchedAt: new Date(),
-      },
-      create: {
         artistId: row.artistId,
         metricName: row.metricName,
         date: row.date,
-        diffValue: row.diffValue,
-        totalValue: row.totalValue,
-        apiVersion: row.apiVersion,
+        city: null,
       },
+      select: { id: true },
     });
+
+    if (existing) {
+      await prisma.viberateMetricDaily.update({
+        where: { id: existing.id },
+        data: {
+          diffValue: row.diffValue,
+          totalValue: row.totalValue,
+          apiVersion: row.apiVersion,
+          fetchedAt: new Date(),
+        },
+      });
+    } else {
+      await prisma.viberateMetricDaily.create({
+        data: {
+          artistId: row.artistId,
+          metricName: row.metricName,
+          date: row.date,
+          diffValue: row.diffValue,
+          totalValue: row.totalValue,
+          apiVersion: row.apiVersion,
+        },
+      });
+    }
     upserted++;
   }
 
