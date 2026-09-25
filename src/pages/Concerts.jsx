@@ -35,14 +35,22 @@ function getTime(value) {
   return Number.isFinite(time) ? time : 0
 }
 
+// Returns null (never a fabricated 0%) whenever either side of the ratio is
+// genuinely unknown -- 0 of 233 concerts in this dataset have real ticket
+// data, so a bare `ticketsSold` of 0 always means "not tracked", not "sold
+// zero tickets". Matches the same guard already applied in
+// ConcertDetail.jsx/MapView.jsx -- this file's own row/card view had been
+// missed in that pass.
 function getSellThrough(concert) {
   const tickets = Number(concert.ticketsSold || 0)
   const capacity = Number(concert.capacity || 0)
-  return capacity > 0 ? (tickets / capacity) * 100 : 0
+  if (!capacity || !tickets) return null
+  return (tickets / capacity) * 100
 }
 
-function getSellThroughStatus(value, capacity) {
+function getSellThroughStatus(value, capacity, ticketsSold) {
   if (!capacity) return { label: 'Capacity TBA', color: 'var(--text-muted)' }
+  if (!ticketsSold || value == null) return { label: 'Not tracked', color: 'var(--text-muted)' }
   if (value >= 95) return { label: 'Sold out', color: '#10B981' }
   if (value >= 80) return { label: 'Strong', color: '#F59E0B' }
   return { label: 'Building', color: '#6366F1' }
@@ -82,19 +90,20 @@ function MetricCard({ icon, label, value, helper, color, delay = 0 }) {
   )
 }
 
-function SellThroughBar({ value, capacity }) {
-  const status = getSellThroughStatus(value, capacity)
+function SellThroughBar({ value, capacity, ticketsSold }) {
+  const status = getSellThroughStatus(value, capacity, ticketsSold)
+  const isUnknown = value == null
 
   return (
     <div className="flex flex-col gap-1 items-center">
       <p className="text-xs font-bold leading-tight" style={{ color: status.color }}>
-        {capacity ? `${value.toFixed(1)}%` : 'N/A'}
+        {isUnknown ? 'N/A' : `${value.toFixed(1)}%`}
       </p>
       <div className="h-2 w-20 rounded-full overflow-hidden" style={{ background: 'var(--bg-secondary)' }}>
         <div
           className="h-full rounded-full transition-all duration-500"
           style={{
-            width: `${Math.min(value, 100)}%`,
+            width: isUnknown ? '0%' : `${Math.min(value, 100)}%`,
             backgroundColor: status.color,
           }}
         />
@@ -154,7 +163,7 @@ function ConcertCard({ concert, onOpen }) {
         </div>
       </div>
 
-      <SellThroughBar value={sellThrough} capacity={capacity} />
+      <SellThroughBar value={sellThrough} capacity={capacity} ticketsSold={concert.ticketsSold} />
     </button>
   )
 }
@@ -244,7 +253,7 @@ function Concerts() {
         if (sortBy === 'date-asc') return getTime(a.date) - getTime(b.date)
         if (sortBy === 'revenue-desc') return Number(b.totalRevenue || 0) - Number(a.totalRevenue || 0)
         if (sortBy === 'tickets-desc') return Number(b.ticketsSold || 0) - Number(a.ticketsSold || 0)
-        if (sortBy === 'sell-through-desc') return getSellThrough(b) - getSellThrough(a)
+        if (sortBy === 'sell-through-desc') return (getSellThrough(b) ?? -1) - (getSellThrough(a) ?? -1)
         return getTime(b.date) - getTime(a.date)
       })
   }, [activeCity, concerts, queryYear, search, sortBy])
@@ -611,7 +620,7 @@ function Concerts() {
                           </p>
                         </td>
                         <td className="px-4 py-4">
-                          <SellThroughBar value={sellThrough} capacity={capacity} />
+                          <SellThroughBar value={sellThrough} capacity={capacity} ticketsSold={concert.ticketsSold} />
                         </td>
                         <td className="px-4 py-4 text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
                           {concert.avgTicketPrice > 0 ? formatCurrency(concert.avgTicketPrice, concert.currency) : '—'}

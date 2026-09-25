@@ -97,9 +97,13 @@ export function formatPercent(value) {
   return `${(value * 100).toFixed(1)}%`
 }
 
-// Sell-through %: tickets sold / capacity
+// Sell-through %: tickets sold / capacity. Returns '\u2014' (never a
+// fabricated 0.0%) when either side is genuinely unknown -- 0 of 233
+// concerts in this dataset have real ticket data, so a bare `sold` of 0
+// always means "not tracked", not "sold zero tickets" (same guard as
+// Concerts.jsx/ConcertDetail.jsx/MapView.jsx's own sell-through logic).
 export function sellThrough(sold, capacity) {
-  if (!capacity) return '\u2014'
+  if (!capacity || !sold) return '\u2014'
   return `${((sold / capacity) * 100).toFixed(1)}%`
 }
 
