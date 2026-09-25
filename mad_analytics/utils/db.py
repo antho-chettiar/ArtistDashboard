@@ -30,19 +30,30 @@ _PRISMA_ONLY_QUERY_PARAMS = {"pgbouncer"}
 
 
 def _normalize_db_url(db_url: str) -> str:
-    if db_url.startswith("postgres://"):
-        db_url = db_url.replace("postgres://", "postgresql://", 1)
-
     parts = urlsplit(db_url)
+
+    # This service only ships psycopg2-binary (see requirements.txt) -- force
+    # the bare "postgresql" scheme regardless of what driver suffix the raw
+    # DATABASE_URL happens to carry. Found live in production 2026-09-25:
+    # the env var's scheme was "postgresql+psycopg" (psycopg v3, e.g. from
+    # Supabase's connection-string UI offering that variant), which isn't
+    # installed here at all and broke EVERY DB-touching endpoint on this
+    # service with "No module named 'psycopg'" -- not just one function,
+    # since every caller resolves the same DATABASE_URL through get_engine().
+    base_scheme = parts.scheme.split("+", 1)[0]
+    scheme = "postgresql" if base_scheme in ("postgres", "postgresql") else parts.scheme
+
     if not parts.query:
-        return db_url
+        if scheme == parts.scheme:
+            return db_url
+        return urlunsplit((scheme, parts.netloc, parts.path, parts.query, parts.fragment))
 
     query_pairs = parse_qsl(parts.query, keep_blank_values=True)
     filtered = [(k, v) for k, v in query_pairs if k.lower() not in _PRISMA_ONLY_QUERY_PARAMS]
-    if filtered == query_pairs:
+    if filtered == query_pairs and scheme == parts.scheme:
         return db_url
 
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(filtered), parts.fragment))
+    return urlunsplit((scheme, parts.netloc, parts.path, urlencode(filtered), parts.fragment))
 
 
 def _get_db_url(db_url: Optional[str] = None) -> str:
