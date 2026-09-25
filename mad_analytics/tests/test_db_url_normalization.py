@@ -1,33 +1,41 @@
 """
-Regression test for the 2026-09-25 production incident: DATABASE_URL with an
-explicit "+psycopg" (v3) driver suffix broke every DB-touching endpoint on
-this service with "No module named 'psycopg'" -- this service only ships
-psycopg2-binary (requirements.txt), so _normalize_db_url must force the bare
-"postgresql" scheme regardless of what driver suffix the raw env var carries.
+Regression test for the 2026-09-25 production incident: SQLAlchemy 2.1.0
+(published that day; the unpinned `sqlalchemy>=2.0.0` requirement picked it
+up on Render's next fresh build) changed the DEFAULT dialect for a bare
+"postgresql://" URL from psycopg2 to psycopg v3. This service only ships
+psycopg2-binary (requirements.txt, now also capped <2.1.0 as a second guard),
+so _normalize_db_url must always pin the driver explicitly to
+"postgresql+psycopg2" rather than relying on whatever the installed
+SQLAlchemy's default happens to be.
 """
 from mad_analytics.utils.db import _normalize_db_url
 
 
-def test_strips_psycopg_v3_driver_suffix():
+def test_forces_psycopg2_driver_on_bare_postgresql_url():
+    result = _normalize_db_url("postgresql://user:pass@host:5432/db")
+    assert result == "postgresql+psycopg2://user:pass@host:5432/db"
+
+
+def test_forces_psycopg2_driver_replacing_unsupported_psycopg_v3_suffix():
     result = _normalize_db_url("postgresql+psycopg://user:pass@host:5432/db")
-    assert result == "postgresql://user:pass@host:5432/db"
+    assert result == "postgresql+psycopg2://user:pass@host:5432/db"
 
 
-def test_strips_driver_suffix_with_query_params():
+def test_forces_psycopg2_driver_with_query_params():
     result = _normalize_db_url("postgresql+psycopg://user:pass@host:5432/db?sslmode=require")
-    assert result == "postgresql://user:pass@host:5432/db?sslmode=require"
+    assert result == "postgresql+psycopg2://user:pass@host:5432/db?sslmode=require"
 
 
-def test_still_rewrites_postgres_scheme_to_postgresql():
+def test_still_rewrites_postgres_scheme_to_postgresql_psycopg2():
     result = _normalize_db_url("postgres://user:pass@host:5432/db")
-    assert result == "postgresql://user:pass@host:5432/db"
+    assert result == "postgresql+psycopg2://user:pass@host:5432/db"
 
 
-def test_bare_postgresql_url_unchanged():
-    url = "postgresql://user:pass@host:5432/db"
+def test_already_explicit_psycopg2_url_unchanged():
+    url = "postgresql+psycopg2://user:pass@host:5432/db"
     assert _normalize_db_url(url) == url
 
 
 def test_still_strips_prisma_only_query_params():
     result = _normalize_db_url("postgresql+psycopg://user:pass@host:5432/db?pgbouncer=true&sslmode=require")
-    assert result == "postgresql://user:pass@host:5432/db?sslmode=require"
+    assert result == "postgresql+psycopg2://user:pass@host:5432/db?sslmode=require"

@@ -23,7 +23,13 @@ fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 
 # DB connection (for training script only)
-sqlalchemy>=2.0.0
+# Upper bound is deliberate: SQLAlchemy 2.1.0 changed the DEFAULT dialect for
+# a bare "postgresql://" URL from psycopg2 to psycopg v3 (confirmed live,
+# 2026-09-25 production incident) -- this service only ships psycopg2-binary,
+# not psycopg. utils/db.py now also pins the driver explicitly in the URL
+# itself as an independent guard, but this cap stops an unpinned future
+# SQLAlchemy release from silently changing other defaults the same way.
+sqlalchemy>=2.0.0,<2.1.0
 psycopg2-binary>=2.9.9
 
 # Web scraping (Instagram profiles, BookMyShow, etc.)

@@ -32,16 +32,24 @@ _PRISMA_ONLY_QUERY_PARAMS = {"pgbouncer"}
 def _normalize_db_url(db_url: str) -> str:
     parts = urlsplit(db_url)
 
-    # This service only ships psycopg2-binary (see requirements.txt) -- force
-    # the bare "postgresql" scheme regardless of what driver suffix the raw
-    # DATABASE_URL happens to carry. Found live in production 2026-09-25:
-    # the env var's scheme was "postgresql+psycopg" (psycopg v3, e.g. from
-    # Supabase's connection-string UI offering that variant), which isn't
-    # installed here at all and broke EVERY DB-touching endpoint on this
-    # service with "No module named 'psycopg'" -- not just one function,
-    # since every caller resolves the same DATABASE_URL through get_engine().
+    # This service only ships psycopg2-binary (see requirements.txt) -- always
+    # force the "postgresql+psycopg2" scheme explicitly, regardless of what
+    # driver suffix (or lack of one) the raw DATABASE_URL carries. Found live
+    # in production 2026-09-25: SQLAlchemy 2.1.0 (published today; the
+    # unpinned `sqlalchemy>=2.0.0` requirement picked it up on Render's next
+    # fresh build) changed the DEFAULT dialect for a bare "postgresql://" URL
+    # from psycopg2 to psycopg v3 -- confirmed directly (registry.load
+    # returns PGDialect_psycopg2 under 2.0.53 but PGDialect_psycopg under
+    # 2.1.0). Only psycopg2-binary is installed here, so that default-driver
+    # change alone broke EVERY DB-touching endpoint with "No module named
+    # 'psycopg'" the moment Render rebuilt, with no application code change
+    # at all. Explicitly pinning the driver in the URL (instead of relying on
+    # "bare postgresql defaults to psycopg2", which is exactly the assumption
+    # that just broke) makes this immune to any future SQLAlchemy default
+    # change; requirements.txt also now caps sqlalchemy<2.1.0 as a second,
+    # independent guard.
     base_scheme = parts.scheme.split("+", 1)[0]
-    scheme = "postgresql" if base_scheme in ("postgres", "postgresql") else parts.scheme
+    scheme = "postgresql+psycopg2" if base_scheme in ("postgres", "postgresql") else parts.scheme
 
     if not parts.query:
         if scheme == parts.scheme:
