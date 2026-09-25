@@ -8,7 +8,23 @@ import SyncPopularityButton from '../components/ui/SyncPopularityButton'
 import useFilterStore from '../store/useFilterStore'
 import { useArtists } from '../hooks/useArtists'
 import { useDebouncedValue } from '../hooks/useDebouncedValue'
+import { useTopInsightPerArtist } from '../hooks/usePredictions'
 import { formatNumber } from '../utils/formatters'
+
+// Same icon set as Dashboard.jsx's Touring Spotlight / ArtistProfile.jsx's
+// Insights section -- this card's teaser is the third surface of the same
+// engine, so the visual language should match exactly.
+const INSIGHT_ICON = {
+  most_repeated: '🔁',
+  longest_relationship: '📈',
+  widest_reach: '🗺️',
+  biggest_show: '🏟️',
+  most_consistent: '🎯',
+  career_origin: '🌱',
+  longest_dry_spell: '🕳️',
+  busiest_year: '⚡',
+  geographic_breadth: '🧭',
+}
 
 
 // Matches the real genre values now stored on artists.genre (backfilled from
@@ -133,7 +149,7 @@ const PLATFORM_META = {
 //   )
 // }
 
-function ArtistCard({ artist, onClick, delay = 0 }) {
+function ArtistCard({ artist, insight, onClick, delay = 0 }) {
   const followers = artist.followers || {}
   const totalFollowers = Object.values(followers).reduce((a, b) => a + Number(b || 0), 0)
   const rog = artist.rog || {}
@@ -248,6 +264,23 @@ function ArtistCard({ artist, onClick, delay = 0 }) {
         })}
       </div>
 
+      {/* One real, data-grounded insight for this artist -- the compact
+          list-view surface of the same engine behind Dashboard's Touring
+          Spotlight and each Artist Profile's Insights section. Absent
+          entirely (not a placeholder) when nothing's genuinely computable
+          yet, e.g. an artist with no logged concerts. */}
+      {insight && (
+        <div className="flex items-start gap-2 mb-3 p-2.5 rounded-xl"
+          style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.16)' }}>
+          <span className="text-sm flex-shrink-0 leading-tight" aria-hidden="true">
+            {INSIGHT_ICON[insight.insight_type] || '•'}
+          </span>
+          <p className="text-xs leading-snug" style={{ color: 'var(--text-secondary)' }}>
+            {insight.headline}
+          </p>
+        </div>
+      )}
+
       {/* Footer */}
       <div className="flex items-center justify-between pt-3"
         style={{ borderTop: '1px solid var(--border)' }}>
@@ -283,6 +316,17 @@ function Artists() {
     search: debouncedSearch,
     genre: activeGenre === 'All' ? '' : activeGenre,
   })
+
+  // One real insight per artist, fetched once for the whole roster (not
+  // once per card) -- see mad_analytics/touring_history/scorer.py::
+  // top_insight_per_artist(). A lookup keyed by artist_id; an artist absent
+  // from the response (no logged concerts yet) simply gets no teaser.
+  const { data: topInsights } = useTopInsightPerArtist()
+  const insightByArtist = useMemo(() => {
+    const map = {}
+    for (const item of topInsights?.items || []) map[item.artist_id] = item.insight
+    return map
+  }, [topInsights])
 
   // Apply additional filters (artistType)
   const filtered = useMemo(() => {
@@ -409,7 +453,7 @@ function Artists() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {filtered.map((artist, i) => (
-            <ArtistCard key={artist.id} artist={artist} delay={i * 60}
+            <ArtistCard key={artist.id} artist={artist} insight={insightByArtist[artist.id]} delay={i * 60}
               onClick={() => navigate(`/artists/${artist.id}`)} />
           ))}
         </div>

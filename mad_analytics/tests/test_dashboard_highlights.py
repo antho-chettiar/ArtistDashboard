@@ -78,6 +78,21 @@ def test_biggest_verified_show_is_none_when_nothing_qualifies():
     assert _biggest_verified_show(rows) is None
 
 
+def test_biggest_verified_show_scope_controls_the_claim():
+    # Found live in production: a per-artist-filtered rows list defaulting to
+    # scope="roster" wrongly claimed a roster-wide superlative for what was
+    # actually only that one artist's own biggest show.
+    rows = [{"artistName": "Solo Artist", "venueName": "Small Hall", "capacity": 5000,
+              "city": "pune", "concertDate": date(2024, 1, 1)}]
+
+    roster_scoped = _biggest_verified_show(rows)
+    artist_scoped = _biggest_verified_show(rows, scope="artist")
+
+    assert "in this roster" in roster_scoped.headline
+    assert "in this roster" not in artist_scoped.headline
+    assert "Solo Artist's biggest verified show" in artist_scoped.headline
+
+
 def test_dashboard_highlights_produces_nine_distinct_real_insights():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_url = f"sqlite+pysqlite:///{tmpdir}/dh.db"

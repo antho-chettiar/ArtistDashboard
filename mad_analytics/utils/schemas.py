@@ -438,6 +438,21 @@ class ArtistInsightsOutput(BaseModel):
     computed_at: str
 
 
+class ArtistTopInsight(BaseModel):
+    artist_id: str
+    insight: TouringInsight
+
+
+class TopInsightsOutput(BaseModel):
+    """One real insight per artist -- a compact list-view teaser (e.g. the
+    Artists page cards), computed once for the whole roster in a single pass
+    rather than fetching all of artist_insights() per artist (see
+    touring_history/scorer.py::top_insight_per_artist()). An artist with
+    nothing genuinely computable is simply absent, never a placeholder."""
+    items: list[ArtistTopInsight] = Field(default_factory=list)
+    computed_at: str
+
+
 # ── Engagement Rate (2026-09) ────────────────────────────────────────────────
 # "True fan" proxy -- see engagement/scorer.py's module docstring for the WHY
 # and the Instagram-is-structurally-unavailable limitation.

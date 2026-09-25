@@ -145,6 +145,15 @@ router.get('/ml/touring-history/repeat-visit-rate', authenticate, madAnalyticsCo
 router.get('/ml/touring-history/insights', authenticate, madAnalyticsController.getArtistInsights);
 
 /**
+ * @route GET /api/v1/analytics/ml/touring-history/top-insight-per-artist
+ * @desc One real insight per artist, roster-wide -- for the Artists list
+ *       page's compact teaser. See mad_analytics/touring_history/scorer.py
+ *       ::top_insight_per_artist()
+ * @access Public (authenticated)
+ */
+router.get('/ml/touring-history/top-insight-per-artist', authenticate, madAnalyticsController.getTopInsightPerArtist);
+
+/**
  * @route POST /api/v1/analytics/ml/feasibility
  * @desc TOPSIS-ranked city feasibility for one artist against every other
  *       NCCS-covered candidate city -- see mad_analytics/feasibility/topsis.py

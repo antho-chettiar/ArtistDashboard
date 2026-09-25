@@ -813,6 +813,18 @@ export const madAnalyticsService = {
     }
   },
 
+  // One real insight per artist, roster-wide -- for the Artists list page's
+  // compact teaser. See mad_analytics/touring_history/scorer.py::
+  // top_insight_per_artist().
+  getTopInsightPerArtist: async () => {
+    try {
+      return await getAnalytics('/touring-history/top-insight-per-artist');
+    } catch (error) {
+      console.error('Error fetching top insight per artist from mad_analytics:', error);
+      throw error;
+    }
+  },
+
   // Curated venue capacities -- lets the Venues tab show which capacities
   // are real/verified vs. a keyword heuristic estimate.
   getKnownVenueCapacities: async () => {

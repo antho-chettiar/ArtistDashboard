@@ -183,6 +183,15 @@ export const madAnalyticsController = {
     }
   },
 
+  getTopInsightPerArtist: async (_req: Request, res: Response) => {
+    try {
+      const result = await madAnalyticsService.getTopInsightPerArtist();
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      return handleAnalyticsError(res, error, 'getTopInsightPerArtist');
+    }
+  },
+
   // TOPSIS-ranked city feasibility for one artist -- see
   // mad_analytics/feasibility/topsis.py for the WHY. Ranks payload.city
   // against every other NCCS-covered candidate city for this same artist.

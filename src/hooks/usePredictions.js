@@ -197,6 +197,22 @@ export function useArtistInsights(artistId, enabled) {
   })
 }
 
+// One real insight per artist, roster-wide, in a single call -- for the
+// Artists list page's compact per-card teaser. See
+// mad_analytics/touring_history/scorer.py::top_insight_per_artist().
+export function useTopInsightPerArtist(enabled = true) {
+  return useQuery({
+    queryKey: ['topInsightPerArtist'],
+    queryFn: async () => {
+      const { data } = await client.get('/analytics/ml/touring-history/top-insight-per-artist')
+      return data.data
+    },
+    enabled,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  })
+}
+
 // TOPSIS-ranked "how feasible is this city for this artist, vs. every other
 // candidate city" -- see mad_analytics/feasibility/topsis.py for the WHY
 // behind each of the 5 criteria (Artist Power, Engagement, City Affinity,
