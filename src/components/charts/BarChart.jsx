@@ -6,7 +6,7 @@ import { formatNumber } from '../../utils/formatters'
 
 const COLORS = ['#818CF8', '#FBBF24', '#34D399', '#F87171', '#A78BFA', '#38BDF8', '#FB923C', '#4ADE80']
 
-function CustomTooltip({ active, payload, label }) {
+function CustomTooltip({ active, payload, label, valueSuffix = '' }) {
   if (!active || !payload?.length) return null
   return (
     <div className="rounded-xl p-3 text-xs shadow-2xl"
@@ -16,15 +16,21 @@ function CustomTooltip({ active, payload, label }) {
         <div key={i} className="flex items-center gap-2 mb-1">
           <span className="w-2 h-2 rounded-full" style={{ background: entry.fill || entry.color }} />
           <span style={{ color: 'var(--text-secondary)' }}>{entry.name}:</span>
-          <span className="font-bold">{formatNumber(entry.value)}</span>
+          <span className="font-bold">{formatNumber(entry.value)}{valueSuffix}</span>
         </div>
       ))}
     </div>
   )
 }
 
-function BarChart({ data = [], bars = [], xKey = 'name', layout = 'vertical', height = 280, multiColor = false }) {
+// valueSuffix is optional (default '', identical to prior behavior for every
+// existing call site) -- lets a caller plotting a percentage (e.g. "% of an
+// artist's own total followers") label its axis/tooltip honestly as "57%"
+// instead of a bare "57" with no unit. Same additive pattern already used
+// for LineChart's tooltipValueFormatter/yTickFormatter.
+function BarChart({ data = [], bars = [], xKey = 'name', layout = 'vertical', height = 280, multiColor = false, valueSuffix = '' }) {
   const isHorizontal = layout === 'horizontal'
+  const numberTick = (v) => `${formatNumber(v)}${valueSuffix}`
   return (
     <ResponsiveContainer width="100%" height={height}>
       <ReBarChart data={data} layout={layout} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
@@ -37,15 +43,15 @@ function BarChart({ data = [], bars = [], xKey = 'name', layout = 'vertical', he
                 gives 10 city names room without overlapping. */}
             <XAxis dataKey={xKey} tick={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'Satoshi' }}
               axisLine={false} tickLine={false} interval={0} angle={-35} textAnchor="end" height={50} />
-            <YAxis tickFormatter={formatNumber} tick={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'Satoshi' }} axisLine={false} tickLine={false} width={48} />
+            <YAxis tickFormatter={numberTick} tick={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'Satoshi' }} axisLine={false} tickLine={false} width={48} />
           </>
         ) : (
           <>
-            <XAxis type="number" tickFormatter={formatNumber} tick={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'Satoshi' }} axisLine={false} tickLine={false} />
+            <XAxis type="number" tickFormatter={numberTick} tick={{ fontSize: 11, fill: 'var(--text-muted)', fontFamily: 'Satoshi' }} axisLine={false} tickLine={false} />
             <YAxis dataKey={xKey} type="category" tick={{ fontSize: 11, fill: 'var(--text-secondary)', fontFamily: 'Satoshi' }} axisLine={false} tickLine={false} width={100} />
           </>
         )}
-        <Tooltip content={<CustomTooltip />} />
+        <Tooltip content={<CustomTooltip valueSuffix={valueSuffix} />} />
         {bars.length > 1 && <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '12px', fontFamily: 'Satoshi' }} />}
         {bars.map((bar, i) => (
           <Bar key={bar.key} dataKey={bar.key} name={bar.label || bar.key}

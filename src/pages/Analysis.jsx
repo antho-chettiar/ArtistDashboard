@@ -619,11 +619,12 @@ function ArtistComparison({ artists, concerts }) {
   // Tickets are 0 vs 0 for most artist pairs).
   const cmp = (x, y) => (x > y ? 'a' : x < y ? 'b' : 'tie')
 
+  // Total Followers moved out of this table -- it's a digital-reach number
+  // (literally the sum of the Digital Reach chart's bars below), not a
+  // touring/commercial performance metric like the rest of this table.
+  // Mixing the two repeated the exact "Popularity isn't live draw" mistake
+  // this whole product's redesign traces back to.
   const comparisonRows = statsA && statsB ? [
-    {
-      label: 'Total Followers', a: formatNumber(statsA.totalFollowers), b: formatNumber(statsB.totalFollowers),
-      winner: cmp(statsA.totalFollowers, statsB.totalFollowers)
-    },
     {
       label: 'Avg. RoG', a: `${statsA.avgRoG.toFixed(1)}%`, b: `${statsB.avgRoG.toFixed(1)}%`,
       winner: cmp(statsA.avgRoG, statsB.avgRoG)
@@ -660,13 +661,48 @@ function ArtistComparison({ artists, concerts }) {
   const winsB = contestedRows.filter(r => r.winner === 'b').length
   const overallWinner = winsA === winsB ? 'tie' : (winsA > winsB ? 'a' : 'b')
 
-  // Radar-style comparison data for bar chart
-  const comparisonChartData = statsA && statsB ? [
-    { metric: 'Followers', a: statsA.totalFollowers / 1000000, b: statsB.totalFollowers / 1000000 },
-    { metric: 'RoG %', a: statsA.avgRoG, b: statsB.avgRoG },
-    { metric: 'Revenue M', a: statsA.totalRevenue / 1000000, b: statsB.totalRevenue / 1000000 },
-    { metric: 'Tickets K', a: statsA.totalTickets / 1000, b: statsB.totalTickets / 1000 },
+  // Small multiples, one metric per mini-chart -- the old version plotted
+  // Followers/RoG%/Revenue/Tickets on ONE shared axis (some divided by 1M,
+  // some by 1K, RoG left raw), so whichever metric had the biggest number
+  // visually flattened the rest. Each mini-chart here scales to only its
+  // own two values, so a real 0 vs 0 tie is exactly as visible as a real
+  // difference elsewhere -- no metric can drown another out.
+  const performanceMetrics = statsA && statsB ? [
+    { title: 'Avg. RoG', suffix: '%', data: [
+      { name: a.name, value: Number(statsA.avgRoG.toFixed(1)) },
+      { name: b.name, value: Number(statsB.avgRoG.toFixed(1)) },
+    ] },
+    { title: 'Total Revenue', data: [
+      { name: a.name, value: statsA.totalRevenue },
+      { name: b.name, value: statsB.totalRevenue },
+    ] },
+    { title: 'Tickets Sold', data: [
+      { name: a.name, value: statsA.totalTickets },
+      { name: b.name, value: statsB.totalTickets },
+    ] },
+    { title: 'Concerts', data: [
+      { name: a.name, value: statsA.concertCount },
+      { name: b.name, value: statsB.concertCount },
+    ] },
   ] : []
+
+  // Platform mix, normalised to each artist's OWN total followers -- the
+  // raw-count version compared whichever artist has more overall reach, not
+  // the platforms themselves (Amaal's Spotify dwarfing Aparshakti's entire
+  // profile said nothing about Instagram vs. Spotify). As a % of each
+  // artist's own reach, both bars share a fair 0-100% scale regardless of
+  // how different their absolute audience sizes are.
+  const platformReachData = statsA && statsB
+    ? ['instagram', 'youtube', 'spotify'].map(p => {
+      const aFollowers = a.followers?.[p] || 0
+      const bFollowers = b.followers?.[p] || 0
+      return {
+        platform: p.charAt(0).toUpperCase() + p.slice(1),
+        a: statsA.totalFollowers > 0 ? Number(((aFollowers / statsA.totalFollowers) * 100).toFixed(1)) : 0,
+        b: statsB.totalFollowers > 0 ? Number(((bFollowers / statsB.totalFollowers) * 100).toFixed(1)) : 0,
+      }
+    })
+    : []
 
   return (
     <div>
@@ -911,42 +947,65 @@ function ArtistComparison({ artists, concerts }) {
 
           {/* Side by side charts */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            {/* Touring & Commercial Performance -- small multiples. Each
+                metric gets its own mini-chart scaled to only its own two
+                values, so RoG/Revenue/Tickets/Concerts never compress or
+                drown each other out on a shared axis. */}
             <ChartContainer
-              title="Head-to-Head Metrics"
-              subtitle="Normalised comparison across key indicators"
+              title="Touring & Commercial Performance"
+              subtitle="Each metric on its own scale -- a real tie stays visible instead of being flattened by a bigger number elsewhere"
               delay={100}
             >
-              <BarChart
-                data={comparisonChartData}
-                xKey="metric"
-                layout="horizontal"
-                bars={[
-                  { key: 'a', label: a.name, color: '#818CF8' },
-                  { key: 'b', label: b.name, color: '#FBBF24' },
-                ]}
-                height={260}
-              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {performanceMetrics.map(m => (
+                  <div key={m.title}>
+                    <p className="text-xs font-semibold text-center mb-1" style={{ color: 'var(--text-muted)' }}>{m.title}</p>
+                    <BarChart
+                      data={m.data}
+                      xKey="name"
+                      layout="horizontal"
+                      bars={[{ key: 'value', label: m.title }]}
+                      multiColor
+                      valueSuffix={m.suffix || ''}
+                      height={150}
+                    />
+                  </div>
+                ))}
+              </div>
             </ChartContainer>
 
-            {/* Platform followers side by side */}
+            {/* Digital Reach -- Total Followers lives here now (it's the sum
+                of the bars below), separate from touring/commercial
+                performance. Platform mix is normalised to each artist's own
+                total, so this compares platforms, not whoever has more
+                overall reach. */}
             <ChartContainer
-              title="Platform Follower Breakdown"
-              subtitle="Followers per platform comparison"
+              title="Digital Reach"
+              subtitle="Platform mix per artist, as a % of their own total followers -- comparing platforms, not overall audience size"
               delay={180}
             >
+              <div className="flex items-center justify-between mb-4 pb-4" style={{ borderBottom: '1px solid var(--border)' }}>
+                <div>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{a.name}</p>
+                  <p className="font-display font-bold text-lg" style={{ color: '#818CF8' }}>{formatNumber(statsA.totalFollowers)}</p>
+                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Total Followers</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{b.name}</p>
+                  <p className="font-display font-bold text-lg" style={{ color: '#FBBF24' }}>{formatNumber(statsB.totalFollowers)}</p>
+                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Total Followers</p>
+                </div>
+              </div>
               <BarChart
-                data={[
-                  { platform: 'Instagram', a: a.followers.instagram, b: b.followers.instagram },
-                  { platform: 'YouTube', a: a.followers.youtube, b: b.followers.youtube },
-                  { platform: 'Spotify', a: a.followers.spotify, b: b.followers.spotify },
-                ]}
+                data={platformReachData}
                 xKey="platform"
                 layout="horizontal"
                 bars={[
                   { key: 'a', label: a.name, color: '#818CF8' },
                   { key: 'b', label: b.name, color: '#FBBF24' },
                 ]}
-                height={260}
+                valueSuffix="%"
+                height={200}
               />
             </ChartContainer>
           </div>
