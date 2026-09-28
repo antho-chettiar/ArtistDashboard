@@ -219,8 +219,14 @@ function ArtistProfile() {
     applemusic: rogMap.get('applemusic') || 0,
   }
 
-  // Calculate totals
-  const totalFollowers = Object.values(followers).reduce((a, b) => a + b, 0)
+  // Calculate totals -- only across platforms that actually get a card below
+  // (PLATFORM_META), so "% of total" always sums to 100% of what's visible.
+  // Facebook/Apple Music followers are real but have no card here, so they're
+  // deliberately excluded from this ratio rather than silently inflating the
+  // denominator behind bars the user can't see.
+  const totalFollowers = Object.entries(followers)
+    .filter(([platform]) => PLATFORM_META[platform])
+    .reduce((sum, [, count]) => sum + count, 0)
   const avgRoG = Object.values(rog).reduce((a, b) => a + b, 0) / Object.keys(rog).length
   // Shared with Concerts.jsx / MapView.jsx -- null (not 0) when this artist's
   // concerts have no real revenue/ticket data, so the KPI below can render an
