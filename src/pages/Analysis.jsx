@@ -17,7 +17,6 @@ import {
   useAutoPredict,
   useMadDemand,
   useMadPopularity,
-  useMadLlmPrediction,
   useMadRegionalTrend,
   useFeasibilityForCities,
 } from '../hooks/usePredictions'
@@ -211,14 +210,26 @@ function ProfitabilityPredictor({ artists, concerts }) {
   const artistConcerts = concerts.filter(c => c.artistId === selectedArtist)
   const fallbackPred = predictRevenue(artist, city, artistConcerts, selectedVenueData?.capacity)
   const venueName = selectedVenue || (city ? `${city.name} Arena` : '')
-  const venueCapacityValue = selectedVenueData?.capacity || fallbackPred?.adjustedCap
   // Real, event-specific values ONLY — fallbackPred.adjustedCap/atp are this
   // component's own synthetic local guesses (see predictRevenue() above) and
   // must never be sent to the canonical revenue model as if they were real
   // historical data. When there's no genuinely real value, send nothing and
   // let the backend's own resolver (known venue / venues database / default
   // estimate) fill the gap and mark the result as an estimate.
-  const realVenueCapacity = selectedVenueData?.capacity > 0 ? selectedVenueData.capacity : undefined
+  //
+  // KNOWN_CAPACITY_PLACEHOLDER is excluded even when concerts.capacity is
+  // set: 5,000 is the exact fallback value baked into this codebase's own
+  // capacity resolution everywhere it defaults to "we don't know" (the
+  // heuristic estimator's base case, the batch backfill script, the
+  // ml_engine defaults) -- 45 of this app's 233 concerts share this identical
+  // number across venue types as different as university lawns and cafes,
+  // which only happens if it's a placeholder, not a measurement. Trusting it
+  // as real would badge a guess "Verified"; excluding it lets the live
+  // resolver produce an honest estimate instead.
+  const KNOWN_CAPACITY_PLACEHOLDER = 5000
+  const realVenueCapacity = selectedVenueData?.capacity > 0 && selectedVenueData.capacity !== KNOWN_CAPACITY_PLACEHOLDER
+    ? selectedVenueData.capacity
+    : undefined
   const realAvgTicketPrice = selectedVenueData?.avgTicketPrice > 0 ? selectedVenueData.avgTicketPrice : undefined
 
   // Fetched before useAutoPredict (and gated on below) so the revenue call can
@@ -259,11 +270,6 @@ function ProfitabilityPredictor({ artists, concerts }) {
     if (!parts.length) return null
     return `Assumed ${parts.join(' and ')} used — not historical/actual data for this concert.`
   })()
-  const llmPrediction = useMadLlmPrediction(selectedArtist, selectedCity, venueCapacityValue, Boolean(selectedArtist && selectedCity), {
-    artistName: artist?.name,
-    venueName,
-    venueType: 'arena',
-  })
   // State-level (NOT city-level) Google Trends interest -- previously only
   // consumed internally by the revenue predictor's Tier 2 language-affinity
   // softening; surfaced here next to Popularity so it's no longer invisible.
@@ -487,7 +493,13 @@ function ProfitabilityPredictor({ artists, concerts }) {
                 !regionalTrend.data ? 'No regional trend data'
                   : regionalTrend.data.score != null
                     ? `State-level search interest in ${regionalTrend.data.state_name || regionalTrend.data.geo_code}`
-                    : `No state-level mapping for ${selectedCity}`
+                    // geo_code present but score null = a real state mapping
+                    // exists but the live Google Trends fetch itself failed
+                    // (rate-limited/blocked/network) -- distinct from there
+                    // being no state mapping for this city at all.
+                    : regionalTrend.data.geo_code
+                      ? 'Google Trends unavailable right now'
+                      : `No state-level mapping for ${selectedCity}`
               }
               color="var(--accent-indigo)"
             />
@@ -499,12 +511,6 @@ function ProfitabilityPredictor({ artists, concerts }) {
               value={demand.data?.confidence ?? '—'}
               sub={demand.data?.confidence ? 'Demand data availability' : 'No confidence data'}
               color="var(--accent-indigo)"
-            />
-            <StatBox
-              label="LLM Revenue"
-              value={llmPrediction.data ? formatCurrency(llmPrediction.data.total_revenue, llmPrediction.data.currency) : '—'}
-              sub={llmPrediction.data ? `${llmPrediction.data.tickets_sold} tickets` : 'No LLM data'}
-              color="var(--accent-gold)"
             />
             <StatBox
               label="Venue Capacity"

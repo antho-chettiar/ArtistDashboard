@@ -104,6 +104,33 @@ def _fetch_batch(pytrends, keywords: list[str], geo: str, timeframe: str) -> dic
         return {kw: 0.0 for kw in keywords}
 
 
+def _fetch_single_honest(pytrends, keyword: str, geo: str, timeframe: str) -> Optional[float]:
+    """Like _fetch_batch, but for exactly one keyword and honest about
+    failure: returns None (never a fabricated 0.0) when the pytrends request
+    itself came back empty or raised, so a genuine "0 search interest" result
+    is never confused with "we couldn't reach Google Trends" -- the exact
+    ambiguity regional_trend_score's docstring used to call out as a known,
+    unaddressed limitation of the shared _fetch_batch helper below.
+    _fetch_batch itself is left untouched: Popularity's multi-artist batching
+    already treats a 0.0 there as neutral for cross-artist normalization, and
+    changing its return contract would risk that unrelated, working code."""
+    try:
+        pytrends.build_payload([keyword], cat=0, timeframe=timeframe, geo=geo)
+        data = pytrends.interest_over_time()
+
+        if data.empty or keyword not in data.columns:
+            logger.warning(f"[GoogleTrends] Empty response for: {keyword}")
+            return None
+
+        if "isPartial" in data.columns:
+            data = data.drop(columns=["isPartial"])
+
+        return round(float(data[keyword].mean()), 2)
+    except Exception as e:
+        logger.error(f"[GoogleTrends] Error fetching {keyword}: {e}")
+        return None
+
+
 def fetch_trends_scores(
     artist_names: list[str],
     geo: str = "",

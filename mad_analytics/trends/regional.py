@@ -99,16 +99,15 @@ def regional_trend_score(
 ) -> Optional[float]:
     """Real, state-level search interest (0-100, same pytrends-normalized
     scale as the national Popularity trend score) for one artist. Returns
-    None -- never a fabricated 0 -- when the city has no known state mapping.
-    KNOWN LIMITATION inherited from _fetch_batch: a live pytrends fetch
-    failure also currently returns 0.0 there, indistinguishable from a
-    genuine zero-interest result -- pre-existing behavior of the shared
-    fetch helper, not something this function newly introduces."""
+    None -- never a fabricated 0 -- both when the city has no known state
+    mapping AND when the live pytrends fetch itself fails or comes back
+    empty (rate-limited/blocked, network error, etc.) -- see
+    _fetch_single_honest, which exists specifically so a fetch failure is
+    never silently reported as "0 search interest" here."""
     geo = city_to_geo_code(city)
     if not geo:
         return None
 
-    from .google_trends import _get_pytrends_client, _fetch_batch
+    from .google_trends import _get_pytrends_client, _fetch_single_honest
     pytrends = _get_pytrends_client()
-    scores = _fetch_batch(pytrends, [artist_name], geo=geo, timeframe=timeframe)
-    return scores.get(artist_name)
+    return _fetch_single_honest(pytrends, artist_name, geo=geo, timeframe=timeframe)
