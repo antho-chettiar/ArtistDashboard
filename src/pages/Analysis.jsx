@@ -692,12 +692,13 @@ function ArtistComparison({ artists, concerts }) {
   // profile said nothing about Instagram vs. Spotify). As a % of each
   // artist's own reach, both bars share a fair 0-100% scale regardless of
   // how different their absolute audience sizes are.
+  const PLATFORM_LABELS = { instagram: 'Instagram', youtube: 'YouTube', spotify: 'Spotify' }
   const platformReachData = statsA && statsB
-    ? ['instagram', 'youtube', 'spotify'].map(p => {
+    ? Object.keys(PLATFORM_LABELS).map(p => {
       const aFollowers = a.followers?.[p] || 0
       const bFollowers = b.followers?.[p] || 0
       return {
-        platform: p.charAt(0).toUpperCase() + p.slice(1),
+        platform: PLATFORM_LABELS[p],
         a: statsA.totalFollowers > 0 ? Number(((aFollowers / statsA.totalFollowers) * 100).toFixed(1)) : 0,
         b: statsB.totalFollowers > 0 ? Number(((bFollowers / statsB.totalFollowers) * 100).toFixed(1)) : 0,
       }
