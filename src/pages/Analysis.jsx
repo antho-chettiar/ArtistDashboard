@@ -1142,7 +1142,13 @@ function Analysis() {
   const [activeTab, setTab] = useState('Profitability Predictor')
 
   const { data: artists, isLoading: loadingArtists, error: errArtists } = useArtists()
-  const { data: concerts, isLoading: loadingConcerts, error: errConcerts } = useConcerts()
+  // useConcerts() defaults to limit:50 (one page, no fetchNextPage call on
+  // this page) -- with ~233 real concerts across the roster, that silently
+  // truncated every city/venue lookup below to whichever 50 happened to be
+  // most recent roster-wide, regardless of which artist/city was selected.
+  // Matches the limit already used elsewhere for a full concert set (Venues
+  // page, useArtists.js's own concerts fetch).
+  const { data: concerts, isLoading: loadingConcerts, error: errConcerts } = useConcerts({ limit: 1000 })
 
   if (loadingArtists || loadingConcerts) {
     return (
