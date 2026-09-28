@@ -20,14 +20,13 @@ function Venues() {
   const { artistType } = useFilterStore()
   const [activeCity, setActiveCity] = useState('All')
 
-  // Same Indian/International toggle every other page reads -- a venue's
-  // country comes from its real concert row (or, for a curated no-concert-
-  // yet entry, is borrowed from another tracked concert in the same city;
-  // see useVenues.js). A venue whose country genuinely can't be determined
-  // either way is left out of both, rather than guessed into one.
+  // Same Indian/International toggle every other page reads. isIndia is
+  // always a definite yes/no (see useVenues.js for how a curated venue with
+  // no concert of its own still gets one) -- never a venue silently missing
+  // from both views because its country was unresolved.
   const venues = useMemo(() => {
-    if (artistType === 'indian') return allVenues.filter(v => v.country === 'India')
-    if (artistType === 'international') return allVenues.filter(v => v.country && v.country !== 'India')
+    if (artistType === 'indian') return allVenues.filter(v => v.isIndia)
+    if (artistType === 'international') return allVenues.filter(v => !v.isIndia)
     return allVenues
   }, [allVenues, artistType])
 

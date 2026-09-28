@@ -53,10 +53,12 @@ export function useVenues() {
       const key = `${venueName}|${city}`
       if (!groups[key]) {
         const { category, isOutdoor } = classifyVenue(venueName)
+        const country = c.country || null // real, from the concert row -- India vs. a real diaspora/international tour stop
         groups[key] = {
           venueName,
           city,
-          country: c.country || null, // real, from the concert row -- India vs. a real diaspora/international tour stop
+          country,
+          isIndia: country === 'India',
           category,
           isOutdoor,
           capacity: Number(c.capacity || 0),
@@ -89,10 +91,12 @@ export function useVenues() {
     const existingKeysLower = new Set(Object.keys(groups).map(k => k.toLowerCase()))
     const cityCasing = {}
     const cityCountry = {} // same city -> country the curated (no-concert-yet) entries below borrow from
+    const indianCities = new Set() // every city this roster has a REAL India-country concert in
     for (const g of Object.values(groups)) {
       const cityLower = g.city.toLowerCase()
       if (!cityCasing[cityLower]) cityCasing[cityLower] = g.city
       if (!cityCountry[cityLower] && g.country) cityCountry[cityLower] = g.country
+      if (g.isIndia) indianCities.add(cityLower)
     }
 
     for (const k of knownVenuesRaw || []) {
@@ -106,14 +110,23 @@ export function useVenues() {
       const displayCity = cityCasing[rawCity.toLowerCase()] || titleCase(rawCity)
       const displayVenueName = titleCase(rawVenue)
       const { category, isOutdoor } = classifyVenue(displayVenueName)
+      const cityLower = rawCity.toLowerCase()
       groups[keyLower] = {
         venueName: displayVenueName,
         city: displayCity,
         // No concert row to read a real country off of -- borrow it from
         // another real, tracked concert in this same city, if one exists.
         // Stays null (never guessed) for a city with no tracked concerts at
-        // all, same honesty rule as noTrackedConcerts itself.
-        country: cityCountry[rawCity.toLowerCase()] || null,
+        // all, same honesty rule as noTrackedConcerts itself. isIndia is
+        // still always a real yes/no though: KNOWN_VENUES is a general
+        // international venue-capacity reference (see its own country-
+        // grouped sections), not an India-only list, so a curated entry
+        // whose city never shows up as a real Indian tour stop anywhere in
+        // this roster's actual concert history is confidently NOT India --
+        // it isn't left to silently vanish from both market views the way
+        // an unresolved `country` string would.
+        country: cityCountry[cityLower] || null,
+        isIndia: indianCities.has(cityLower),
         category,
         isOutdoor,
         capacity: Number(k.capacity || 0),
