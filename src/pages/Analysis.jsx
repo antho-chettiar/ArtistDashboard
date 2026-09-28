@@ -614,32 +614,51 @@ function ArtistComparison({ artists, concerts }) {
   const statsA = getStats(a, concertsA)
   const statsB = getStats(b, concertsB)
 
+  // 'a' | 'b' | 'tie' -- a bare `x > y ? 'a' : 'b'` treats every tie as a B
+  // win, which used to fire constantly on this sparse dataset (RoG/Revenue/
+  // Tickets are 0 vs 0 for most artist pairs).
+  const cmp = (x, y) => (x > y ? 'a' : x < y ? 'b' : 'tie')
+
   const comparisonRows = statsA && statsB ? [
     {
       label: 'Total Followers', a: formatNumber(statsA.totalFollowers), b: formatNumber(statsB.totalFollowers),
-      winner: statsA.totalFollowers > statsB.totalFollowers ? 'a' : 'b'
+      winner: cmp(statsA.totalFollowers, statsB.totalFollowers)
     },
     {
       label: 'Avg. RoG', a: `${statsA.avgRoG.toFixed(1)}%`, b: `${statsB.avgRoG.toFixed(1)}%`,
-      winner: statsA.avgRoG > statsB.avgRoG ? 'a' : 'b'
+      winner: cmp(statsA.avgRoG, statsB.avgRoG)
     },
     {
       label: 'Total Revenue', a: formatCurrency(statsA.totalRevenue), b: formatCurrency(statsB.totalRevenue),
-      winner: statsA.totalRevenue > statsB.totalRevenue ? 'a' : 'b'
+      winner: cmp(statsA.totalRevenue, statsB.totalRevenue)
     },
     {
       label: 'Tickets Sold', a: formatNumber(statsA.totalTickets), b: formatNumber(statsB.totalTickets),
-      winner: statsA.totalTickets > statsB.totalTickets ? 'a' : 'b'
+      winner: cmp(statsA.totalTickets, statsB.totalTickets)
     },
     {
       label: 'Concerts', a: statsA.concertCount, b: statsB.concertCount,
-      winner: statsA.concertCount > statsB.concertCount ? 'a' : 'b'
+      winner: cmp(statsA.concertCount, statsB.concertCount)
     },
     {
+      // Each artist's own top platform compared by raw follower count --
+      // often two different platforms entirely (Spotify vs. Instagram), so
+      // this was never a fair head-to-head. Informational only: no trophy,
+      // and excluded from the Overall Winner tally below (noContest).
       label: 'Top Platform', a: statsA.topPlatform[0], b: statsB.topPlatform[0],
-      winner: statsA.topPlatform[1] > statsB.topPlatform[1] ? 'a' : 'b'
+      winner: 'tie', noContest: true,
     },
   ] : []
+
+  // Overall Winner used to only ever check Total Revenue -- almost always
+  // 0 vs 0 on this dataset (real revenue data is sparse), so it silently
+  // crowned B nearly every time under a fabricated "higher revenue
+  // performance" caption. Now a real aggregate: whoever wins more of the
+  // real, contested metrics above; a tie in wins is shown honestly as a tie.
+  const contestedRows = comparisonRows.filter(r => !r.noContest)
+  const winsA = contestedRows.filter(r => r.winner === 'a').length
+  const winsB = contestedRows.filter(r => r.winner === 'b').length
+  const overallWinner = winsA === winsB ? 'tie' : (winsA > winsB ? 'a' : 'b')
 
   // Radar-style comparison data for bar chart
   const comparisonChartData = statsA && statsB ? [
@@ -836,6 +855,9 @@ function ArtistComparison({ artists, concerts }) {
                 </div>
                 <div className="text-center">
                   <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{row.label}</span>
+                  {row.winner === 'tie' && !row.noContest && (
+                    <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>Tie</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 justify-end">
                   {row.winner === 'b' && (
@@ -849,25 +871,40 @@ function ArtistComparison({ artists, concerts }) {
               </div>
             ))}
 
-            {/* Winner Banner */}
+            {/* Winner Banner -- a real aggregate (wins across the contested
+                rows above), not just whoever has more revenue. Shown
+                honestly as a tie when the win count itself ties. */}
             <div className="p-4"
               style={{
-                background: statsA.totalRevenue > statsB.totalRevenue
+                background: overallWinner === 'a'
                   ? 'linear-gradient(135deg, rgba(129,140,248,0.1), transparent)'
-                  : 'linear-gradient(135deg, rgba(251,191,36,0.1), transparent)'
+                  : overallWinner === 'b'
+                    ? 'linear-gradient(135deg, rgba(251,191,36,0.1), transparent)'
+                    : 'var(--bg-secondary)'
               }}>
               <div className="flex items-center gap-2">
                 <Star size={16} style={{ color: 'var(--accent-gold)' }} />
                 <span className="font-display font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
                   Overall Winner:
                 </span>
-                <span className="font-bold text-sm"
-                  style={{ color: statsA.totalRevenue > statsB.totalRevenue ? '#818CF8' : '#FBBF24' }}>
-                  {statsA.totalRevenue > statsB.totalRevenue ? a.name : b.name}
-                </span>
-                <span className="text-xs ml-1" style={{ color: 'var(--text-muted)' }}>
-                  — higher revenue performance
-                </span>
+                {overallWinner === 'tie' ? (
+                  <>
+                    <span className="font-bold text-sm" style={{ color: 'var(--text-secondary)' }}>Tie</span>
+                    <span className="text-xs ml-1" style={{ color: 'var(--text-muted)' }}>
+                      — {winsA} {winsA === 1 ? 'metric' : 'metrics'} won each
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="font-bold text-sm"
+                      style={{ color: overallWinner === 'a' ? '#818CF8' : '#FBBF24' }}>
+                      {overallWinner === 'a' ? a.name : b.name}
+                    </span>
+                    <span className="text-xs ml-1" style={{ color: 'var(--text-muted)' }}>
+                      — won {overallWinner === 'a' ? winsA : winsB} of {contestedRows.length} metrics
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
