@@ -56,6 +56,7 @@ export function useVenues() {
         groups[key] = {
           venueName,
           city,
+          country: c.country || null, // real, from the concert row -- India vs. a real diaspora/international tour stop
           category,
           isOutdoor,
           capacity: Number(c.capacity || 0),
@@ -87,9 +88,11 @@ export function useVenues() {
     // time under a different dict key, rendering as a duplicate tile.
     const existingKeysLower = new Set(Object.keys(groups).map(k => k.toLowerCase()))
     const cityCasing = {}
+    const cityCountry = {} // same city -> country the curated (no-concert-yet) entries below borrow from
     for (const g of Object.values(groups)) {
       const cityLower = g.city.toLowerCase()
       if (!cityCasing[cityLower]) cityCasing[cityLower] = g.city
+      if (!cityCountry[cityLower] && g.country) cityCountry[cityLower] = g.country
     }
 
     for (const k of knownVenuesRaw || []) {
@@ -106,6 +109,11 @@ export function useVenues() {
       groups[keyLower] = {
         venueName: displayVenueName,
         city: displayCity,
+        // No concert row to read a real country off of -- borrow it from
+        // another real, tracked concert in this same city, if one exists.
+        // Stays null (never guessed) for a city with no tracked concerts at
+        // all, same honesty rule as noTrackedConcerts itself.
+        country: cityCountry[rawCity.toLowerCase()] || null,
         category,
         isOutdoor,
         capacity: Number(k.capacity || 0),

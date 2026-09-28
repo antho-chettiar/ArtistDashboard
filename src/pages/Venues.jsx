@@ -4,6 +4,7 @@ import PageHeader from '../components/ui/PageHeader'
 import EmptyState from '../components/ui/EmptyState'
 import { useVenues } from '../hooks/useVenues'
 import { formatNumber } from '../utils/formatters'
+import useFilterStore from '../store/useFilterStore'
 
 const CATEGORY_COLORS = {
   'Stadium / Arena': '#818CF8',
@@ -15,8 +16,20 @@ const CATEGORY_COLORS = {
 }
 
 function Venues() {
-  const { venues, isLoading } = useVenues()
+  const { venues: allVenues, isLoading } = useVenues()
+  const { artistType } = useFilterStore()
   const [activeCity, setActiveCity] = useState('All')
+
+  // Same Indian/International toggle every other page reads -- a venue's
+  // country comes from its real concert row (or, for a curated no-concert-
+  // yet entry, is borrowed from another tracked concert in the same city;
+  // see useVenues.js). A venue whose country genuinely can't be determined
+  // either way is left out of both, rather than guessed into one.
+  const venues = useMemo(() => {
+    if (artistType === 'indian') return allVenues.filter(v => v.country === 'India')
+    if (artistType === 'international') return allVenues.filter(v => v.country && v.country !== 'India')
+    return allVenues
+  }, [allVenues, artistType])
 
   const cities = useMemo(() => {
     const set = new Set(venues.map(v => v.city))
