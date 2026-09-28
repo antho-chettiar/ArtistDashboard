@@ -512,16 +512,23 @@ function ProfitabilityPredictor({ artists, concerts }) {
               sub={demand.data?.confidence ? 'Demand data availability' : 'No confidence data'}
               color="var(--accent-indigo)"
             />
+            {/* Without a selected venue, `pred.adjustedCap` is only ever a
+                generic per-city placeholder ("{city} Arena" -- see venueName
+                above), not a real venue's capacity -- showing a number here
+                would look exactly like real venue data while actually being
+                nothing of the sort. Prompt for a venue instead of guessing. */}
             <StatBox
               label="Venue Capacity"
-              value={hasModel ? formatNumber(pred.adjustedCap) : '—'}
-              sub={hasModel
-                ? (pred.capacityIsEstimated
-                  ? `Estimated${pred.capacitySource ? ` · ${pred.capacitySource.replace(/_/g, ' ')}` : ''}`
-                  : 'Event-specific')
-                : 'No venue data'}
+              value={!selectedVenue ? '—' : hasModel ? formatNumber(pred.adjustedCap) : '—'}
+              sub={!selectedVenue
+                ? 'Select a venue above to see its capacity'
+                : hasModel
+                  ? (pred.capacityIsEstimated
+                    ? `Estimated${pred.capacitySource ? ` · ${pred.capacitySource.replace(/_/g, ' ')}` : ''}`
+                    : 'Event-specific')
+                  : 'No venue data'}
               color="var(--accent-indigo)"
-              badge={hasModel ? <ProvenanceBadge verified={!pred.capacityIsEstimated} /> : null}
+              badge={selectedVenue && hasModel ? <ProvenanceBadge verified={!pred.capacityIsEstimated} /> : null}
             />
           </div>
 
