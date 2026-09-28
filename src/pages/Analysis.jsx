@@ -523,8 +523,8 @@ function ProfitabilityPredictor({ artists, concerts }) {
               (Unchanged success layout; simply gated so no fabricated revenue shows.) */}
           {hasModel && (
           <>
-          {/* Score Bars + Revenue Breakdown */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
+          {/* Score Bars */}
+          <div className="grid grid-cols-1 gap-4 mb-6">
             <div className="glass-card p-5 animate-fade-up" style={{ animationDelay: '100ms', animationFillMode: 'both', opacity: 0 }}>
               <h3 className="font-display font-semibold text-sm mb-4" style={{ color: 'var(--text-primary)' }}>
                 Performance Scores
@@ -559,30 +559,6 @@ function ProfitabilityPredictor({ artists, concerts }) {
                 </p>
               </div>
             </div>
-
-            {/* Revenue breakdown */}
-            <ChartContainer
-              title={pred.modelSource ? 'Prediction Range' : 'Revenue Breakdown'}
-              subtitle={pred.modelSource ? 'Lower, predicted and upper model bounds' : 'Ticket vs sponsor contribution'}
-              delay={180}
-            >
-              <BarChart
-                data={pred.modelSource
-                  ? [
-                    { name: 'Lower Bound', value: Math.round(pred.lowerBound) },
-                    { name: 'Prediction', value: Math.round(pred.totalRevenue) },
-                    { name: 'Upper Bound', value: Math.round(pred.upperBound) },
-                  ]
-                  : [
-                    { name: 'Ticket Revenue', value: Math.round(pred.ticketRevenue) },
-                    { name: 'Sponsor Revenue', value: Math.round(pred.sponsorRevenue) },
-                  ]}
-                xKey="name"
-                layout="horizontal"
-                bars={[{ key: 'value', label: 'Revenue (INR)', color: '#818CF8' }]}
-                height={220}
-              />
-            </ChartContainer>
           </div>
 
           {/* City Comparison */}
