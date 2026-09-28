@@ -91,12 +91,10 @@ export function useVenues() {
     const existingKeysLower = new Set(Object.keys(groups).map(k => k.toLowerCase()))
     const cityCasing = {}
     const cityCountry = {} // same city -> country the curated (no-concert-yet) entries below borrow from
-    const indianCities = new Set() // every city this roster has a REAL India-country concert in
     for (const g of Object.values(groups)) {
       const cityLower = g.city.toLowerCase()
       if (!cityCasing[cityLower]) cityCasing[cityLower] = g.city
       if (!cityCountry[cityLower] && g.country) cityCountry[cityLower] = g.country
-      if (g.isIndia) indianCities.add(cityLower)
     }
 
     for (const k of knownVenuesRaw || []) {
@@ -114,19 +112,20 @@ export function useVenues() {
       groups[keyLower] = {
         venueName: displayVenueName,
         city: displayCity,
-        // No concert row to read a real country off of -- borrow it from
-        // another real, tracked concert in this same city, if one exists.
-        // Stays null (never guessed) for a city with no tracked concerts at
-        // all, same honesty rule as noTrackedConcerts itself. isIndia is
-        // still always a real yes/no though: KNOWN_VENUES is a general
-        // international venue-capacity reference (see its own country-
-        // grouped sections), not an India-only list, so a curated entry
-        // whose city never shows up as a real Indian tour stop anywhere in
-        // this roster's actual concert history is confidently NOT India --
-        // it isn't left to silently vanish from both market views the way
-        // an unresolved `country` string would.
+        // No concert row to read a real country off of -- borrow the display
+        // string from another real, tracked concert in this same city, if
+        // one exists. Stays null (never guessed) for a city with no tracked
+        // concerts at all, same honesty rule as noTrackedConcerts itself.
         country: cityCountry[cityLower] || null,
-        isIndia: indianCities.has(cityLower),
+        // isIndia, unlike the country string above, is never null: it comes
+        // straight from the known-list API's own is_india flag (see
+        // mad_analytics/venue_capacity/known_venues.py::KNOWN_INDIA_CITIES),
+        // the curated file's own real country grouping -- not inferred from
+        // this roster's concert history, which would wrongly mark a real
+        // Indian city as international the moment it happens to have zero
+        // tracked concerts of its own (e.g. Shillong's Jawaharlal Nehru
+        // Stadium, caught live 2026-09-28).
+        isIndia: Boolean(k.is_india),
         category,
         isOutdoor,
         capacity: Number(k.capacity || 0),

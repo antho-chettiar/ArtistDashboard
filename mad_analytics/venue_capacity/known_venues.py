@@ -209,6 +209,20 @@ KNOWN_VENUES: dict[tuple[str, str], int] = {
 }
 
 
+# Every city that appears in the "# India" sections above (this file also
+# curates real venues in the USA, UK, Australia, etc. -- it's a general
+# touring-venue reference, not India-only). Used wherever the app needs to
+# know whether one of these curated, no-concert-yet venues is India or
+# international (e.g. the Venues page's market toggle) without a real
+# concert row of its own to read a country off of. Keep in sync by hand
+# whenever a new India venue/city is added to KNOWN_VENUES above -- there is
+# no country field on the tuples themselves to derive this from automatically.
+KNOWN_INDIA_CITIES: set[str] = {
+    "delhi", "new delhi", "shillong", "mumbai", "navi mumbai", "bangalore",
+    "ahmedabad", "kolkata", "gahunje", "raipur", "chennai", "hyderabad",
+}
+
+
 def lookup_known_capacity(venue_name: str, city: str) -> Optional[int]:
     """Look up a venue in the known venues database. Returns capacity or None."""
     if not venue_name:

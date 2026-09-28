@@ -689,9 +689,16 @@ def venue_capacity_known_list():
     """The curated KNOWN_VENUES table, so callers (the Venues tab) can show
     which capacities are real/verified vs. the keyword-heuristic estimate --
     see venue_capacity/known_venues.py's own docstring for the WHY."""
-    from .venue_capacity.known_venues import KNOWN_VENUES
+    from .venue_capacity.known_venues import KNOWN_VENUES, KNOWN_INDIA_CITIES
     return [
-        {"venue_name": venue, "city": city, "capacity": capacity}
+        {
+            "venue_name": venue,
+            "city": city,
+            "capacity": capacity,
+            # True/False only -- this file curates real venues in several
+            # countries, so "not India" here means exactly that, not "unknown".
+            "is_india": city in KNOWN_INDIA_CITIES,
+        }
         for (venue, city), capacity in KNOWN_VENUES.items()
     ]
 
