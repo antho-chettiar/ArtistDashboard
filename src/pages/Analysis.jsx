@@ -277,14 +277,6 @@ function ProfitabilityPredictor({ artists, concerts }) {
   // primary; the ML model is optional/secondary and never overrides it).
   const revenueIsHeuristic = hasModel && modelPrediction.data?.model_type === 'heuristic'
 
-  // City comparison for selected artist
-  const cityComparison = artist
-    ? CITIES.map(c => ({
-      name: c.name,
-      revenue: predictRevenue(artist, c, artistConcerts)?.totalRevenue || 0,
-    })).sort((a, b) => b.revenue - a.revenue)
-    : []
-
   return (
     <div>
       {/* Selector */}
@@ -561,23 +553,6 @@ function ProfitabilityPredictor({ artists, concerts }) {
             </div>
           </div>
 
-          {/* City Comparison */}
-          {cityComparison.length > 0 && (
-            <ChartContainer
-              title={`Best Cities for ${artist.name}`}
-              subtitle="Predicted revenue across all cities — ranked"
-              delay={200}
-            >
-              <BarChart
-                data={cityComparison}
-                xKey="name"
-                layout="horizontal"
-                bars={[{ key: 'revenue', label: 'Predicted Revenue', color: '#FBBF24' }]}
-                multiColor={false}
-                height={260}
-              />
-            </ChartContainer>
-          )}
           </>
           )}
         </>
