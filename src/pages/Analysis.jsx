@@ -82,7 +82,7 @@ function predictionDate() {
   return date.toISOString().slice(0, 10)
 }
 
-function applyModelPrediction(fallback, model) {
+function applyModelPrediction(fallback, model, realPopularityScore) {
   // `!= null` (not truthiness) so a genuinely valid $0 heuristic prediction
   // is used rather than silently discarded in favour of the client-side
   // fallback estimate.
@@ -107,7 +107,10 @@ function applyModelPrediction(fallback, model) {
     totalRevenue,
     sellThrough,
     roi: estimatedCost > 0 ? ((totalRevenue - estimatedCost) / estimatedCost) * 100 : fallback.roi,
-    popularityScore: Math.min(99, Math.round(Number(model.demand_score_used || fallback.popularityScore))),
+    // Real Popularity (entropy-weighted platform reach), NOT the Demand score
+    // reused a second time -- see demandScore below for that. Falls back to
+    // the client-side estimate only when the real score hasn't loaded.
+    popularityScore: Math.min(99, Math.round(Number(realPopularityScore ?? fallback.popularityScore))),
     demandScore: Math.round(Number(model.demand_score_used || fallback.demandScore)),
     confidence: Math.round(Number(model.confidence || 0) * 100),
     lowerBound: Number(model.lower_bound || 0),
@@ -232,7 +235,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
     demandScore: demand.data?.score,
     popularityScore: popularity.data?.popularity_score,
   })
-  const pred = applyModelPrediction(fallbackPred, modelPrediction.data)
+  const pred = applyModelPrediction(fallbackPred, modelPrediction.data, popularity.data?.popularity_score)
   // Heuristic Revenue Model is the canonical/primary predictor (the backend
   // always computes and returns it first — see mad_analytics/revenue/predictor.py).
   // `!= null` (not truthiness) so a genuinely valid $0 prediction still counts
