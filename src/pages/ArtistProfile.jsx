@@ -10,8 +10,6 @@ import EmptyState from '../components/ui/EmptyState'
 import client from '../api/client'
 import { formatNumber, formatCurrency, formatDate, formatPercent } from '../utils/formatters'
 import { sumRevenueINR, sumTickets } from '../utils/concertMetrics'
-import ViberateTrends from '../components/viberate/ViberateTrends'
-import ScoreBreakdown from '../components/viberate/ScoreBreakdown'
 import { useEngagement, useRepeatVisitRate, useArtistInsights } from '../hooks/usePredictions'
 
 // Same icon set as Dashboard.jsx's Touring Spotlight -- this page is the
@@ -31,15 +29,13 @@ const INSIGHT_ICON = {
   untested_promising: '✨',
 }
 
-// NOTE: 'Demographics' tab hidden by product decision (Demographics is out of
-// scope for the current Artist Analytics product). The underlying data-fetch
-// and backend implementation are untouched; only this page's UI entry point
-// was removed. See git history for the exact removed tab markup if reinstating.
-// "Platforms" (current per-platform follower snapshot) and "Viberate History"
-// (the historical <ViberateTrends> view) used to both read as "Platform
-// Trends"-ish tabs from the tab bar alone -- renamed so the two are
-// unambiguous at a glance (2026-09 IA audit).
-const TABS = ['Platforms', 'Growth Trends', 'Concerts', 'Viberate History', 'Score']
+// NOTE: 'Demographics', 'Viberate History', and 'Score' tabs hidden by product
+// decision (not needed for the current Artist Analytics product). The
+// underlying data-fetch/component/backend implementations are untouched;
+// only this page's UI entry points were removed. See git history for the
+// exact removed tab markup if reinstating (ViberateTrends/ScoreBreakdown
+// components still live under src/components/viberate/).
+const TABS = ['Platforms', 'Growth Trends', 'Concerts']
 
 // Real daily ranges only — history currently spans 31 days.
 const GROWTH_RANGES = [
@@ -572,8 +568,6 @@ function ArtistProfile() {
           )}
         </ChartContainer>
       )}
-{activeTab === 'Viberate History' && <ViberateTrends artistId={id} />}
-{activeTab === 'Score' && <ScoreBreakdown artistId={id} />}
       {/* ── Tab: Concerts ── */}
       {activeTab === 'Concerts' && (
         transformedConcerts.length === 0 ? (
