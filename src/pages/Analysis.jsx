@@ -9,6 +9,7 @@ import ChartContainer from '../components/charts/ChartContainer'
 import BarChart from '../components/charts/BarChart'
 import LineChart from '../components/charts/LineChart'
 import { formatNumber, formatCurrency } from '../utils/formatters'
+import { citiesMatch } from '../utils/cityAlias'
 import { useArtists } from '../hooks/useArtists'
 import { useConcerts } from '../hooks/useConcerts'
 import {
@@ -192,14 +193,18 @@ function ProfitabilityPredictor({ artists, concerts }) {
   const artist = artists.find(a => a.id === selectedArtist)
   const city = CITIES.find(c => c.name === selectedCity)
 
+  // Real concerts use inconsistent spellings for the same real city (e.g.
+  // "Bangalore" vs "Bengaluru", "Delhi" vs "New Delhi") -- matching by alias
+  // instead of exact string so picking "Delhi" doesn't silently miss every
+  // concert logged under "New Delhi". See src/utils/cityAlias.js.
   const venueOptions = selectedCity
     ? Array.from(new Set(concerts
-      .filter(c => c.city === selectedCity && c.venue)
+      .filter(c => citiesMatch(c.city, selectedCity) && c.venue)
       .map(c => c.venue))).sort()
     : []
 
   const selectedVenueData = selectedVenue
-    ? concerts.find(c => c.city === selectedCity && c.venue === selectedVenue)
+    ? concerts.find(c => citiesMatch(c.city, selectedCity) && c.venue === selectedVenue)
     : null
 
   const artistConcerts = concerts.filter(c => c.artistId === selectedArtist)
