@@ -237,7 +237,6 @@ function ArtistProfile() {
   // Transform concert data to match UI format
   const transformedConcerts = concerts.map(c => ({
     id: c.id,
-    name: c.concertName,
     date: c.concertDate,
     city: c.city,
     venue: c.venueName,
@@ -584,7 +583,7 @@ function ArtistProfile() {
             <table className="w-full text-sm">
               <thead style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
                 <tr>
-                  {['Concert', 'Date', 'City', 'Venue', 'Tickets', 'Revenue'].map(h => (
+                  {['Date', 'City', 'Venue', 'Tickets', 'Revenue'].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs font-semibold uppercase tracking-widest"
                       style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{h}</th>
                   ))}
@@ -596,8 +595,7 @@ function ArtistProfile() {
                     style={{ borderBottom: '1px solid var(--border)' }}
                     onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-secondary)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                    <td className="px-4 py-3 font-semibold" style={{ color: 'var(--text-primary)' }}>{c.name}</td>
-                    <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>{formatDate(c.date)}</td>
+                    <td className="px-4 py-3 text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{formatDate(c.date)}</td>
                     <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-secondary)' }}>{c.city}</td>
                     <td className="px-4 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>{c.venue}</td>
                     <td className="px-4 py-3 text-xs font-semibold" style={{ color: 'var(--text-secondary)' }}>{c.ticketsSold > 0 ? formatNumber(c.ticketsSold) : '—'}</td>
