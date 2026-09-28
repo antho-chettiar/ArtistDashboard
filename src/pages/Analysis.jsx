@@ -7,6 +7,7 @@ import {
 import PageHeader from '../components/ui/PageHeader'
 import ChartContainer from '../components/charts/ChartContainer'
 import BarChart from '../components/charts/BarChart'
+import DivergingBarChart from '../components/charts/DivergingBarChart'
 import LineChart from '../components/charts/LineChart'
 import { formatNumber, formatCurrency } from '../utils/formatters'
 import { citiesMatch } from '../utils/cityAlias'
@@ -624,28 +625,36 @@ function ArtistComparison({ artists, concerts }) {
   // touring/commercial performance metric like the rest of this table.
   // Mixing the two repeated the exact "Popularity isn't live draw" mistake
   // this whole product's redesign traces back to.
+  // aRaw/bRaw carry the plain numeric value alongside the formatted display
+  // string -- used to draw each row's inline progress bar (share of a+b)
+  // without re-parsing "₹1.2Cr"-style strings back into numbers.
   const comparisonRows = statsA && statsB ? [
     {
       label: 'Avg. RoG', a: `${statsA.avgRoG.toFixed(1)}%`, b: `${statsB.avgRoG.toFixed(1)}%`,
+      aRaw: statsA.avgRoG, bRaw: statsB.avgRoG,
       winner: cmp(statsA.avgRoG, statsB.avgRoG)
     },
     {
       label: 'Total Revenue', a: formatCurrency(statsA.totalRevenue), b: formatCurrency(statsB.totalRevenue),
+      aRaw: statsA.totalRevenue, bRaw: statsB.totalRevenue,
       winner: cmp(statsA.totalRevenue, statsB.totalRevenue)
     },
     {
       label: 'Tickets Sold', a: formatNumber(statsA.totalTickets), b: formatNumber(statsB.totalTickets),
+      aRaw: statsA.totalTickets, bRaw: statsB.totalTickets,
       winner: cmp(statsA.totalTickets, statsB.totalTickets)
     },
     {
       label: 'Concerts', a: statsA.concertCount, b: statsB.concertCount,
+      aRaw: statsA.concertCount, bRaw: statsB.concertCount,
       winner: cmp(statsA.concertCount, statsB.concertCount)
     },
     {
       // Each artist's own top platform compared by raw follower count --
       // often two different platforms entirely (Spotify vs. Instagram), so
       // this was never a fair head-to-head. Informational only: no trophy,
-      // and excluded from the Overall Winner tally below (noContest).
+      // no progress bar, and excluded from the Overall Winner tally below
+      // (noContest).
       label: 'Top Platform', a: statsA.topPlatform[0], b: statsB.topPlatform[0],
       winner: 'tie', noContest: true,
     },
@@ -661,46 +670,22 @@ function ArtistComparison({ artists, concerts }) {
   const winsB = contestedRows.filter(r => r.winner === 'b').length
   const overallWinner = winsA === winsB ? 'tie' : (winsA > winsB ? 'a' : 'b')
 
-  // Small multiples, one metric per mini-chart -- the old version plotted
-  // Followers/RoG%/Revenue/Tickets on ONE shared axis (some divided by 1M,
-  // some by 1K, RoG left raw), so whichever metric had the biggest number
-  // visually flattened the rest. Each mini-chart here scales to only its
-  // own two values, so a real 0 vs 0 tie is exactly as visible as a real
-  // difference elsewhere -- no metric can drown another out.
-  const performanceMetrics = statsA && statsB ? [
-    { title: 'Avg. RoG', suffix: '%', data: [
-      { name: a.name, value: Number(statsA.avgRoG.toFixed(1)) },
-      { name: b.name, value: Number(statsB.avgRoG.toFixed(1)) },
-    ] },
-    { title: 'Total Revenue', data: [
-      { name: a.name, value: statsA.totalRevenue },
-      { name: b.name, value: statsB.totalRevenue },
-    ] },
-    { title: 'Tickets Sold', data: [
-      { name: a.name, value: statsA.totalTickets },
-      { name: b.name, value: statsB.totalTickets },
-    ] },
-    { title: 'Concerts', data: [
-      { name: a.name, value: statsA.concertCount },
-      { name: b.name, value: statsB.concertCount },
-    ] },
-  ] : []
-
   // Platform mix, normalised to each artist's OWN total followers -- the
   // raw-count version compared whichever artist has more overall reach, not
   // the platforms themselves (Amaal's Spotify dwarfing Aparshakti's entire
   // profile said nothing about Instagram vs. Spotify). As a % of each
   // artist's own reach, both bars share a fair 0-100% scale regardless of
-  // how different their absolute audience sizes are.
+  // how different their absolute audience sizes are. Shaped for
+  // DivergingBarChart: category + two plain positive numbers.
   const PLATFORM_LABELS = { instagram: 'Instagram', youtube: 'YouTube', spotify: 'Spotify' }
   const platformReachData = statsA && statsB
     ? Object.keys(PLATFORM_LABELS).map(p => {
       const aFollowers = a.followers?.[p] || 0
       const bFollowers = b.followers?.[p] || 0
       return {
-        platform: PLATFORM_LABELS[p],
-        a: statsA.totalFollowers > 0 ? Number(((aFollowers / statsA.totalFollowers) * 100).toFixed(1)) : 0,
-        b: statsB.totalFollowers > 0 ? Number(((bFollowers / statsB.totalFollowers) * 100).toFixed(1)) : 0,
+        category: PLATFORM_LABELS[p],
+        left: statsA.totalFollowers > 0 ? Number(((aFollowers / statsA.totalFollowers) * 100).toFixed(1)) : 0,
+        right: statsB.totalFollowers > 0 ? Number(((bFollowers / statsB.totalFollowers) * 100).toFixed(1)) : 0,
       }
     })
     : []
@@ -877,36 +862,51 @@ function ArtistComparison({ artists, concerts }) {
               </div>
             </div>
 
-            {/* Rows */}
-            {comparisonRows.map((row, i) => (
-              <div key={i} className="grid grid-cols-3 px-4 py-3"
-                style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--bg-secondary)' }}>
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-sm"
-                    style={{ color: row.winner === 'a' ? '#818CF8' : 'var(--text-secondary)' }}>
-                    {row.a}
-                  </span>
-                  {row.winner === 'a' && (
-                    <Trophy size={12} style={{ color: '#818CF8' }} />
+            {/* Rows -- a thin split progress bar under each contested row
+                (share of a+b) puts a real visual on the same row the
+                numbers already live on, instead of a separate chart section
+                repeating the same four metrics further down the page. */}
+            {comparisonRows.map((row, i) => {
+              const total = !row.noContest ? Math.abs(row.aRaw) + Math.abs(row.bRaw) : 0
+              const aShare = total > 0 ? (Math.abs(row.aRaw) / total) * 100 : 50
+              return (
+                <div key={i} className="px-4 py-3"
+                  style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 0 ? 'transparent' : 'var(--bg-secondary)' }}>
+                  <div className="grid grid-cols-3">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-sm"
+                        style={{ color: row.winner === 'a' ? '#818CF8' : 'var(--text-secondary)' }}>
+                        {row.a}
+                      </span>
+                      {row.winner === 'a' && (
+                        <Trophy size={12} style={{ color: '#818CF8' }} />
+                      )}
+                    </div>
+                    <div className="text-center">
+                      <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{row.label}</span>
+                      {row.winner === 'tie' && !row.noContest && (
+                        <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>Tie</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 justify-end">
+                      {row.winner === 'b' && (
+                        <Trophy size={12} style={{ color: '#FBBF24' }} />
+                      )}
+                      <span className="font-semibold text-sm"
+                        style={{ color: row.winner === 'b' ? '#FBBF24' : 'var(--text-secondary)' }}>
+                        {row.b}
+                      </span>
+                    </div>
+                  </div>
+                  {!row.noContest && (
+                    <div className="flex h-1.5 rounded-full overflow-hidden mt-2" style={{ background: 'var(--border)' }}>
+                      <div style={{ width: `${aShare}%`, background: '#818CF8' }} />
+                      <div style={{ width: `${100 - aShare}%`, background: '#FBBF24' }} />
+                    </div>
                   )}
                 </div>
-                <div className="text-center">
-                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{row.label}</span>
-                  {row.winner === 'tie' && !row.noContest && (
-                    <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>Tie</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 justify-end">
-                  {row.winner === 'b' && (
-                    <Trophy size={12} style={{ color: '#FBBF24' }} />
-                  )}
-                  <span className="font-semibold text-sm"
-                    style={{ color: row.winner === 'b' ? '#FBBF24' : 'var(--text-secondary)' }}>
-                    {row.b}
-                  </span>
-                </div>
-              </div>
-            ))}
+              )
+            })}
 
             {/* Winner Banner -- a real aggregate (wins across the contested
                 rows above), not just whoever has more revenue. Shown
@@ -946,70 +946,42 @@ function ArtistComparison({ artists, concerts }) {
             </div>
           </div>
 
-          {/* Side by side charts */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            {/* Touring & Commercial Performance -- small multiples. Each
-                metric gets its own mini-chart scaled to only its own two
-                values, so RoG/Revenue/Tickets/Concerts never compress or
-                drown each other out on a shared axis. */}
-            <ChartContainer
-              title="Touring & Commercial Performance"
-              subtitle="Each metric on its own scale -- a real tie stays visible instead of being flattened by a bigger number elsewhere"
-              delay={100}
-            >
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {performanceMetrics.map(m => (
-                  <div key={m.title}>
-                    <p className="text-xs font-semibold text-center mb-1" style={{ color: 'var(--text-muted)' }}>{m.title}</p>
-                    <BarChart
-                      data={m.data}
-                      xKey="name"
-                      layout="horizontal"
-                      bars={[{ key: 'value', label: m.title }]}
-                      multiColor
-                      valueSuffix={m.suffix || ''}
-                      height={150}
-                    />
-                  </div>
-                ))}
+          {/* Digital Reach -- Total Followers lives here (it's the sum of
+              the bars below), separate from the touring/commercial metrics
+              in the table above (which now carry their own inline progress
+              bars instead of a repeated chart section). Platform mix is
+              normalised to each artist's own total and plotted as a
+              diverging (butterfly/tornado) chart -- one shared platform
+              axis down the middle, each artist's share extending out to
+              its own side of a 0-line, so the comparison stays between
+              platforms rather than between the artists' overall reach. */}
+          <ChartContainer
+            title="Digital Reach"
+            subtitle="Platform mix per artist, as a % of their own total followers -- comparing platforms, not overall audience size"
+            delay={100}
+          >
+            <div className="flex items-center justify-between mb-4 pb-4" style={{ borderBottom: '1px solid var(--border)' }}>
+              <div>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{a.name}</p>
+                <p className="font-display font-bold text-lg" style={{ color: '#818CF8' }}>{formatNumber(statsA.totalFollowers)}</p>
+                <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Total Followers</p>
               </div>
-            </ChartContainer>
-
-            {/* Digital Reach -- Total Followers lives here now (it's the sum
-                of the bars below), separate from touring/commercial
-                performance. Platform mix is normalised to each artist's own
-                total, so this compares platforms, not whoever has more
-                overall reach. */}
-            <ChartContainer
-              title="Digital Reach"
-              subtitle="Platform mix per artist, as a % of their own total followers -- comparing platforms, not overall audience size"
-              delay={180}
-            >
-              <div className="flex items-center justify-between mb-4 pb-4" style={{ borderBottom: '1px solid var(--border)' }}>
-                <div>
-                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{a.name}</p>
-                  <p className="font-display font-bold text-lg" style={{ color: '#818CF8' }}>{formatNumber(statsA.totalFollowers)}</p>
-                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Total Followers</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{b.name}</p>
-                  <p className="font-display font-bold text-lg" style={{ color: '#FBBF24' }}>{formatNumber(statsB.totalFollowers)}</p>
-                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Total Followers</p>
-                </div>
+              <div className="text-right">
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{b.name}</p>
+                <p className="font-display font-bold text-lg" style={{ color: '#FBBF24' }}>{formatNumber(statsB.totalFollowers)}</p>
+                <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Total Followers</p>
               </div>
-              <BarChart
-                data={platformReachData}
-                xKey="platform"
-                layout="horizontal"
-                bars={[
-                  { key: 'a', label: a.name, color: '#818CF8' },
-                  { key: 'b', label: b.name, color: '#FBBF24' },
-                ]}
-                valueSuffix="%"
-                height={200}
-              />
-            </ChartContainer>
-          </div>
+            </div>
+            <DivergingBarChart
+              data={platformReachData}
+              leftLabel={a.name}
+              rightLabel={b.name}
+              leftColor="#818CF8"
+              rightColor="#FBBF24"
+              valueSuffix="%"
+              height={200}
+            />
+          </ChartContainer>
         </>
       )}
     </div>
