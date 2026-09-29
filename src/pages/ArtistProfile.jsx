@@ -37,36 +37,17 @@ const INSIGHT_ICON = {
 // components still live under src/components/viberate/).
 const TABS = ['Platforms', 'Growth Trends', 'Concerts']
 
-// Real daily ranges only — history currently spans 31 days.
-const GROWTH_RANGES = [
-  { label: '7D', days: 7 },
-  { label: '15D', days: 15 },
-  { label: '30D', days: 30 },
-]
-
 const PLATFORM_META = {
   instagram: { label: 'Instagram', color: '#E1306C' },
   youtube: { label: 'YouTube', color: '#FF0000' },
   spotify: { label: 'Spotify', color: '#1DB954' },
+  facebook: { label: 'Facebook', color: '#1877F2' },
 }
-
-const TREND_LINES = [
-  { key: 'instagram', label: 'Instagram', color: '#E1306C' },
-  { key: 'youtube', label: 'YouTube', color: '#FF0000' },
-  { key: 'spotify', label: 'Spotify', color: '#1DB954' },
-]
-
-// Growth Trends adds a Combined line (sum of the real platform series).
-const GROWTH_LINES = [
-  ...TREND_LINES,
-  { key: 'combined', label: 'Combined', color: '#A78BFA' },
-]
 
 function ArtistProfile() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [activeTab, setTab] = useState('Platforms')
-  const [growthDays, setGrowthDays] = useState(30)
 
   // Fetch artist details
   const { data: artistData, isLoading: artistLoading, error: artistError } = useQuery({
@@ -223,7 +204,6 @@ function ArtistProfile() {
   const totalFollowers = Object.entries(followers)
     .filter(([platform]) => PLATFORM_META[platform])
     .reduce((sum, [, count]) => sum + count, 0)
-  const avgRoG = Object.values(rog).reduce((a, b) => a + b, 0) / Object.keys(rog).length
   // Shared with Concerts.jsx / MapView.jsx -- null (not 0) when this artist's
   // concerts have no real revenue/ticket data, so the KPI below can render an
   // honest "—" instead of a fabricated "₹0".
@@ -242,32 +222,58 @@ function ArtistProfile() {
     avgTicketPrice: c.avgTicketPrice,
   }))
 
-  // Growth Trends: aggregate real DAILY platform metrics (no month-bucketing,
-  // no multipliers). Combined = sum of the platform series for that day.
-  const trendMap = new Map()
+  // Growth Trends (2026-09-29 redesign): this platform's real data arrives
+  // roughly every 15 days (a deliberate cadence -- this product isn't a
+  // stock ticker, so collecting more often than the underlying numbers
+  // actually move would just cost money for no signal), so a chart offering
+  // "7D/15D/30D, daily" implied a granularity that never existed. With only
+  // ~4-6 real sync points total right now, every one of those buttons was
+  // just slicing the same handful of points -- which is also why different
+  // artists' charts looked identical: everyone's real history is similarly
+  // short and gradual right now. Fixed two problems instead of relabeling
+  // buttons:
+  //   1. Scale: Spotify's absolute count (tens of millions) drowns out a
+  //      real YouTube/Instagram move on any shared axis -- not a period
+  //      problem, an axis problem. Solved with small multiples below: one
+  //      mini chart per platform, each on its own real range.
+  //   2. Comparability: "which platform is this artist gaining ground on"
+  //      needs a same-scale answer across platforms, but a bare % hides
+  //      whether that's 15% of 350K or 15% of 23M. The leaderboard below
+  //      shows the % AND the real start->end numbers together, so neither
+  //      is presented without the other.
+  const platformSeriesMap = { instagram: new Map(), youtube: new Map(), spotify: new Map(), facebook: new Map() }
 
   allMetrics?.forEach((metric) => {
+    const platform = (metric.platform || '').toLowerCase()
+    if (!platformSeriesMap[platform]) return
     const d = new Date(metric.metricDate)
     const dayKey = d.toISOString().slice(0, 10) // YYYY-MM-DD (unique, sortable)
     const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) // "Jul 5"
-    const platform = (metric.platform || '').toLowerCase()
-    const followers = Number(metric.followers) || 0
-
-    if (!trendMap.has(dayKey)) {
-      trendMap.set(dayKey, { key: dayKey, date: label, instagram: 0, youtube: 0, spotify: 0 })
-    }
-    const entry = trendMap.get(dayKey)
-    if (platform === 'instagram') entry.instagram = followers
-    if (platform === 'youtube') entry.youtube = followers
-    if (platform === 'spotify') entry.spotify = followers
+    platformSeriesMap[platform].set(dayKey, { key: dayKey, date: label, value: Number(metric.followers) || 0 })
   })
 
-  const trendDataAll = Array.from(trendMap.values())
-    .sort((a, b) => a.key.localeCompare(b.key))
-    .map(({ key, ...rest }) => ({ ...rest, combined: rest.instagram + rest.youtube + rest.spotify }))
+  const platformSeries = Object.fromEntries(
+    Object.entries(platformSeriesMap).map(([platform, map]) => [
+      platform,
+      Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key)).map(entry => ({ date: entry.date, value: entry.value })),
+    ])
+  )
 
-  // Only the last N days that actually have data — never padded.
-  const trendData = trendDataAll.slice(-growthDays)
+  // Gaining Ground: real % change from this platform's first to most recent
+  // real data point, paired with the actual numbers (never a bare %) --
+  // sorted so whichever platform this artist is gaining ground on fastest
+  // is first. Needs at least 2 real points; a platform with only one
+  // reading (or none) has no rate to compute and is left out honestly.
+  const growthLeaderboard = Object.entries(platformSeries)
+    .map(([platform, series]) => {
+      if (series.length < 2) return null
+      const first = series[0].value
+      const last = series[series.length - 1].value
+      if (first <= 0) return null
+      return { platform, label: PLATFORM_META[platform].label, color: PLATFORM_META[platform].color, first, last, pct: ((last - first) / first) * 100 }
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.pct - a.pct)
 
   return (
     <div className="relative">
@@ -531,42 +537,61 @@ function ArtistProfile() {
 
       {/* ── Tab: Growth Trends ── */}
       {activeTab === 'Growth Trends' && (
-        <ChartContainer
-          title="Follower Growth — All Platforms"
-          subtitle={`Instagram · YouTube · Spotify · Combined — daily, last ${growthDays} days`}
-        >
-          <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
-            <div className="flex gap-2 flex-wrap">
-              {GROWTH_LINES.map(p => (
-                <span key={p.key}
-                  className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium"
-                  style={{ background: `${p.color}18`, color: p.color, border: `1px solid ${p.color}30` }}>
-                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
-                  {p.label}
-                </span>
-              ))}
-            </div>
-            <div className="flex gap-1 p-1 rounded-xl"
-              style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
-              {GROWTH_RANGES.map(r => (
-                <button key={r.days}
-                  onClick={() => setGrowthDays(r.days)}
-                  className="text-xs px-2 py-1 rounded-lg font-semibold transition-all duration-200"
-                  style={growthDays === r.days ? {
-                    background: 'linear-gradient(135deg, #6366F1, #818CF8)', color: '#fff',
-                  } : { color: 'var(--text-muted)', background: 'transparent' }}>
-                  {r.label}
-                </button>
+        growthLeaderboard.length === 0 && Object.values(platformSeries).every(s => s.length === 0) ? (
+          <EmptyState title="No platform history" message="No platform metrics are available for this artist yet." />
+        ) : (
+          <div className="flex flex-col gap-4">
+            {/* Gaining Ground -- real % change from each platform's first to
+                most recent real reading, ranked, never shown without the
+                real start->end numbers (a bare % hides whether that's 15%
+                of 350K or 15% of 23M). */}
+            {growthLeaderboard.length > 0 && (
+              <ChartContainer title="Gaining Ground" subtitle="Real % change since this artist's first recorded reading on each platform, ranked">
+                <div className="flex flex-col gap-3">
+                  {growthLeaderboard.map(g => (
+                    <div key={g.platform}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-semibold" style={{ color: g.color }}>{g.label}</span>
+                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                          {formatNumber(g.first)} → {formatNumber(g.last)}
+                          <span className="font-bold ml-1.5" style={{ color: g.pct >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                            {g.pct >= 0 ? '+' : ''}{g.pct.toFixed(1)}%
+                          </span>
+                        </span>
+                      </div>
+                      <div className="h-2 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+                        <div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.abs(g.pct))}%`, background: g.color }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ChartContainer>
+            )}
+
+            {/* Small multiples -- one mini chart per platform, each on its
+                own real range, so a real YouTube/Instagram move is never
+                visually crushed by Spotify's much larger absolute scale.
+                Real sync dates only, no daily padding. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {Object.entries(platformSeries).filter(([, series]) => series.length > 0).map(([platform, series]) => (
+                <ChartContainer key={platform}
+                  title={PLATFORM_META[platform].label}
+                  subtitle={`${series.length} real sync${series.length === 1 ? '' : 's'} · ${series[0].date} – ${series[series.length - 1].date}`}
+                >
+                  {series.length > 1 ? (
+                    <LineChart data={series} xKey="date"
+                      lines={[{ key: 'value', label: PLATFORM_META[platform].label, color: PLATFORM_META[platform].color }]}
+                      height={200} yDomain={['auto', 'auto']} />
+                  ) : (
+                    <p className="text-sm py-8 text-center" style={{ color: 'var(--text-muted)' }}>
+                      Only one real reading so far ({formatNumber(series[0].value)}) -- a trend needs at least two.
+                    </p>
+                  )}
+                </ChartContainer>
               ))}
             </div>
           </div>
-          {trendData.length > 0 ? (
-            <LineChart data={trendData} xKey="date" lines={GROWTH_LINES} height={320}
-              yDomain={['auto', 'auto']} />
-          ) : (
-            <EmptyState title="No platform history" message="No daily platform metrics are available for this artist yet." />
-          )}
-        </ChartContainer>
+        )
       )}
       {/* ── Tab: Concerts ── */}
       {activeTab === 'Concerts' && (

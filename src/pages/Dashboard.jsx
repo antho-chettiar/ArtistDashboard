@@ -29,11 +29,19 @@ const TREND_LINES = [
   { key: 'facebook',  label: 'Facebook',  color: '#1877F2' },
 ]
 
-// Real daily ranges only — data currently spans 31 days, so no longer ranges.
+// Real collection cadence is ~15 days (deliberate -- this product tracks
+// follower/touring data, not a stock ticker, so collecting more often than
+// the numbers actually move would cost money for no signal). 7D/15D/30D
+// windows all fall inside the same recent stale pocket after a collection
+// gap, so they showed near-identical results -- not broken, just too narrow
+// a set of windows for how infrequently real points actually land. Wider,
+// month-scale windows request a genuinely different amount of real backend
+// history each time (getTrends already anchors to the last AVAILABLE data,
+// never "now", so these stay populated even mid-gap).
 const TREND_RANGES = [
-  { label: '7D',  days: 7  },
-  { label: '15D', days: 15 },
-  { label: '30D', days: 30 },
+  { label: '1M', days: 30  },
+  { label: '3M', days: 90  },
+  { label: '6M', days: 180 },
 ]
 
 const capitalizeCity = (city = '') => city.charAt(0).toUpperCase() + city.slice(1)
@@ -343,7 +351,7 @@ function Dashboard() {
         {/* Multi-line trend */}
         <ChartContainer
           title="Platform Growth Trends"
-          subtitle={`Instagram · YouTube · Spotify · Facebook — daily, last ${trendDays} days`}
+          subtitle="Instagram · YouTube · Spotify · Facebook — % change since the start of the selected window, real synced readings only"
           delay={100}
         >
           <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
@@ -360,7 +368,7 @@ function Dashboard() {
                 </span>
               ))}
             </div>
-            {/* Real daily range selector (7/15/30D) */}
+            {/* Real window selector (1M/3M/6M) -- see TREND_RANGES above */}
             <div className="flex gap-1 p-1 rounded-xl"
               style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
               {TREND_RANGES.map(r => (
