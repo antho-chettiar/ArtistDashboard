@@ -20,6 +20,30 @@ const SCRAPE_SOURCES = [
   { key: 'GOOGLE_CSE', label: 'Google CSE' },
 ]
 
+// Every mutation on this page previously had either no onError at all, or an
+// onError that only reset a loading flag -- a real failure (bad Excel sheet
+// names, a rejected scrape, a sync error) looked exactly like nothing
+// happened, with the button just quietly going back to idle. The backend's
+// errorHandler consistently puts the real reason in `message` (see
+// backend/src/middleware/errorHandler.ts) for both its own thrown errors and
+// ones it forwards from a controller; axios's own `error.message` is the
+// fallback for a request that never reached the server at all (network
+// down, CORS rejection, etc).
+function apiErrorMessage(error) {
+  return error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Something went wrong. Please try again.'
+}
+
+function ErrorBanner({ message }) {
+  if (!message) return null
+  return (
+    <div className="mt-3 p-3 rounded-xl flex items-start gap-2"
+      style={{ background: 'color-mix(in srgb, var(--accent-red) 8%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-red) 20%, transparent)' }}>
+      <AlertCircle size={13} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--accent-red)' }} />
+      <p className="text-xs" style={{ color: 'var(--accent-red)' }}>{message}</p>
+    </div>
+  )
+}
+
 const STATUS_META = {
   SUCCESS: { icon: CheckCircle, color: 'var(--accent-green)', bg: 'color-mix(in srgb, var(--accent-green) 12%, transparent)',  label: 'Success' },
   FAILED:  { icon: XCircle,     color: 'var(--accent-red)',   bg: 'color-mix(in srgb, var(--accent-red) 12%, transparent)',   label: 'Failed'  },
@@ -84,7 +108,9 @@ function AdminIngestion() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ingestionJobs'] })
   })
 
-  // Enrich artists mutation
+  // Enrich artists mutation. No onError needed to populate .isError/.error --
+  // React Query tracks those regardless; see the ErrorBanner rendered from
+  // enrichMutation.isError further below.
   const enrichMutation = useMutation({
     mutationFn: () => client.post('/ingestion/enrich'),
     onSuccess: () => {
@@ -123,6 +149,11 @@ function AdminIngestion() {
     const d = new Date(); d.setMonth(d.getMonth() + 18)
     return d.toISOString().split('T')[0]
   })
+  // "to" not after "from" previously wasn't checked client-side at all --
+  // combined with scrapeMutation having no error surface either, a
+  // fat-fingered range just silently produced an empty result with zero
+  // explanation. Real validation, not just a fix for the silent failure.
+  const dateRangeInvalid = Boolean(dateFrom) && Boolean(dateTo) && new Date(dateTo) <= new Date(dateFrom)
 
   // Excel upload mutation
   const uploadMutation = useMutation({
@@ -135,7 +166,7 @@ function AdminIngestion() {
       queryClient.invalidateQueries({ queryKey: ['ingestionJobs'] })
       setTimeout(() => { setFile(null); setUploadDone(false) }, 3000)
     },
-    onError: () => setUploading(false)
+    onError: () => setUploading(false) // error text itself rendered via uploadMutation.isError below
   })
 
   function handleSync(platform) {
@@ -206,6 +237,8 @@ function AdminIngestion() {
             </button>
           )}
 
+          {uploadMutation.isError && <ErrorBanner message={apiErrorMessage(uploadMutation.error)} />}
+
           <div className="mt-4 p-3 rounded-xl flex items-start gap-2"
             style={{ background: 'color-mix(in srgb, var(--accent-indigo) 8%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-indigo) 15%, transparent)' }}>
             <AlertCircle size={13} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--accent-indigo)' }} />
@@ -249,6 +282,7 @@ function AdminIngestion() {
               </p>
             </div>
           )}
+          {enrichMutation.isError && <ErrorBanner message={apiErrorMessage(enrichMutation.error)} />}
         </div>
 
         {/* Platform Sync */}
@@ -273,7 +307,7 @@ function AdminIngestion() {
                     <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{platform.label}</p>
                     <p className="text-xs" style={{ color: thisFailed ? 'var(--accent-red)' : 'var(--text-muted)' }}>
                       {thisFailed
-                        ? 'Sync failed — see error below'
+                        ? `Sync failed: ${apiErrorMessage(syncMutation.error)}`
                         : !isSupported
                           ? 'Not connected yet'
                           : lastJob
@@ -329,7 +363,7 @@ function AdminIngestion() {
               style={{ color: 'var(--text-muted)', fontSize: '10px' }}>To</label>
             <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
               className="w-full rounded-xl px-3 py-2 text-sm outline-none"
-              style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }} />
+              style={{ background: 'var(--bg-secondary)', border: `1px solid ${dateRangeInvalid ? 'var(--accent-red)' : 'var(--border)'}`, color: 'var(--text-primary)' }} />
           </div>
           <div>
             <label className="text-xs font-semibold uppercase tracking-widest block mb-1"
@@ -346,7 +380,7 @@ function AdminIngestion() {
               dateFrom,
               dateTo,
               country: scrapeCountry.trim(),
-            })} disabled={scrapeMutation.isPending || scrapeSources.length === 0 || selectedArtistIds.length === 0}
+            })} disabled={scrapeMutation.isPending || scrapeSources.length === 0 || selectedArtistIds.length === 0 || dateRangeInvalid}
               className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-60"
               style={{ background: 'linear-gradient(135deg, var(--accent-indigo), var(--accent-indigo))', color: '#fff' }}>
               {scrapeMutation.isPending ? <RefreshCw size={14} className="animate-spin" /> : <Upload size={14} />}
@@ -354,6 +388,12 @@ function AdminIngestion() {
             </button>
           </div>
         </div>
+
+        {dateRangeInvalid && (
+          <p className="text-xs mb-3" style={{ color: 'var(--accent-red)' }}>
+            "To" date must be after "From" date.
+          </p>
+        )}
 
         <div className="flex flex-wrap gap-2">
           {SCRAPE_SOURCES.map(src => (
@@ -384,6 +424,7 @@ function AdminIngestion() {
             </div>
           </div>
         )}
+        {scrapeMutation.isError && <ErrorBanner message={apiErrorMessage(scrapeMutation.error)} />}
       </div>
 
       {/* Job Log */}
