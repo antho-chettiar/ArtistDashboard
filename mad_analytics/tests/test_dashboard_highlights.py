@@ -71,6 +71,26 @@ def test_biggest_verified_show_picks_max_capacity_with_real_venue():
     assert "60,000" in result.detail
 
 
+def test_biggest_verified_show_excludes_known_capacity_placeholder():
+    # 5000 is KNOWN_CAPACITY_PLACEHOLDER -- this codebase's own "we don't
+    # know the real capacity" fallback value, not a real measurement (see
+    # _biggest_verified_show's docstring). A row with only that value must
+    # not be trusted as "verified" even though capacity > 0 and a real venue
+    # name are both present.
+    rows = [
+        {"artistName": "A", "venueName": "Placeholder Hall", "capacity": 5000, "city": "pune",
+         "concertDate": date(2024, 1, 1)},
+        {"artistName": "B", "venueName": "Real Small Venue", "capacity": 800, "city": "goa",
+         "concertDate": date(2024, 2, 1)},
+    ]
+
+    result = _biggest_verified_show(rows)
+
+    assert result is not None
+    assert "Real Small Venue" in result.headline  # the genuinely smaller real number wins
+    assert "800" in result.detail
+
+
 def test_biggest_verified_show_is_none_when_nothing_qualifies():
     rows = [{"artistName": "A", "venueName": None, "capacity": None, "city": "pune",
               "concertDate": date(2024, 1, 1)}]
@@ -82,7 +102,12 @@ def test_biggest_verified_show_scope_controls_the_claim():
     # Found live in production: a per-artist-filtered rows list defaulting to
     # scope="roster" wrongly claimed a roster-wide superlative for what was
     # actually only that one artist's own biggest show.
-    rows = [{"artistName": "Solo Artist", "venueName": "Small Hall", "capacity": 5000,
+    # capacity=4200, not 5000 -- 5000 is KNOWN_CAPACITY_PLACEHOLDER (this
+    # codebase's own "we don't know the real capacity" fallback value) and is
+    # excluded by _biggest_verified_show regardless of scope; this test is
+    # about the scope wording, not the placeholder exclusion (see
+    # test_biggest_verified_show_excludes_known_capacity_placeholder below).
+    rows = [{"artistName": "Solo Artist", "venueName": "Small Hall", "capacity": 4200,
               "city": "pune", "concertDate": date(2024, 1, 1)}]
 
     roster_scoped = _biggest_verified_show(rows)

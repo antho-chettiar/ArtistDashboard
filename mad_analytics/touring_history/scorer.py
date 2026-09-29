@@ -45,6 +45,15 @@ from ..demand.scorer import _normalize_city_key
 from ..audience_city.scorer import city_audience_index, city_audience_presence
 from ..trends.regional import city_to_geo_code
 
+# The exact fallback value this codebase's own capacity resolution defaults to
+# everywhere it doesn't know a venue's real capacity (schemas.py's own
+# PredictionInput default, the heuristic estimator's base case, the batch
+# backfill script) -- see _biggest_verified_show's docstring. Kept in sync
+# with Analysis.jsx's identical KNOWN_CAPACITY_PLACEHOLDER by convention
+# (same literal value, same meaning, different language) rather than a
+# shared import, since the two run in separate runtimes.
+KNOWN_CAPACITY_PLACEHOLDER = 5000
+
 
 def touring_precedent(
     artist_id: str,
@@ -201,8 +210,25 @@ def _biggest_verified_show(rows, scope: str = "roster") -> Optional[TouringInsig
     -- found live in production: Diljit Dosanjh's Artist Profile was
     claiming "the biggest verified show in this roster" for his own
     60,000-capacity show, while Shreya Ghoshal's real 66,000-capacity show
-    is actually bigger roster-wide."""
-    candidates = [r for r in rows if r["venueName"] and (r["capacity"] or 0) > 0]
+    is actually bigger roster-wide.
+
+    KNOWN_CAPACITY_PLACEHOLDER (2026-09-29): `capacity > 0` alone is not
+    enough to call a show "verified" -- 5,000 is the exact fallback value
+    this codebase's own capacity resolution defaults to everywhere it
+    doesn't know the real number (the heuristic estimator's base case, the
+    batch backfill script, schemas.py's own PredictionInput default), and 45
+    of this app's 233 concerts share this identical number across venue
+    types as different as university lawns and cricket stadiums -- that only
+    happens if it's a placeholder, not a measurement. Popularity's Revealed
+    Demand component already excludes it via the stricter known_venues.py
+    cross-reference (see popularity/calculator.py); Analysis.jsx's own venue
+    capacity display excludes it the same way. This was the one remaining
+    place still trusting the placeholder as if it were a real, verified
+    capacity."""
+    candidates = [
+        r for r in rows
+        if r["venueName"] and (r["capacity"] or 0) > 0 and r["capacity"] != KNOWN_CAPACITY_PLACEHOLDER
+    ]
     if not candidates:
         return None
     best = max(candidates, key=lambda r: r["capacity"])
