@@ -135,6 +135,16 @@ router.get('/ml/regional-trends', authenticate, madAnalyticsController.getRegion
 router.get('/ml/touring-history/repeat-visit-rate', authenticate, madAnalyticsController.getRepeatVisitRate);
 
 /**
+ * @route GET /api/v1/analytics/ml/audience-city?artist_id=...&city=...
+ * @desc Real, city-resolved % of an artist's Spotify monthly listeners /
+ *       Instagram followers from one city (Viberate Audience by City).
+ *       Coverage is artist-dependent and can fluctuate -- see
+ *       mad_analytics/audience_city/scorer.py's module docstring.
+ * @access Public (authenticated)
+ */
+router.get('/ml/audience-city', authenticate, madAnalyticsController.getCityAudiencePresence);
+
+/**
  * @route GET /api/v1/analytics/ml/touring-history/insights?artist_id=...
  * @desc Every real, data-grounded insight this engine can find for one
  *       artist -- the per-artist surface of the same engine

@@ -9,10 +9,14 @@ import ChartContainer from '../components/charts/ChartContainer'
 import BarChart from '../components/charts/BarChart'
 import DivergingBarChart from '../components/charts/DivergingBarChart'
 import LineChart from '../components/charts/LineChart'
-import { formatNumber, formatCurrency } from '../utils/formatters'
+import { formatNumber } from '../utils/formatters'
 import { useArtists } from '../hooks/useArtists'
 import { useConcerts } from '../hooks/useConcerts'
+import { useArtistScore } from '../hooks/useViberate'
 import {
+  useRepeatVisitRate,
+  useArtistInsights,
+  useCityAudiencePresence,
   useFeasibilityForCities,
 } from '../hooks/usePredictions'
 // NOTE: useMadGrowth (Growth/RoG) is intentionally no longer imported here — the
@@ -61,86 +65,85 @@ function ArtistComparison({ artists, concerts }) {
   const [artistA, setArtistA] = useState('')
   const [artistB, setArtistB] = useState('')
   const [selectedCity, setSelCity] = useState('All Cities')
-  const [selectedVenue, setSelVenue] = useState('All Venues')
-
-  const cityVenues = selectedCity === 'All Cities'
-    ? Array.from(new Set(concerts.map(c => c.venue).filter(Boolean))).sort()
-    : Array.from(new Set(concerts.filter(c => c.city === selectedCity && c.venue).map(c => c.venue))).sort()
-  const venueOptions = ['All Venues', ...cityVenues]
 
   const a = artists.find(x => x.id === artistA)
   const b = artists.find(x => x.id === artistB)
 
-  const concertsA = concerts.filter(c =>
-    c.artistId === artistA &&
-    (selectedCity === 'All Cities' || c.city === selectedCity) &&
-    (selectedVenue === 'All Venues' || c.venue === selectedVenue)
-  )
-  const concertsB = concerts.filter(c =>
-    c.artistId === artistB &&
-    (selectedCity === 'All Cities' || c.city === selectedCity) &&
-    (selectedVenue === 'All Venues' || c.venue === selectedVenue)
-  )
+  // Venue-level filtering removed (2026-09-29): the venue dropdown listed
+  // every artist's venues in a city, not just the two being compared, so
+  // picking one nearly always showed a false "neither artist has concerts
+  // here" -- city is the right granularity for a booking-decision
+  // comparison; venue-level detail belongs on Concerts/ConcertDetail.
+  const concertsA = concerts.filter(c => c.artistId === artistA && (selectedCity === 'All Cities' || c.city === selectedCity))
+  const concertsB = concerts.filter(c => c.artistId === artistB && (selectedCity === 'All Cities' || c.city === selectedCity))
 
-  const getStats = (artist, artistConcerts) => {
-    if (!artist) return null
-    const followersValues = Object.values(artist.followers || {})
-    const rogValues = Object.values(artist.rog || {})
-    return {
-      totalFollowers: followersValues.reduce((s, v) => s + v, 0),
-      avgRoG: rogValues.reduce((s, v) => s + v, 0) / (rogValues.length || 1),
-      totalRevenue: artistConcerts.reduce((s, c) => s + (c.totalRevenue || 0), 0),
-      totalTickets: artistConcerts.reduce((s, c) => s + (c.ticketsSold || 0), 0),
-      concertCount: artistConcerts.length,
-      topPlatform: Object.entries(artist.followers || {}).sort((x, y) => y[1] - x[1])[0] || ['Unknown', 0],
-    }
-  }
+  const citySelected = selectedCity !== 'All Cities'
 
-  const statsA = getStats(a, concertsA)
-  const statsB = getStats(b, concertsB)
+  // Real, roster-wide signals -- replacing Avg. RoG / Total Revenue / Tickets
+  // Sold (2026-09-29 redesign): those three were dead for nearly every artist
+  // pair (this app has no real recorded ticket/revenue data for almost any
+  // historical concert), so "comparison" was really just "0 vs 0, tie."
+  // These four are real and well-covered, checked against the live database:
+  // Popularity, Revealed Demand, Repeat Visit Rate, real Concert count.
+  const scoreA = useArtistScore(artistA)
+  const scoreB = useArtistScore(artistB)
+  const repeatA = useRepeatVisitRate(artistA, Boolean(artistA))
+  const repeatB = useRepeatVisitRate(artistB, Boolean(artistB))
+  const insightsA = useArtistInsights(artistA, Boolean(artistA))
+  const insightsB = useArtistInsights(artistB, Boolean(artistB))
+  // City Audience % only makes sense once a specific city is picked -- see
+  // audience_city/scorer.py: coverage is real but artist-dependent and can
+  // fluctuate, so `available` (not a fabricated 0%) gates display per artist.
+  const audienceA = useCityAudiencePresence(artistA, citySelected ? selectedCity : null, Boolean(artistA) && citySelected)
+  const audienceB = useCityAudiencePresence(artistB, citySelected ? selectedCity : null, Boolean(artistB) && citySelected)
+
+  const biggestShow = insightsQuery => insightsQuery.data?.insights?.find(i => i.insight_type === 'biggest_show') || null
+  const biggestShowA = biggestShow(insightsA)
+  const biggestShowB = biggestShow(insightsB)
 
   // 'a' | 'b' | 'tie' -- a bare `x > y ? 'a' : 'b'` treats every tie as a B
   // win, which used to fire constantly on this sparse dataset (RoG/Revenue/
   // Tickets are 0 vs 0 for most artist pairs).
   const cmp = (x, y) => (x > y ? 'a' : x < y ? 'b' : 'tie')
 
-  // Total Followers moved out of this table -- it's a digital-reach number
-  // (literally the sum of the Digital Reach chart's bars below), not a
-  // touring/commercial performance metric like the rest of this table.
-  // Mixing the two repeated the exact "Popularity isn't live draw" mistake
-  // this whole product's redesign traces back to.
+  const popularityA = scoreA.data?.latest?.finalScore
+  const popularityB = scoreB.data?.latest?.finalScore
+  const revealedDemandA = scoreA.data?.latest?.revealedDemandScore
+  const revealedDemandB = scoreB.data?.latest?.revealedDemandScore
+  const repeatRateA = repeatA.data?.repeat_rate
+  const repeatRateB = repeatB.data?.repeat_rate
+
+  const scoresReady = artistA && artistB && !scoreA.isLoading && !scoreB.isLoading
+    && !repeatA.isLoading && !repeatB.isLoading
+
   // aRaw/bRaw carry the plain numeric value alongside the formatted display
   // string -- used to draw each row's inline progress bar (share of a+b)
-  // without re-parsing "₹1.2Cr"-style strings back into numbers.
-  const comparisonRows = statsA && statsB ? [
+  // without re-parsing a formatted string back into a number. A row whose
+  // value is null/undefined on either side (Revealed Demand: no verified
+  // show yet for this artist) is marked noContest for THIS comparison
+  // rather than treating the gap as evidence of low demand.
+  const comparisonRows = scoresReady ? [
     {
-      label: 'Avg. RoG', a: `${statsA.avgRoG.toFixed(1)}%`, b: `${statsB.avgRoG.toFixed(1)}%`,
-      aRaw: statsA.avgRoG, bRaw: statsB.avgRoG,
-      winner: cmp(statsA.avgRoG, statsB.avgRoG)
+      label: 'Popularity', a: popularityA?.toFixed(1) ?? '—', b: popularityB?.toFixed(1) ?? '—',
+      aRaw: popularityA ?? 0, bRaw: popularityB ?? 0,
+      winner: popularityA != null && popularityB != null ? cmp(popularityA, popularityB) : 'tie',
+      noContest: popularityA == null || popularityB == null,
     },
     {
-      label: 'Total Revenue', a: formatCurrency(statsA.totalRevenue), b: formatCurrency(statsB.totalRevenue),
-      aRaw: statsA.totalRevenue, bRaw: statsB.totalRevenue,
-      winner: cmp(statsA.totalRevenue, statsB.totalRevenue)
+      label: 'Revealed Demand', a: revealedDemandA?.toFixed(1) ?? 'No verified show', b: revealedDemandB?.toFixed(1) ?? 'No verified show',
+      aRaw: revealedDemandA ?? 0, bRaw: revealedDemandB ?? 0,
+      winner: revealedDemandA != null && revealedDemandB != null ? cmp(revealedDemandA, revealedDemandB) : 'tie',
+      noContest: revealedDemandA == null || revealedDemandB == null,
     },
     {
-      label: 'Tickets Sold', a: formatNumber(statsA.totalTickets), b: formatNumber(statsB.totalTickets),
-      aRaw: statsA.totalTickets, bRaw: statsB.totalTickets,
-      winner: cmp(statsA.totalTickets, statsB.totalTickets)
+      label: 'Repeat Visit Rate', a: `${((repeatRateA ?? 0) * 100).toFixed(0)}%`, b: `${((repeatRateB ?? 0) * 100).toFixed(0)}%`,
+      aRaw: repeatRateA ?? 0, bRaw: repeatRateB ?? 0,
+      winner: cmp(repeatRateA ?? 0, repeatRateB ?? 0),
     },
     {
-      label: 'Concerts', a: statsA.concertCount, b: statsB.concertCount,
-      aRaw: statsA.concertCount, bRaw: statsB.concertCount,
-      winner: cmp(statsA.concertCount, statsB.concertCount)
-    },
-    {
-      // Each artist's own top platform compared by raw follower count --
-      // often two different platforms entirely (Spotify vs. Instagram), so
-      // this was never a fair head-to-head. Informational only: no trophy,
-      // no progress bar, and excluded from the Overall Winner tally below
-      // (noContest).
-      label: 'Top Platform', a: statsA.topPlatform[0], b: statsB.topPlatform[0],
-      winner: 'tie', noContest: true,
+      label: citySelected ? `Concerts in ${selectedCity}` : 'Concerts', a: concertsA.length, b: concertsB.length,
+      aRaw: concertsA.length, bRaw: concertsB.length,
+      winner: cmp(concertsA.length, concertsB.length)
     },
   ] : []
 
@@ -162,14 +165,16 @@ function ArtistComparison({ artists, concerts }) {
   // how different their absolute audience sizes are. Shaped for
   // DivergingBarChart: category + two plain positive numbers.
   const PLATFORM_LABELS = { instagram: 'Instagram', youtube: 'YouTube', spotify: 'Spotify' }
-  const platformReachData = statsA && statsB
+  const totalFollowersA = a ? Object.values(a.followers || {}).reduce((s, v) => s + v, 0) : 0
+  const totalFollowersB = b ? Object.values(b.followers || {}).reduce((s, v) => s + v, 0) : 0
+  const platformReachData = a && b
     ? Object.keys(PLATFORM_LABELS).map(p => {
       const aFollowers = a.followers?.[p] || 0
       const bFollowers = b.followers?.[p] || 0
       return {
         category: PLATFORM_LABELS[p],
-        left: statsA.totalFollowers > 0 ? Number(((aFollowers / statsA.totalFollowers) * 100).toFixed(1)) : 0,
-        right: statsB.totalFollowers > 0 ? Number(((bFollowers / statsB.totalFollowers) * 100).toFixed(1)) : 0,
+        left: totalFollowersA > 0 ? Number(((aFollowers / totalFollowersA) * 100).toFixed(1)) : 0,
+        right: totalFollowersB > 0 ? Number(((bFollowers / totalFollowersB) * 100).toFixed(1)) : 0,
       }
     })
     : []
@@ -239,22 +244,19 @@ function ArtistComparison({ artists, concerts }) {
         </div>
       </div>
 
-      {/* City filter */}
+      {/* City filter -- city-level only (see venue-removal note above) */}
       <div className="glass-card p-4 mb-6 animate-fade-up" style={{ animationDelay: '80ms', animationFillMode: 'both', opacity: 0 }}>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
           <div className="flex items-center gap-2">
             <MapPin size={14} style={{ color: 'var(--accent-gold)' }} />
             <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
-              City & Venue Filters
+              City Filter
             </span>
           </div>
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-1">
             <select
               value={selectedCity}
-              onChange={e => {
-                setSelCity(e.target.value)
-                setSelVenue('All Venues')
-              }}
+              onChange={e => setSelCity(e.target.value)}
               className="flex-1 rounded-xl px-4 py-2.5 text-sm outline-none transition-all duration-200"
               style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-primary)', fontFamily: 'Satoshi', maxWidth: '260px' }}
             >
@@ -264,24 +266,11 @@ function ArtistComparison({ artists, concerts }) {
                 </option>
               ))}
             </select>
-            <select
-              value={selectedVenue}
-              onChange={e => setSelVenue(e.target.value)}
-              className="flex-1 rounded-xl px-4 py-2.5 text-sm outline-none transition-all duration-200"
-              style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-primary)', fontFamily: 'Satoshi', maxWidth: '260px' }}
-              disabled={cityVenues.length === 0}
-            >
-              {venueOptions.map(venue => (
-                <option key={venue} value={venue} style={{ background: 'var(--bg-card)', color: 'var(--text-primary)' }}>
-                  {venue}
-                </option>
-              ))}
-            </select>
           </div>
-          {(selectedCity !== 'All Cities' || selectedVenue !== 'All Venues') && (
+          {citySelected && (
             <span className="text-xs px-2.5 py-1 rounded-full font-semibold"
               style={{ background: 'color-mix(in srgb, var(--accent-gold) 12%, transparent)', color: 'var(--accent-gold)', border: '1px solid color-mix(in srgb, var(--accent-gold) 20%, transparent)' }}>
-              {selectedCity !== 'All Cities' ? `City: ${selectedCity}` : 'All Cities'}{selectedVenue !== 'All Venues' ? ` · Venue: ${selectedVenue}` : ''}
+              City: {selectedCity}
             </span>
           )}
         </div>
@@ -298,38 +287,17 @@ function ArtistComparison({ artists, concerts }) {
             Select Two Artists to Compare
           </h3>
           <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            Head-to-head stats, revenue, followers and RoG side by side
+            Popularity, Revealed Demand, Repeat Visit Rate and real touring history, side by side
           </p>
         </div>
       )}
 
-      {/* Empty state – city has no data for one or both artists */}
-      {a && b && selectedCity !== 'All Cities' && (concertsA.length === 0 || concertsB.length === 0) && (
-        <div className="glass-card p-14 text-center animate-fade-up">
-          <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center"
-            style={{ background: 'color-mix(in srgb, var(--accent-red) 8%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-red) 20%, transparent)' }}>
-            <MapPin size={28} style={{ color: 'var(--accent-red)' }} />
-          </div>
-          <h3 className="font-display font-semibold text-lg mb-2" style={{ color: 'var(--text-primary)' }}>
-            No data available for {selectedCity}
-          </h3>
-          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            {concertsA.length === 0 && concertsB.length === 0
-              ? `Neither ${a.name} nor ${b.name} has concerts in ${selectedCity}.`
-              : concertsA.length === 0
-                ? `${a.name} has no concerts in ${selectedCity}.`
-                : `${b.name} has no concerts in ${selectedCity}.`}
-          </p>
-          <button onClick={() => setSelCity('All Cities')}
-            className="mt-4 text-xs px-4 py-2 rounded-xl font-semibold transition-all duration-200"
-            style={{ background: 'color-mix(in srgb, var(--accent-indigo) 10%, transparent)', color: 'var(--accent-indigo)', border: '1px solid color-mix(in srgb, var(--accent-indigo) 20%, transparent)' }}>
-            Clear city filter
-          </button>
-        </div>
-      )}
-
-      {/* Comparison Results */}
-      {a && b && statsA && statsB && !(selectedCity !== 'All Cities' && (concertsA.length === 0 || concertsB.length === 0)) && (
+      {/* Comparison Results -- no longer gated on concerts-in-city being
+          non-empty: Popularity/Revealed Demand/Repeat Visit Rate are
+          roster-wide real signals, still meaningful even when an artist
+          hasn't (yet) played the selected city; that city's own concert
+          count is just one honest row among several, not a blocker. */}
+      {a && b && scoresReady && (
         <>
           {/* Head to head table */}
           <div className="glass-card overflow-hidden mb-4 animate-fade-up">
@@ -434,6 +402,80 @@ function ArtistComparison({ artists, concerts }) {
             </div>
           </div>
 
+          {/* Biggest verified show -- a concrete real fact per artist, not a
+              contest (a bigger number here doesn't mean "better," just
+              "different real venue"), so no trophy/progress-bar treatment.
+              Absent for an artist with no verified show yet (e.g. only
+              placeholder-capacity concerts on record) -- shown honestly,
+              never fabricated. See touring_history/scorer.py. */}
+          {(biggestShowA || biggestShowB) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+              <div className="glass-card p-4 animate-fade-up" style={{ borderLeft: '3px solid var(--accent-indigo)' }}>
+                <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: 'var(--accent-indigo)', fontSize: '10px' }}>
+                  {a.name}'s Biggest Verified Show
+                </p>
+                <p className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                  {biggestShowA ? biggestShowA.headline.replace(`${a.name}'s biggest verified show: `, '') : 'No verified show on record yet'}
+                </p>
+                {biggestShowA && <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{biggestShowA.detail}</p>}
+              </div>
+              <div className="glass-card p-4 animate-fade-up" style={{ borderLeft: '3px solid var(--accent-gold)' }}>
+                <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: 'var(--accent-gold)', fontSize: '10px' }}>
+                  {b.name}'s Biggest Verified Show
+                </p>
+                <p className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                  {biggestShowB ? biggestShowB.headline.replace(`${b.name}'s biggest verified show: `, '') : 'No verified show on record yet'}
+                </p>
+                {biggestShowB && <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{biggestShowB.detail}</p>}
+              </div>
+            </div>
+          )}
+
+          {/* City Audience % -- only meaningful once a specific city is
+              picked (real Spotify/Instagram audience-by-city data, see
+              audience_city/scorer.py). `available` gates display per artist
+              rather than fabricating a 0% for an artist Viberate has no
+              current city data for -- coverage genuinely fluctuates. */}
+          {citySelected && (audienceA.data?.available || audienceB.data?.available) && (
+            <div className="glass-card p-4 mb-4 animate-fade-up">
+              <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
+                Real Digital Audience Share in {selectedCity}
+              </p>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs mb-1" style={{ color: 'var(--accent-indigo)' }}>{a.name}</p>
+                  {audienceA.data?.available ? (
+                    <>
+                      {audienceA.data.monthly_listeners_pct != null && (
+                        <p className="text-sm" style={{ color: 'var(--text-primary)' }}>{audienceA.data.monthly_listeners_pct}% of Spotify monthly listeners</p>
+                      )}
+                      {audienceA.data.total_followers_pct != null && (
+                        <p className="text-sm" style={{ color: 'var(--text-primary)' }}>{audienceA.data.total_followers_pct}% of Instagram followers</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No current data for this city</p>
+                  )}
+                </div>
+                <div>
+                  <p className="text-xs mb-1" style={{ color: 'var(--accent-gold)' }}>{b.name}</p>
+                  {audienceB.data?.available ? (
+                    <>
+                      {audienceB.data.monthly_listeners_pct != null && (
+                        <p className="text-sm" style={{ color: 'var(--text-primary)' }}>{audienceB.data.monthly_listeners_pct}% of Spotify monthly listeners</p>
+                      )}
+                      {audienceB.data.total_followers_pct != null && (
+                        <p className="text-sm" style={{ color: 'var(--text-primary)' }}>{audienceB.data.total_followers_pct}% of Instagram followers</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No current data for this city</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Digital Reach -- Total Followers lives here (it's the sum of
               the bars below), separate from the touring/commercial metrics
               in the table above (which now carry their own inline progress
@@ -451,12 +493,12 @@ function ArtistComparison({ artists, concerts }) {
             <div className="flex items-center justify-between mb-4 pb-4" style={{ borderBottom: '1px solid var(--border)' }}>
               <div>
                 <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{a.name}</p>
-                <p className="font-display font-bold text-lg" style={{ color: 'var(--accent-indigo)' }}>{formatNumber(statsA.totalFollowers)}</p>
+                <p className="font-display font-bold text-lg" style={{ color: 'var(--accent-indigo)' }}>{formatNumber(totalFollowersA)}</p>
                 <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Total Followers</p>
               </div>
               <div className="text-right">
                 <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{b.name}</p>
-                <p className="font-display font-bold text-lg" style={{ color: 'var(--accent-gold)' }}>{formatNumber(statsB.totalFollowers)}</p>
+                <p className="font-display font-bold text-lg" style={{ color: 'var(--accent-gold)' }}>{formatNumber(totalFollowersB)}</p>
                 <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Total Followers</p>
               </div>
             </div>

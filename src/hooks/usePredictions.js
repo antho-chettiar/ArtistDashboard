@@ -151,6 +151,25 @@ export function useRepeatVisitRate(artistId, enabled) {
   })
 }
 
+// Real, city-resolved digital audience presence for one artist (% of Spotify
+// monthly listeners / Instagram followers from this city). `available` is
+// false (never a fabricated 0%) when Viberate has no current data for this
+// artist -- see mad_analytics/audience_city/scorer.py's module docstring for
+// why coverage is artist-dependent and can fluctuate over time.
+export function useCityAudiencePresence(artistId, city, enabled) {
+  return useQuery({
+    queryKey: ['cityAudiencePresence', artistId, city],
+    queryFn: async () => {
+      if (!artistId || !city) return null
+      const { data } = await client.get('/analytics/ml/audience-city', { params: { artist_id: artistId, city } })
+      return data.data
+    },
+    enabled,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  })
+}
+
 // Every real, data-grounded insight the touring-history engine can find for
 // ONE artist -- the per-artist surface of the same engine Dashboard's
 // Touring Spotlight draws its roster-wide "best of" picks from. See

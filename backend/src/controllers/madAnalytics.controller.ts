@@ -172,6 +172,19 @@ export const madAnalyticsController = {
     }
   },
 
+  getCityAudiencePresence: async (req: Request, res: Response) => {
+    try {
+      const artistId = String(req.query.artist_id || '');
+      const city = String(req.query.city || '');
+      if (!artistId) throw new Error('artist_id is required');
+      if (!city) throw new Error('city is required');
+      const result = await madAnalyticsService.getCityAudiencePresence(artistId, city);
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      return handleAnalyticsError(res, error, 'getCityAudiencePresence');
+    }
+  },
+
   getArtistInsights: async (req: Request, res: Response) => {
     try {
       const artistId = String(req.query.artist_id || '');

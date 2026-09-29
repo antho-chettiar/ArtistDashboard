@@ -62,6 +62,7 @@ from .venue_capacity.resolver import fetch_saved_capacity_resolutions
 from .feasibility import calculate as feasibility_calc
 from .touring_history import dashboard_highlights, repeat_visit_rate, artist_insights, top_insight_per_artist
 from .engagement import engagement_rate
+from .audience_city import city_audience_presence
 from .trends.regional import regional_trend_score, city_to_geo_code, geo_code_to_state_name
 
 
@@ -777,6 +778,19 @@ def repeat_visit_rate_endpoint(artist_id: str = Query(...)):
     display-gap audit)."""
     try:
         return repeat_visit_rate(artist_id)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/audience-city")
+def city_audience_presence_endpoint(artist_id: str = Query(...), city: str = Query(...)):
+    """Real, city-resolved digital audience presence for one artist (% of
+    Spotify monthly listeners / Instagram followers from this city) -- see
+    audience_city/scorer.py's module docstring for the exact source and the
+    "never fabricated, coverage fluctuates" caveat (available=False, not a
+    fabricated 0%, when Viberate has no current data for this artist)."""
+    try:
+        return city_audience_presence(artist_id, city)
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 

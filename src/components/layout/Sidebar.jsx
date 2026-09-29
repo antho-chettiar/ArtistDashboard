@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Mic2, Music2,
-  Map, Upload, UserCog, ChevronRight,
+  Upload, UserCog, ChevronRight,
   BarChart3, Building2
 } from 'lucide-react'
 
@@ -17,7 +17,7 @@ const navItems = [
   { label: 'Venues',       path: '/venues',          icon: Building2       },
   // { label: 'Demographics', path: '/demographics',    icon: Users           },
   { label: 'Analysis',     path: '/analysis',        icon: BarChart3       },
-  { label: 'Map View',     path: '/map',             icon: Map             },
+  // Map View unlinked, not deleted -- see App.jsx's routes comment.
 ]
 
 const adminItems = [

@@ -799,6 +799,19 @@ export const madAnalyticsService = {
     }
   },
 
+  // Real, city-resolved digital audience presence for one artist (% of
+  // Spotify monthly listeners / Instagram followers from this city) -- see
+  // audience_city/scorer.py's module docstring. Coverage is artist-dependent
+  // and can fluctuate (Viberate's own data-refresh state), never fabricated.
+  getCityAudiencePresence: async (artistId: string, city: string) => {
+    try {
+      return await getAnalytics(`/audience-city?artist_id=${encodeURIComponent(artistId)}&city=${encodeURIComponent(city)}`);
+    } catch (error) {
+      console.error('Error fetching city audience presence from mad_analytics:', error);
+      throw error;
+    }
+  },
+
   // Every real, data-grounded insight this engine can find for ONE artist --
   // the per-artist surface of the same engine dashboard-highlights draws its
   // roster-wide "best of" picks from. See

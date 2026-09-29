@@ -10,7 +10,6 @@ import Concerts from './pages/Concerts'
 import Venues from './pages/Venues'
 import ConcertDetail from './pages/ConcertDetail'
 import Demographics from './pages/Demographics'
-import MapView from './pages/MapView'
 import AdminUsers from './pages/AdminUsers'
 import AdminIngestion from './pages/AdminIngestion'
 import NotFound from './pages/NotFound'
@@ -55,7 +54,14 @@ function App() {
           <Route path="venues" element={<Venues />} />
           <Route path="concerts/:id" element={<ConcertDetail />} />
           {/* <Route path="demographics" element={<Demographics />} /> */}
-          <Route path="map" element={<MapView />} />
+          {/* Map View unlinked, not deleted (2026-09-29): 0% real data
+              coverage today (no concert or venue in this app has ever had
+              lat/lng geocoded), and every real question it could answer --
+              touring footprint, where to tour next -- is already answered
+              better, with real ranked data, by touring_history's insights
+              and the Feasibility/TOPSIS tab. src/pages/MapView.jsx is left
+              in place, archived, in case real geocoded data makes a map
+              worthwhile later. */}
           <Route path="admin/users" element={<AdminUsers />} />
           <Route path="admin/ingestion" element={<AdminIngestion />} />
           <Route path="analysis" element={<Analysis />} />
