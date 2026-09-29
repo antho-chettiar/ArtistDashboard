@@ -253,6 +253,60 @@ def fetch_trends_scores(
     return final_scores
 
 
+def fetch_trends_scores_stable(
+    artist_names: list[str],
+    geo: str = "",
+    timeframe: str = "today 12-m",
+    suffix: str = " music",
+    delay_seconds: float = 5.0,
+) -> dict[str, float]:
+    """
+    Cohort-INDEPENDENT Google Trends scores: each artist is queried alone via
+    _fetch_single_honest, never batched with or normalized against any other
+    artist. Returns {artist_name: score}; an artist whose fetch failed is left
+    out entirely (never a fabricated 0.0), same "never fabricate" contract as
+    _fetch_single_honest itself.
+
+    Replaces fetch_trends_scores() for any caller that ranks artists against
+    each other (Popularity, and the DB-persisted googleTrendsScore column
+    fetch_and_store_trends() writes, which Popularity's fallback and Demand's
+    google_trends component both read). fetch_trends_scores' own final "scale
+    so the maximum across the current batch = 100" step means whichever
+    artist has the single highest search interest in THIS run gets forced to
+    100 and everyone else is scaled down relative to them -- including down
+    to 0 -- so one artist's unrelated, momentary spike changes every OTHER
+    artist's score too. That is the exact same failure mode the Reach and
+    Revealed Demand components were redesigned to eliminate (see
+    popularity/calculator.py's module docstring), just still present here
+    because this function was believed unused by the redesign and left alone
+    (2026-09-29 incident, part 2: Armaan Malik's live batch value hit 100
+    while Arijit Singh's hit 0 in the same run, a 20-point swing on its own
+    large enough to outrank an artist who wins on both other components).
+
+    This reuses regional_trend_score()'s existing self-relative-to-own-12-month-
+    peak measure (an established pattern in this codebase already, not a new
+    one) -- each artist's score reflects their OWN current interest relative
+    to their OWN peak over the window, so it cannot be moved by anyone else's
+    data. Trade-off: it does not let two artists' ABSOLUTE search volumes be
+    compared (both can read ~80 while at their own peak even if one's real
+    volume is 10x the other's) -- acceptable here because Trends is already a
+    deliberately minority, "supporting signal" weight (see module docstring),
+    and a stable minority signal beats an unstable one of the same size.
+    """
+    if not artist_names:
+        return {}
+    pytrends = _get_pytrends_client()
+    scores: dict[str, float] = {}
+    for i, name in enumerate(artist_names):
+        keyword = f"{name}{suffix}"
+        value = _fetch_single_honest(pytrends, keyword, geo, timeframe)
+        if value is not None:
+            scores[name] = value
+        if i < len(artist_names) - 1:
+            time.sleep(delay_seconds)
+    return scores
+
+
 def fetch_single_trend_score(
     artist_name: str,
     geo: str = "",
@@ -307,8 +361,11 @@ def fetch_and_store_trends(db_url: Optional[str] = None, geo: str = "", suffix: 
 
     logger.info(f"[GoogleTrends] Fetching trends for {len(artist_names)} artists...")
 
-    # Fetch scores
-    scores = fetch_trends_scores(artist_names, geo=geo, suffix=suffix)
+    # Fetch scores -- cohort-independent (see fetch_trends_scores_stable's
+    # docstring): this column feeds Popularity's Trends fallback AND Demand's
+    # google_trends component (30% weight), so a batch-relative score here
+    # would reintroduce the same instability into both, not just Popularity.
+    scores = fetch_trends_scores_stable(artist_names, geo=geo, suffix=suffix or " music")
 
     # Guard: don't save if ALL scores are zero (avoids overwriting good data on rate-limit failures)
     if not scores or all(v <= 0 for v in scores.values()):

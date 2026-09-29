@@ -86,6 +86,22 @@ genre-style tag (Phase 3, Day 6 -- see feature_engineering.ARTIST_GENRE_STYLE),
 unchanged by this redesign: a regional/folk artist's real fanbase shows up
 more on YouTube than Spotify, so treating every artist under the same
 weights under- or over-counts them.
+
+INCIDENT, part 2 (same day, caught in live verification right after this
+redesign shipped): Armaan Malik was STILL outranking Arijit Singh, Shreya
+Ghoshal and Diljit Dosanjh in production, despite the fix above -- Reach and
+RevealedDemand alone correctly ranked all three above him. The live Google
+Trends fetch had handed Armaan Malik a 100 and Arijit Singh a 0 in the same
+run, a 20-point swing on a 20%-weighted component large enough to flip the
+ranking on its own. Root cause: this component was assumed unused/dead by
+the redesign above and left untouched -- it wasn't dead, and it batch-
+normalizes every artist so THIS RUN's single highest-interest artist = 100,
+the exact same cohort-dependence Reach and RevealedDemand were redesigned to
+remove. Fixed by making Trends cohort-independent too (see
+_fetch_google_trends_scores and trends/google_trends.py's
+fetch_trends_scores_stable) -- each artist is now scored only against their
+own 12-month history, so no other artist's data, spike, or absence from the
+roster can move their score.
 """
 from __future__ import annotations
 from datetime import datetime, timezone, date as date_cls
@@ -202,24 +218,33 @@ def _reach_score_for_artist(artist_row: dict) -> tuple[float, dict[str, float], 
     return score, weights_out, contributions
 
 
-# ── Google Trends Integration (unchanged by this redesign) ─────────────────────
+# ── Google Trends Integration ───────────────────────────────────────────────────
+# 2026-09-29 incident, part 2: this used to call fetch_trends_scores(), which
+# rescales every artist in the batch so THIS RUN's single highest-interest
+# artist = 100 -- the same cohort-dependence the rest of this redesign
+# eliminated, just still present here because this function was believed
+# unused by the redesign (it wasn't). Live symptom: Armaan Malik hit 100 and
+# Arijit Singh hit 0 in the same run purely from who else was in that batch,
+# a 20-point swing on its own large enough to outrank an artist who wins on
+# both other components. See fetch_trends_scores_stable's docstring.
 
 def _fetch_google_trends_scores(artist_names: list[str]) -> dict[str, float]:
     """
-    Fetch Google Trends scores for all artists.
+    Fetch Google Trends scores for all artists, each one independent of every
+    other -- one artist's spike can never move another artist's score.
     Falls back to stored DB scores if pytrends fails or is unavailable.
     Returns dict: artist_name → score (0–100)
     """
     scores: dict[str, float] = {}
 
-    # Try live fetch first. timeframe="today 12-m" (widened from 3-m, 2026-09):
-    # a short window lets one artist's momentary, music-unrelated search spike
-    # (e.g. a film promotion for an actor-singer) max out at 100 and swing 25%
-    # of their Popularity score — see fetch_trends_scores' docstring for the
-    # real incident that motivated this.
+    # Try live fetch first. timeframe="today 12-m": widened from 3-m so a
+    # short-lived, music-unrelated search spike (e.g. a film promotion or a
+    # reality-TV appearance for an actor-singer) is diluted by a full year of
+    # this SAME artist's own baseline interest, not just outcompeted by
+    # whoever else happens to be in the roster.
     try:
-        from ..trends.google_trends import fetch_trends_scores
-        scores = fetch_trends_scores(artist_names, geo="", timeframe="today 12-m", suffix=" music")
+        from ..trends.google_trends import fetch_trends_scores_stable
+        scores = fetch_trends_scores_stable(artist_names, geo="", timeframe="today 12-m", suffix=" music")
         if scores:
             logger.info(f"[Popularity] Google Trends: live scores for {len(scores)} artists")
             return scores
@@ -228,7 +253,9 @@ def _fetch_google_trends_scores(artist_names: list[str]) -> dict[str, float]:
     except Exception as e:
         logger.warning(f"[Popularity] Google Trends live fetch failed: {e} — using stored scores")
 
-    # Fallback: read from DB (googleTrendsScore column)
+    # Fallback: read from DB (googleTrendsScore column) -- also written by the
+    # cohort-independent fetch now (see fetch_and_store_trends), so the
+    # fallback path carries the same guarantee as the live path.
     scores = _fetch_stored_trends_scores()
     if scores:
         logger.info(f"[Popularity] Google Trends: using {len(scores)} stored scores from DB")
@@ -589,17 +616,16 @@ def calculate(payload: PopularityInput) -> PopularityOutput:
         )
 
     # Google Trends score — None if not present (pytrends not yet run).
-    # Fetch across the FULL active-artist cohort — the same population and call
-    # that calculate_all() uses — so the target's trend value is cohort-normalized
-    # identically. Querying a single name would make that lone artist both the
-    # reference AND the max in fetch_trends_scores, self-normalizing it to 100.
+    # Looked up for THIS artist alone: the stable fetch (fetch_trends_scores_stable)
+    # scores each artist against their own 12-month history, never against the
+    # rest of the roster, so there is no cohort to gather here any more --
+    # unlike the old batch-normalized fetch, a single-artist call agrees with
+    # calculate_all()'s value by construction, not because both happen to see
+    # the same cohort.
     artist_name = artist_row.get("artistName")
     trend_score = None
     if artist_name:
-        cohort_names = [a["artistName"] for a in artists]
-        if artist_name not in cohort_names:
-            cohort_names.append(artist_name)
-        trends_scores = _fetch_google_trends_scores(cohort_names)
+        trends_scores = _fetch_google_trends_scores([artist_name])
         trend_score = trends_scores.get(artist_name)
 
     return _build_popularity_output(payload.artist_id, artist_row, trend_score)
