@@ -64,7 +64,6 @@ function predictRevenue(artist, city, artistConcerts = [], venueCapacity = 0) {
   const ticketRevenue = ticketsSold * atp
   const sponsorRevenue = ticketRevenue * 0.18 * (city.demand / 100)
   const totalRevenue = ticketRevenue + sponsorRevenue
-  const roi = totalRevenue > 0 ? ((totalRevenue - totalRevenue * 0.45) / (totalRevenue * 0.45)) * 100 : 0
 
   const popularityScore = Math.min(Math.round(city.demand * 0.6 + (ticketsSold / 50000) * 40), 99)
 
@@ -72,7 +71,7 @@ function predictRevenue(artist, city, artistConcerts = [], venueCapacity = 0) {
     adjustedCap: capacity,
     ticketsSold, atp,
     ticketRevenue, sponsorRevenue, totalRevenue,
-    sellThrough: sellThrough * 100, roi, popularityScore,
+    sellThrough: sellThrough * 100, popularityScore,
     demandScore: city.demand,
   }
 }
@@ -96,7 +95,6 @@ function applyModelPrediction(fallback, model, realPopularityScore) {
     ? Math.min(capacity, Math.round(totalRevenue / atp))
     : fallback.ticketsSold
   const sellThrough = capacity > 0 ? (ticketsSold / capacity) * 100 : fallback.sellThrough
-  const estimatedCost = totalRevenue * 0.45
 
   return {
     ...fallback,
@@ -107,7 +105,6 @@ function applyModelPrediction(fallback, model, realPopularityScore) {
     sponsorRevenue: 0,
     totalRevenue,
     sellThrough,
-    roi: estimatedCost > 0 ? ((totalRevenue - estimatedCost) / estimatedCost) * 100 : fallback.roi,
     // Real Popularity (entropy-weighted platform reach), NOT the Demand score
     // reused a second time -- see demandScore below for that. Falls back to
     // the client-side estimate only when the real score hasn't loaded.
@@ -176,8 +173,8 @@ function ProvenanceBadge({ verified, label }) {
   return (
     <span className="text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0"
       style={{
-        background: verified ? 'rgba(52,211,153,0.12)' : 'rgba(148,163,184,0.12)',
-        color: verified ? '#34D399' : 'var(--text-muted)',
+        background: verified ? 'color-mix(in srgb, var(--accent-green) 12%, transparent)' : 'color-mix(in srgb, var(--text-muted) 12%, transparent)',
+        color: verified ? 'var(--accent-green)' : 'var(--text-muted)',
       }}>
       {label || (verified ? 'Verified' : 'Estimated')}
     </span>
@@ -292,6 +289,18 @@ function ProfitabilityPredictor({ artists, concerts }) {
   // primary; the ML model is optional/secondary and never overrides it).
   const revenueIsHeuristic = hasModel && modelPrediction.data?.model_type === 'heuristic'
 
+  // Verdict banner input -- NOT an ROI/profitability figure. The old verdict
+  // read pred.roi, which was computed as (revenue - 0.45*revenue) / (0.45*revenue)
+  // -- algebraically constant at 122.2% for any positive revenue, since "cost"
+  // was never anything but a fixed 45% of that same revenue number, so the
+  // verdict could never say anything but "Highly Profitable". There is no real
+  // cost or margin data anywhere in this system to build an honest ROI from, so
+  // the verdict is reframed around two signals that DO independently vary and
+  // are already computed for the Score Bars above: how much of the venue we
+  // expect to fill (Sell-Through) and how much real demand exists for this
+  // artist in this city (Demand Score).
+  const marketFitScore = hasModel ? Math.round(((pred.sellThrough || 0) + (pred.demandScore || 0)) / 2) : 0
+
   return (
     <div>
       {/* Selector */}
@@ -354,7 +363,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
               disabled={!selectedCity}
               className="w-full rounded-xl px-4 py-3 text-sm outline-none transition-all duration-200"
               style={{
-                background: selectedCity ? 'var(--bg-secondary)' : 'rgba(148,163,184,0.08)',
+                background: selectedCity ? 'var(--bg-secondary)' : 'color-mix(in srgb, var(--text-muted) 8%, transparent)',
                 border: '1px solid var(--border)',
                 color: 'var(--text-primary)', fontFamily: 'Satoshi'
               }}
@@ -372,7 +381,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
       {!pred && (
         <div className="glass-card p-16 text-center animate-fade-up">
           <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center"
-            style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)' }}>
+            style={{ background: 'color-mix(in srgb, var(--accent-indigo) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-indigo) 20%, transparent)' }}>
             <Zap size={28} style={{ color: 'var(--accent-indigo)' }} />
           </div>
           <h3 className="font-display font-semibold text-lg mb-2" style={{ color: 'var(--text-primary)' }}>
@@ -401,7 +410,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
               </p>
             </div>
             <div className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-xl"
-              style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)' }}>
+              style={{ background: 'color-mix(in srgb, var(--accent-indigo) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-indigo) 20%, transparent)' }}>
               <Zap size={13} style={{ color: 'var(--accent-indigo)' }} />
               <span className="text-xs font-semibold" style={{ color: 'var(--accent-indigo)' }}>
                 {revenueLoading ? 'Running Model' : hasModel ? (revenueIsHeuristic ? 'MAD Analytics · Heuristic Estimate' : 'MAD Analytics') : 'Analytics Unavailable'}
@@ -430,9 +439,9 @@ function ProfitabilityPredictor({ artists, concerts }) {
                 badge={<ProvenanceBadge verified={!pred.ticketPriceIsEstimated} />}
               />
               <StatBox
-                label={pred.modelSource ? 'Model Confidence' : 'Projected ROI'}
-                value={pred.modelSource ? `${pred.confidence}%` : `${pred.roi.toFixed(1)}%`}
-                color={pred.modelSource || pred.roi > 50 ? 'var(--accent-green)' : 'var(--accent-gold)'}
+                label="Model Confidence"
+                value={`${pred.confidence}%`}
+                color="var(--accent-green)"
                 delay={240}
               />
             </div>
@@ -445,7 +454,7 @@ function ProfitabilityPredictor({ artists, concerts }) {
           ) : (
             /* Unavailable — no fabricated revenue is shown */
             <div className="glass-card p-6 mb-6 animate-fade-up"
-              style={{ border: '1px solid rgba(245,158,11,0.25)', background: 'rgba(245,158,11,0.06)' }}>
+              style={{ border: '1px solid color-mix(in srgb, var(--accent-gold) 25%, transparent)', background: 'color-mix(in srgb, var(--accent-gold) 6%, transparent)' }}>
               <div className="flex items-center gap-2 mb-1">
                 <Zap size={15} style={{ color: 'var(--accent-gold)' }} />
                 <span className="text-sm font-bold" style={{ color: 'var(--accent-gold)' }}>
@@ -544,32 +553,34 @@ function ProfitabilityPredictor({ artists, concerts }) {
                 Performance Scores
               </h3>
               <div className="space-y-4">
-                <ScoreBar label="Popularity Score" value={pred.popularityScore} color="#818CF8" />
-                <ScoreBar label="City Demand Index" value={pred.demandScore} color="#FBBF24" />
-                <ScoreBar label="Sell-Through Rate" value={Math.round(pred.sellThrough)} color="#34D399" />
-                <ScoreBar label="Revenue Confidence" value={Math.round(pred.confidence ?? 0)} color="#F87171" />
+                <ScoreBar label="Popularity Score" value={pred.popularityScore} color="var(--accent-indigo)" />
+                <ScoreBar label="City Demand Index" value={pred.demandScore} color="var(--accent-gold)" />
+                <ScoreBar label="Sell-Through Rate" value={Math.round(pred.sellThrough)} color="var(--accent-green)" />
+                <ScoreBar label="Revenue Confidence" value={Math.round(pred.confidence ?? 0)} color="var(--accent-red)" />
               </div>
 
-              {/* Verdict */}
+              {/* Verdict -- driven by marketFitScore (Sell-Through + Demand,
+                  both real), not a fabricated ROI/profitability number. See
+                  marketFitScore's definition above for why. */}
               <div className="mt-5 p-3 rounded-xl"
                 style={{
-                  background: pred.roi > 60
-                    ? 'rgba(16,185,129,0.08)' : pred.roi > 30
-                      ? 'rgba(245,158,11,0.08)' : 'rgba(239,68,68,0.08)',
-                  border: `1px solid ${pred.roi > 60 ? 'rgba(16,185,129,0.2)' : pred.roi > 30 ? 'rgba(245,158,11,0.2)' : 'rgba(239,68,68,0.2)'}`
+                  background: marketFitScore > 60
+                    ? 'color-mix(in srgb, var(--accent-green) 8%, transparent)' : marketFitScore > 30
+                      ? 'color-mix(in srgb, var(--accent-gold) 8%, transparent)' : 'color-mix(in srgb, var(--accent-red) 8%, transparent)',
+                  border: `1px solid ${marketFitScore > 60 ? 'color-mix(in srgb, var(--accent-green) 20%, transparent)' : marketFitScore > 30 ? 'color-mix(in srgb, var(--accent-gold) 20%, transparent)' : 'color-mix(in srgb, var(--accent-red) 20%, transparent)'}`
                 }}>
                 <div className="flex items-center gap-2 mb-1">
-                  <Trophy size={14} style={{ color: pred.roi > 60 ? 'var(--accent-green)' : pred.roi > 30 ? 'var(--accent-gold)' : 'var(--accent-red)' }} />
-                  <span className="text-xs font-bold" style={{ color: pred.roi > 60 ? 'var(--accent-green)' : pred.roi > 30 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>
-                    {pred.roi > 60 ? 'Highly Profitable' : pred.roi > 30 ? 'Moderately Profitable' : 'High Risk'}
+                  <Trophy size={14} style={{ color: marketFitScore > 60 ? 'var(--accent-green)' : marketFitScore > 30 ? 'var(--accent-gold)' : 'var(--accent-red)' }} />
+                  <span className="text-xs font-bold" style={{ color: marketFitScore > 60 ? 'var(--accent-green)' : marketFitScore > 30 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>
+                    {marketFitScore > 60 ? 'Strong Market Fit' : marketFitScore > 30 ? 'Moderate Market Fit' : 'Soft Demand Signals'}
                   </span>
                 </div>
                 <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  {pred.roi > 60
-                    ? `Strong market fit. ${city.name} is an ideal venue for ${artist.name}.`
-                    : pred.roi > 30
-                      ? `Decent potential. Consider mid-size venues to reduce risk.`
-                      : `Lower demand signals. Consider a smaller venue or different timing.`}
+                  {marketFitScore > 60
+                    ? `High predicted sell-through and demand. ${city.name} looks like a strong fit for ${artist.name}.`
+                    : marketFitScore > 30
+                      ? `Decent potential. Consider a mid-size venue to keep sell-through healthy.`
+                      : `Lower demand signals. Consider a smaller venue or a different timing.`}
                 </p>
               </div>
             </div>
@@ -708,9 +719,9 @@ function ArtistComparison({ artists, concerts }) {
       {/* Artist selectors */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
         {/* Artist A */}
-        <div className="glass-card p-5 animate-fade-up" style={{ animationFillMode: 'both', opacity: 0, borderLeft: '3px solid #818CF8' }}>
+        <div className="glass-card p-5 animate-fade-up" style={{ animationFillMode: 'both', opacity: 0, borderLeft: '3px solid var(--accent-indigo)' }}>
           <label className="text-xs font-semibold uppercase tracking-widest block mb-3"
-            style={{ color: '#818CF8', fontSize: '10px' }}>
+            style={{ color: 'var(--accent-indigo)', fontSize: '10px' }}>
             Artist A
           </label>
           <select
@@ -736,9 +747,9 @@ function ArtistComparison({ artists, concerts }) {
         </div>
 
         {/* Artist B */}
-        <div className="glass-card p-5 animate-fade-up delay-1" style={{ animationFillMode: 'both', opacity: 0, borderLeft: '3px solid #FBBF24' }}>
+        <div className="glass-card p-5 animate-fade-up delay-1" style={{ animationFillMode: 'both', opacity: 0, borderLeft: '3px solid var(--accent-gold)' }}>
           <label className="text-xs font-semibold uppercase tracking-widest block mb-3"
-            style={{ color: '#FBBF24', fontSize: '10px' }}>
+            style={{ color: 'var(--accent-gold)', fontSize: '10px' }}>
             Artist B
           </label>
           <select
@@ -805,7 +816,7 @@ function ArtistComparison({ artists, concerts }) {
           </div>
           {(selectedCity !== 'All Cities' || selectedVenue !== 'All Venues') && (
             <span className="text-xs px-2.5 py-1 rounded-full font-semibold"
-              style={{ background: 'rgba(245,158,11,0.12)', color: 'var(--accent-gold)', border: '1px solid rgba(245,158,11,0.2)' }}>
+              style={{ background: 'color-mix(in srgb, var(--accent-gold) 12%, transparent)', color: 'var(--accent-gold)', border: '1px solid color-mix(in srgb, var(--accent-gold) 20%, transparent)' }}>
               {selectedCity !== 'All Cities' ? `City: ${selectedCity}` : 'All Cities'}{selectedVenue !== 'All Venues' ? ` · Venue: ${selectedVenue}` : ''}
             </span>
           )}
@@ -816,7 +827,7 @@ function ArtistComparison({ artists, concerts }) {
       {(!a || !b) && (
         <div className="glass-card p-16 text-center animate-fade-up">
           <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center"
-            style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
+            style={{ background: 'color-mix(in srgb, var(--accent-gold) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-gold) 20%, transparent)' }}>
             <BarChart3 size={28} style={{ color: 'var(--accent-gold)' }} />
           </div>
           <h3 className="font-display font-semibold text-lg mb-2" style={{ color: 'var(--text-primary)' }}>
@@ -832,7 +843,7 @@ function ArtistComparison({ artists, concerts }) {
       {a && b && selectedCity !== 'All Cities' && (concertsA.length === 0 || concertsB.length === 0) && (
         <div className="glass-card p-14 text-center animate-fade-up">
           <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center"
-            style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+            style={{ background: 'color-mix(in srgb, var(--accent-red) 8%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-red) 20%, transparent)' }}>
             <MapPin size={28} style={{ color: 'var(--accent-red)' }} />
           </div>
           <h3 className="font-display font-semibold text-lg mb-2" style={{ color: 'var(--text-primary)' }}>
@@ -847,7 +858,7 @@ function ArtistComparison({ artists, concerts }) {
           </p>
           <button onClick={() => setSelCity('All Cities')}
             className="mt-4 text-xs px-4 py-2 rounded-xl font-semibold transition-all duration-200"
-            style={{ background: 'rgba(99,102,241,0.1)', color: 'var(--accent-indigo)', border: '1px solid rgba(99,102,241,0.2)' }}>
+            style={{ background: 'color-mix(in srgb, var(--accent-indigo) 10%, transparent)', color: 'var(--accent-indigo)', border: '1px solid color-mix(in srgb, var(--accent-indigo) 20%, transparent)' }}>
             Clear city filter
           </button>
         </div>
@@ -863,14 +874,14 @@ function ArtistComparison({ artists, concerts }) {
               style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
               <div className="flex items-center gap-2">
                 <img src={a.photo} className="w-8 h-8 rounded-lg object-cover" alt={a.name} />
-                <span className="font-display font-bold text-sm" style={{ color: '#818CF8' }}>{a.name}</span>
+                <span className="font-display font-bold text-sm" style={{ color: 'var(--accent-indigo)' }}>{a.name}</span>
               </div>
               <div className="text-center">
                 <span className="text-xs font-semibold uppercase tracking-widest"
                   style={{ color: 'var(--text-muted)', fontSize: '10px' }}>VS</span>
               </div>
               <div className="flex items-center gap-2 justify-end">
-                <span className="font-display font-bold text-sm" style={{ color: '#FBBF24' }}>{b.name}</span>
+                <span className="font-display font-bold text-sm" style={{ color: 'var(--accent-gold)' }}>{b.name}</span>
                 <img src={b.photo} className="w-8 h-8 rounded-lg object-cover" alt={b.name} />
               </div>
             </div>
@@ -888,11 +899,11 @@ function ArtistComparison({ artists, concerts }) {
                   <div className="grid grid-cols-3">
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-sm"
-                        style={{ color: row.winner === 'a' ? '#818CF8' : 'var(--text-secondary)' }}>
+                        style={{ color: row.winner === 'a' ? 'var(--accent-indigo)' : 'var(--text-secondary)' }}>
                         {row.a}
                       </span>
                       {row.winner === 'a' && (
-                        <Trophy size={12} style={{ color: '#818CF8' }} />
+                        <Trophy size={12} style={{ color: 'var(--accent-indigo)' }} />
                       )}
                     </div>
                     <div className="text-center">
@@ -903,18 +914,18 @@ function ArtistComparison({ artists, concerts }) {
                     </div>
                     <div className="flex items-center gap-2 justify-end">
                       {row.winner === 'b' && (
-                        <Trophy size={12} style={{ color: '#FBBF24' }} />
+                        <Trophy size={12} style={{ color: 'var(--accent-gold)' }} />
                       )}
                       <span className="font-semibold text-sm"
-                        style={{ color: row.winner === 'b' ? '#FBBF24' : 'var(--text-secondary)' }}>
+                        style={{ color: row.winner === 'b' ? 'var(--accent-gold)' : 'var(--text-secondary)' }}>
                         {row.b}
                       </span>
                     </div>
                   </div>
                   {!row.noContest && (
                     <div className="flex h-1.5 rounded-full overflow-hidden mt-2" style={{ background: 'var(--border)' }}>
-                      <div style={{ width: `${aShare}%`, background: '#818CF8' }} />
-                      <div style={{ width: `${100 - aShare}%`, background: '#FBBF24' }} />
+                      <div style={{ width: `${aShare}%`, background: 'var(--accent-indigo)' }} />
+                      <div style={{ width: `${100 - aShare}%`, background: 'var(--accent-gold)' }} />
                     </div>
                   )}
                 </div>
@@ -927,9 +938,9 @@ function ArtistComparison({ artists, concerts }) {
             <div className="p-4"
               style={{
                 background: overallWinner === 'a'
-                  ? 'linear-gradient(135deg, rgba(129,140,248,0.1), transparent)'
+                  ? 'linear-gradient(135deg, color-mix(in srgb, var(--accent-indigo) 10%, transparent), transparent)'
                   : overallWinner === 'b'
-                    ? 'linear-gradient(135deg, rgba(251,191,36,0.1), transparent)'
+                    ? 'linear-gradient(135deg, color-mix(in srgb, var(--accent-gold) 10%, transparent), transparent)'
                     : 'var(--bg-secondary)'
               }}>
               <div className="flex items-center gap-2">
@@ -947,7 +958,7 @@ function ArtistComparison({ artists, concerts }) {
                 ) : (
                   <>
                     <span className="font-bold text-sm"
-                      style={{ color: overallWinner === 'a' ? '#818CF8' : '#FBBF24' }}>
+                      style={{ color: overallWinner === 'a' ? 'var(--accent-indigo)' : 'var(--accent-gold)' }}>
                       {overallWinner === 'a' ? a.name : b.name}
                     </span>
                     <span className="text-xs ml-1" style={{ color: 'var(--text-muted)' }}>
@@ -976,12 +987,12 @@ function ArtistComparison({ artists, concerts }) {
             <div className="flex items-center justify-between mb-4 pb-4" style={{ borderBottom: '1px solid var(--border)' }}>
               <div>
                 <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{a.name}</p>
-                <p className="font-display font-bold text-lg" style={{ color: '#818CF8' }}>{formatNumber(statsA.totalFollowers)}</p>
+                <p className="font-display font-bold text-lg" style={{ color: 'var(--accent-indigo)' }}>{formatNumber(statsA.totalFollowers)}</p>
                 <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Total Followers</p>
               </div>
               <div className="text-right">
                 <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{b.name}</p>
-                <p className="font-display font-bold text-lg" style={{ color: '#FBBF24' }}>{formatNumber(statsB.totalFollowers)}</p>
+                <p className="font-display font-bold text-lg" style={{ color: 'var(--accent-gold)' }}>{formatNumber(statsB.totalFollowers)}</p>
                 <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Total Followers</p>
               </div>
             </div>
@@ -989,8 +1000,8 @@ function ArtistComparison({ artists, concerts }) {
               data={platformReachData}
               leftLabel={a.name}
               rightLabel={b.name}
-              leftColor="#818CF8"
-              rightColor="#FBBF24"
+              leftColor="var(--accent-indigo)"
+              rightColor="var(--accent-gold)"
               valueSuffix="%"
               height={200}
             />
@@ -1086,8 +1097,8 @@ function CityFeasibility({ artists }) {
       {!selectedArtist && (
         <div className="glass-card p-16 text-center animate-fade-up">
           <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center"
-            style={{ background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.2)' }}>
-            <Compass size={28} style={{ color: '#34D399' }} />
+            style={{ background: 'color-mix(in srgb, var(--accent-green) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-green) 20%, transparent)' }}>
+            <Compass size={28} style={{ color: 'var(--accent-green)' }} />
           </div>
           <h3 className="font-display font-semibold text-lg mb-2" style={{ color: 'var(--text-primary)' }}>
             Select an Artist
@@ -1116,7 +1127,7 @@ function CityFeasibility({ artists }) {
       {/* Fully unavailable */}
       {allFailed && (
         <div className="glass-card p-6 mb-6 animate-fade-up"
-          style={{ border: '1px solid rgba(245,158,11,0.25)', background: 'rgba(245,158,11,0.06)' }}>
+          style={{ border: '1px solid color-mix(in srgb, var(--accent-gold) 25%, transparent)', background: 'color-mix(in srgb, var(--accent-gold) 6%, transparent)' }}>
           <div className="flex items-center gap-2 mb-1">
             <Zap size={15} style={{ color: 'var(--accent-gold)' }} />
             <span className="text-sm font-bold" style={{ color: 'var(--accent-gold)' }}>
@@ -1162,7 +1173,7 @@ function CityFeasibility({ artists }) {
               data={chartData}
               xKey="name"
               layout="horizontal"
-              bars={[{ key: 'value', label: 'Feasibility Score', color: '#34D399' }]}
+              bars={[{ key: 'value', label: 'Feasibility Score' }]}
               height={260}
             />
           </ChartContainer>
@@ -1175,7 +1186,7 @@ function CityFeasibility({ artists }) {
                 onClick={() => setDetailCity(r.city)}
                 className="text-xs px-3 py-1.5 rounded-full font-semibold transition-all duration-200"
                 style={r.city === detailCity ? {
-                  background: 'rgba(52,211,153,0.15)', color: '#34D399', border: '1px solid rgba(52,211,153,0.35)'
+                  background: 'color-mix(in srgb, var(--accent-green) 15%, transparent)', color: 'var(--accent-green)', border: '1px solid color-mix(in srgb, var(--accent-green) 35%, transparent)'
                 } : {
                   background: 'var(--bg-secondary)', color: 'var(--text-muted)', border: '1px solid var(--border)'
                 }}
@@ -1198,18 +1209,18 @@ function CityFeasibility({ artists }) {
                   </p>
                 </div>
                 <div className="px-3 py-1.5 rounded-xl text-right"
-                  style={{ background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.2)' }}>
+                  style={{ background: 'color-mix(in srgb, var(--accent-green) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-green) 20%, transparent)' }}>
                   <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Closeness Score</p>
-                  <p className="font-display font-bold" style={{ color: '#34D399' }}>{(active.score * 100).toFixed(1)}%</p>
+                  <p className="font-display font-bold" style={{ color: 'var(--accent-green)' }}>{(active.score * 100).toFixed(1)}%</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
                 <StatBox label="Artist Power" value={active.components.artist_power.toFixed(1)} sub="Popularity · constant here" color="var(--accent-indigo)" />
                 <StatBox label="Engagement" value={`${(active.components.engagement_score * 100).toFixed(2)}%`} sub="Fan-quality ratio · constant here" color="var(--accent-indigo)" />
-                <StatBox label="City Affinity" value={active.components.city_affinity.toFixed(1)} sub="NCCS market activity" color="#818CF8" />
-                <StatBox label="Touring Precedent" value={active.components.touring_precedent_visits} sub={active.components.city_audience_monthly_listeners_pct != null ? `+digital audience boost (${active.components.city_audience_monthly_listeners_pct.toFixed(1)}% monthly listeners)` : 'Real past visits'} color="#FBBF24" />
-                <StatBox label="Venue Fit" value={active.components.venue_fit_index.toFixed(1)} sub="Avg. known venue capacity index" color="#F87171" />
+                <StatBox label="City Affinity" value={active.components.city_affinity.toFixed(1)} sub="NCCS market activity" color="var(--accent-indigo)" />
+                <StatBox label="Touring Precedent" value={active.components.touring_precedent_visits} sub={active.components.city_audience_monthly_listeners_pct != null ? `+digital audience boost (${active.components.city_audience_monthly_listeners_pct.toFixed(1)}% monthly listeners)` : 'Real past visits'} color="var(--accent-gold)" />
+                <StatBox label="Venue Fit" value={active.components.venue_fit_index.toFixed(1)} sub="Avg. known venue capacity index" color="var(--accent-red)" />
               </div>
             </div>
           )}
@@ -1255,7 +1266,7 @@ function Analysis() {
     <div className="relative">
       {/* Ambient glows */}
       <div className="fixed top-32 right-32 w-80 h-80 rounded-full pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(245,158,11,0.06), transparent 70%)', filter: 'blur(40px)' }} />
+        style={{ background: 'radial-gradient(circle, color-mix(in srgb, var(--accent-gold) 6%, transparent), transparent 70%)', filter: 'blur(40px)' }} />
 
       <PageHeader
         title="Analysis"
@@ -1271,9 +1282,9 @@ function Analysis() {
             onClick={() => setTab(tab)}
             className="px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200"
             style={activeTab === tab ? {
-              background: 'linear-gradient(135deg, #6366F1, #818CF8)',
+              background: 'linear-gradient(135deg, var(--accent-indigo), var(--accent-indigo))',
               color: '#fff',
-              boxShadow: '0 4px 16px rgba(99,102,241,0.3)'
+              boxShadow: '0 4px 16px color-mix(in srgb, var(--accent-indigo) 30%, transparent)'
             } : {
               color: 'var(--text-muted)',
               background: 'transparent'

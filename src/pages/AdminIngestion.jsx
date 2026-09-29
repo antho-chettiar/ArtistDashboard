@@ -21,10 +21,10 @@ const SCRAPE_SOURCES = [
 ]
 
 const STATUS_META = {
-  SUCCESS: { icon: CheckCircle, color: 'var(--accent-green)', bg: 'rgba(16,185,129,0.12)',  label: 'Success' },
-  FAILED:  { icon: XCircle,     color: 'var(--accent-red)',   bg: 'rgba(239,68,68,0.12)',   label: 'Failed'  },
-  RUNNING: { icon: RefreshCw,   color: 'var(--accent-indigo)',bg: 'rgba(99,102,241,0.12)', label: 'Running' },
-  PENDING: { icon: Clock,       color: 'var(--accent-gold)',  bg: 'rgba(245,158,11,0.12)', label: 'Pending' },
+  SUCCESS: { icon: CheckCircle, color: 'var(--accent-green)', bg: 'color-mix(in srgb, var(--accent-green) 12%, transparent)',  label: 'Success' },
+  FAILED:  { icon: XCircle,     color: 'var(--accent-red)',   bg: 'color-mix(in srgb, var(--accent-red) 12%, transparent)',   label: 'Failed'  },
+  RUNNING: { icon: RefreshCw,   color: 'var(--accent-indigo)',bg: 'color-mix(in srgb, var(--accent-indigo) 12%, transparent)', label: 'Running' },
+  PENDING: { icon: Clock,       color: 'var(--accent-gold)',  bg: 'color-mix(in srgb, var(--accent-gold) 12%, transparent)', label: 'Pending' },
 }
 
 function AdminIngestion() {
@@ -35,17 +35,39 @@ function AdminIngestion() {
   const [uploadDone, setUploadDone] = useState(false)
   const fileRef = useRef()
 
-  // Fetch jobs
+  // Fetch jobs. limit=100 (backend default is 20) so a platform's last real
+  // sync job doesn't get pushed out of this list by more-recent Excel
+  // imports/enrichment runs -- the per-platform "Last sync" times below read
+  // straight out of this same list, so it has to actually contain them.
   const { data: jobsData } = useQuery({
     queryKey: ['ingestionJobs'],
     queryFn: async () => {
-      const response = await client.get('/ingestion/jobs')
+      const response = await client.get('/ingestion/jobs?limit=100')
       return response.data.data.jobs
     },
     refetchInterval: 5000, // Poll every 5s while on this page
   })
 
   const jobs = jobsData || []
+
+  // Real per-platform last-sync time, read from the same ingestion_jobs
+  // table the Job Log below renders -- replaces a hardcoded "Today 04:00"
+  // that showed for every platform regardless of whether it had ever
+  // actually synced. A PLATFORM_SYNC job's `fileName` column holds the
+  // platform key (see backend ingestion.controller.ts's syncPlatform).
+  const lastSyncByPlatform = jobs
+    .filter(j => j.jobType === 'PLATFORM_SYNC')
+    .reduce((acc, j) => {
+      const existing = acc[j.fileName]
+      if (!existing || new Date(j.startedAt) > new Date(existing.startedAt)) acc[j.fileName] = j
+      return acc
+    }, {})
+
+  // Only Spotify sync is actually wired up server-side today (see
+  // backend ingestion.controller.ts's syncPlatform -- every other platform
+  // returns a 400 "Unsupported platform"). Showing a live "Sync Now" button
+  // for the other four would silently fail if clicked in front of anyone.
+  const SUPPORTED_SYNC_PLATFORMS = ['spotify']
 
   const { data: artistOptions = [] } = useQuery({
     queryKey: ['artists', 'scrape-options'],
@@ -153,7 +175,7 @@ function AdminIngestion() {
             className="rounded-2xl p-10 text-center cursor-pointer transition-all duration-200"
             style={{
               border: `2px dashed ${dragOver ? 'var(--accent-indigo)' : uploadedFile ? 'var(--accent-green)' : 'var(--border-strong)'}`,
-              background: dragOver ? 'rgba(99,102,241,0.05)' : uploadedFile ? 'rgba(16,185,129,0.05)' : 'var(--bg-secondary)'
+              background: dragOver ? 'color-mix(in srgb, var(--accent-indigo) 5%, transparent)' : uploadedFile ? 'color-mix(in srgb, var(--accent-green) 5%, transparent)' : 'var(--bg-secondary)'
             }}>
             <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileDrop} />
             {uploadDone ? (
@@ -179,13 +201,13 @@ function AdminIngestion() {
           {uploadedFile && !uploadDone && (
             <button onClick={handleUpload} disabled={uploading}
               className="w-full mt-3 py-3 rounded-xl text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-60"
-              style={{ background: 'linear-gradient(135deg, #6366F1, #818CF8)', color: '#fff', boxShadow: '0 4px 16px rgba(99,102,241,0.3)' }}>
+              style={{ background: 'linear-gradient(135deg, var(--accent-indigo), var(--accent-indigo))', color: '#fff', boxShadow: '0 4px 16px color-mix(in srgb, var(--accent-indigo) 30%, transparent)' }}>
               {uploading ? <><RefreshCw size={14} className="animate-spin" /> Processing...</> : <><Upload size={14} /> Upload & Import</>}
             </button>
           )}
 
           <div className="mt-4 p-3 rounded-xl flex items-start gap-2"
-            style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.15)' }}>
+            style={{ background: 'color-mix(in srgb, var(--accent-indigo) 8%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-indigo) 15%, transparent)' }}>
             <AlertCircle size={13} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--accent-indigo)' }} />
             <p className="text-xs" style={{ color: 'var(--accent-indigo)' }}>
               Use the provided template. Sheets: <strong>Artist_Metrics</strong>, <strong>Concerts</strong>
@@ -219,7 +241,7 @@ function AdminIngestion() {
 
           {enrichMutation.data?.data && (
             <div className="p-3 rounded-xl flex items-start gap-2"
-              style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.15)' }}>
+              style={{ background: 'color-mix(in srgb, var(--accent-green) 8%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-green) 15%, transparent)' }}>
               <CheckCircle size={13} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--accent-green)' }} />
               <p className="text-xs" style={{ color: 'var(--accent-green)' }}>
                 Enriched {enrichMutation.data.data.enriched} / {enrichMutation.data.data.total} artists
@@ -234,7 +256,12 @@ function AdminIngestion() {
           <h3 className="font-display font-semibold text-sm mb-1" style={{ color: 'var(--text-primary)' }}>Platform API Sync</h3>
           <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>Manually trigger a data sync for any connected platform</p>
           <div className="space-y-3">
-            {PLATFORMS.map(platform => (
+            {PLATFORMS.map(platform => {
+              const isSupported = SUPPORTED_SYNC_PLATFORMS.includes(platform.key)
+              const lastJob = lastSyncByPlatform[platform.key]
+              const isThisPending = syncMutation.isPending && syncMutation.variables === platform.key
+              const thisFailed = syncMutation.isError && syncMutation.variables === platform.key
+              return (
               <div key={platform.key} className="flex items-center justify-between p-3 rounded-xl transition-all duration-200"
                 style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
                 <div className="flex items-center gap-3">
@@ -244,19 +271,31 @@ function AdminIngestion() {
                   </div>
                   <div>
                     <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>{platform.label}</p>
-                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Last sync: Today 04:00</p>
+                    <p className="text-xs" style={{ color: thisFailed ? 'var(--accent-red)' : 'var(--text-muted)' }}>
+                      {thisFailed
+                        ? 'Sync failed — see error below'
+                        : !isSupported
+                          ? 'Not connected yet'
+                          : lastJob
+                            ? `Last sync: ${new Date(lastJob.completedAt || lastJob.startedAt).toLocaleString()}${lastJob.status === 'FAILED' ? ' (failed)' : ''}`
+                            : 'Never synced'}
+                    </p>
                   </div>
                 </div>
-                <button onClick={() => handleSync(platform)} disabled={syncMutation.isPending}
+                <button
+                  onClick={() => handleSync(platform)}
+                  disabled={!isSupported || syncMutation.isPending}
+                  title={!isSupported ? 'This platform sync is not wired up yet' : undefined}
                   className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl transition-all duration-200 disabled:opacity-60"
                   style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent-indigo)'; e.currentTarget.style.color = 'var(--accent-indigo)' }}
+                  onMouseEnter={e => { if (isSupported) { e.currentTarget.style.borderColor = 'var(--accent-indigo)'; e.currentTarget.style.color = 'var(--accent-indigo)' } }}
                   onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)' }}>
-                  <RefreshCw size={12} className={syncMutation.isPending ? 'animate-spin' : ''} />
-                  {syncMutation.isPending ? 'Syncing...' : 'Sync Now'}
+                  <RefreshCw size={12} className={isThisPending ? 'animate-spin' : ''} />
+                  {!isSupported ? 'Not available' : isThisPending ? 'Syncing...' : 'Sync Now'}
                 </button>
               </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       </div>
@@ -309,7 +348,7 @@ function AdminIngestion() {
               country: scrapeCountry.trim(),
             })} disabled={scrapeMutation.isPending || scrapeSources.length === 0 || selectedArtistIds.length === 0}
               className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-60"
-              style={{ background: 'linear-gradient(135deg, #6366F1, #818CF8)', color: '#fff' }}>
+              style={{ background: 'linear-gradient(135deg, var(--accent-indigo), var(--accent-indigo))', color: '#fff' }}>
               {scrapeMutation.isPending ? <RefreshCw size={14} className="animate-spin" /> : <Upload size={14} />}
               {scrapeMutation.isPending ? 'Scraping...' : 'Start Scrape'}
             </button>
@@ -320,8 +359,8 @@ function AdminIngestion() {
           {SCRAPE_SOURCES.map(src => (
             <label key={src.key} className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-xl cursor-pointer select-none transition-all duration-200"
               style={{
-                background: scrapeSources.includes(src.key) ? 'rgba(99,102,241,0.12)' : 'var(--bg-secondary)',
-                border: `1px solid ${scrapeSources.includes(src.key) ? 'rgba(99,102,241,0.3)' : 'var(--border)'}`,
+                background: scrapeSources.includes(src.key) ? 'color-mix(in srgb, var(--accent-indigo) 12%, transparent)' : 'var(--bg-secondary)',
+                border: `1px solid ${scrapeSources.includes(src.key) ? 'color-mix(in srgb, var(--accent-indigo) 30%, transparent)' : 'var(--border)'}`,
                 color: scrapeSources.includes(src.key) ? 'var(--accent-indigo)' : 'var(--text-muted)',
               }}>
               <input type="checkbox" checked={scrapeSources.includes(src.key)}
@@ -334,7 +373,7 @@ function AdminIngestion() {
 
         {scrapeMutation.data?.data?.data && (
           <div className="mt-3 p-3 rounded-xl flex items-start gap-2"
-            style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.15)' }}>
+            style={{ background: 'color-mix(in srgb, var(--accent-indigo) 8%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-indigo) 15%, transparent)' }}>
             <CheckCircle size={13} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--accent-indigo)' }} />
             <div className="text-xs" style={{ color: 'var(--accent-indigo)' }}>
               Scraped <strong>{scrapeMutation.data.data.data.scrapedCount}</strong> concerts,
