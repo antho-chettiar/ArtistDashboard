@@ -14,14 +14,6 @@ import { useDashboardData } from '../hooks/useDashboardData'
 import { formatNumber, formatDate } from '../utils/formatters'
 import { classifyVenue } from '../utils/venueClassifier'
 
-const TIME_FILTERS = [
-  { label: '6M',  months: 6  },
-  { label: '12M', months: 12 },
-  { label: '18M', months: 18 },
-  { label: '24M', months: 24 },
-  { label: '36M', months: 36 },
-]
-
 const TREND_LINES = [
   { key: 'instagram', label: 'Instagram', color: '#E1306C' },
   { key: 'youtube',   label: 'YouTube',   color: '#FF0000' },
@@ -84,7 +76,6 @@ const daysUntil = (dateStr) => {
 
 function Dashboard() {
   const { artistType } = useFilterStore()
-  const [timeFilter, setTimeFilter] = useState(12)
   const [trendDays, setTrendDays] = useState(30)
 
   const { data, isLoading, error } = useDashboardData(trendDays)
@@ -198,19 +189,34 @@ function Dashboard() {
       const { category } = classifyVenue(c.venue)
       counts[category] = (counts[category] || 0) + 1
     })
+    // Fixed priority order, not sorted by count (2026-09-29): the venues
+    // that actually matter for booking a concert -- Stadium/Arena and
+    // Auditorium/Theatre -- always lead the chart, regardless of which
+    // category happens to have the most rows this week. The rest follow in
+    // the classifier's own declared order (venueClassifier.js), "Other"
+    // last since it's a non-match, not a real category.
+    const order = [
+      'Stadium / Arena', 'Auditorium / Theatre / Hall', 'Educational Institution',
+      'Outdoor Grounds / Park / Lawn', 'Mall / Corporate / Hotel', 'Other',
+    ]
     return Object.entries(counts)
       .map(([category, count]) => ({
         category: VENUE_CATEGORY_SHORT_LABEL[category] || category,
         fullCategory: category,
         count,
       }))
-      .sort((a, b) => b.count - a.count)
+      .sort((a, b) => order.indexOf(a.fullCategory) - order.indexOf(b.fullCategory))
   }, [filteredConcerts])
 
+  // The headline KPI ("X% of identified venues are a Y") is a genuinely
+  // different question from the chart's display order above -- it means
+  // "whichever category is actually the most common," so it keeps its own
+  // by-count ranking rather than inheriting the fixed display order.
   const topVenueCategory = useMemo(() => {
     if (!venueCategoryData.length) return null
     const total = venueCategoryData.reduce((sum, v) => sum + v.count, 0)
-    const { fullCategory, count } = venueCategoryData[0]
+    const mostCommon = [...venueCategoryData].sort((a, b) => b.count - a.count)[0]
+    const { fullCategory, count } = mostCommon
     return { category: fullCategory, count, total, pct: Math.round((count / total) * 100) }
   }, [venueCategoryData])
 
@@ -403,37 +409,25 @@ function Dashboard() {
         <div className="glass-card p-5 animate-fade-up"
           style={{ animationDelay: '150ms', animationFillMode: 'both', opacity: 0 }}>
 
-          {/* Header + Time Filter */}
-          <div className="flex items-start justify-between mb-4">
-            <div>
-              <h3 className="font-display font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
-                🏆 Top {marketLabel} Artists by Digital Reach
-              </h3>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                {/* 2026-09 dashboard-authenticity redesign: Popularity is
-                    followers/streams/search-trend reach, not live commercial
-                    draw -- see the Feasibility signal below for that. */}
-                Ranked by Popularity (digital/social reach, not live draw)
-              </p>
-            </div>
-            {/* Time filter pills */}
-            <div className="flex gap-1 p-1 rounded-xl"
-              style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
-              {TIME_FILTERS.map(tf => (
-                <button key={tf.months}
-                  onClick={() => setTimeFilter(tf.months)}
-                  className="text-xs px-2 py-1 rounded-lg font-semibold transition-all duration-200"
-                  style={timeFilter === tf.months ? {
-                    background: 'linear-gradient(135deg, #6366F1, #818CF8)',
-                    color: '#fff',
-                  } : {
-                    color: 'var(--text-muted)',
-                    background: 'transparent'
-                  }}>
-                  {tf.label}
-                </button>
-              ))}
-            </div>
+          {/* Header -- the 6M/12M/18M/24M/36M time filter that used to live
+              here was removed (2026-09-29): it never actually changed the
+              ranking (no time-scoped popularity endpoint ever existed, see
+              git history), and it can't be built honestly either --
+              Popularity is a current-snapshot score by design (the canonical
+              engine keeps only the latest value per artist, not a dated
+              history; the old per-snapshot system was deliberately retired --
+              see ScoreBreakdown.jsx), so there is no real historical data to
+              filter by. Same call as Map View: remove rather than fake-fix. */}
+          <div className="mb-4">
+            <h3 className="font-display font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+              🏆 Top {marketLabel} Artists by Digital Reach
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              {/* 2026-09 dashboard-authenticity redesign: Popularity is
+                  followers/streams/search-trend reach, not live commercial
+                  draw -- see the Feasibility signal below for that. */}
+              Ranked by Popularity (digital/social reach, not live draw)
+            </p>
           </div>
 
           <div className="flex justify-end mb-3">
@@ -548,7 +542,7 @@ function Dashboard() {
             </div>
           )}
           <BarChart data={venueCategoryData} xKey="category" layout="vertical"
-            bars={[{ key: 'count', label: 'Concerts' }]} multiColor={true} height={220} />
+            bars={[{ key: 'count', label: 'Concerts', color: 'var(--accent-indigo)' }]} height={220} />
         </ChartContainer>
       </div>
 

@@ -1,7 +1,7 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, MapPin, Music, TrendingUp, DollarSign, Users, Ticket, Youtube, Repeat } from 'lucide-react'
+import { ArrowLeft, MapPin, Music, TrendingUp, Users, Youtube, Instagram, Facebook, Search, Repeat } from 'lucide-react'
 import PageHeader from '../components/ui/PageHeader'
 import RoGBadge from '../components/ui/RoGBadge'
 import ChartContainer from '../components/charts/ChartContainer'
@@ -9,8 +9,8 @@ import LineChart from '../components/charts/LineChart'
 import EmptyState from '../components/ui/EmptyState'
 import client from '../api/client'
 import { formatNumber, formatCurrency, formatDate, formatPercent } from '../utils/formatters'
-import { sumRevenueINR, sumTickets } from '../utils/concertMetrics'
 import { useEngagement, useRepeatVisitRate, useArtistInsights } from '../hooks/usePredictions'
+import { useArtistScore } from '../hooks/useViberate'
 
 // Same icon set as Dashboard.jsx's Touring Spotlight -- this page is the
 // other surface of the same engine (mad_analytics/touring_history/scorer.py
@@ -91,6 +91,10 @@ function ArtistProfile() {
   const engagement = useEngagement(id, !!id)
   const repeatVisit = useRepeatVisitRate(id, !!id)
   const artistInsights = useArtistInsights(id, !!id)
+  // Canonical Popularity breakdown (stored, kept fresh by the scheduler/Sync
+  // Now) -- read here only for its real Google Trends component, see the KPI
+  // strip below. Same source Dashboard/Analysis already use.
+  const artistScore = useArtistScore(id)
 
   const isLoading = artistLoading || concertsLoading
   const error = artistError
@@ -204,11 +208,6 @@ function ArtistProfile() {
   const totalFollowers = Object.entries(followers)
     .filter(([platform]) => PLATFORM_META[platform])
     .reduce((sum, [, count]) => sum + count, 0)
-  // Shared with Concerts.jsx / MapView.jsx -- null (not 0) when this artist's
-  // concerts have no real revenue/ticket data, so the KPI below can render an
-  // honest "—" instead of a fabricated "₹0".
-  const totalRevenue = sumRevenueINR(concerts)
-  const totalTickets = sumTickets(concerts)
 
   // Transform concert data to match UI format
   const transformedConcerts = concerts.map(c => ({
@@ -325,13 +324,21 @@ function ArtistProfile() {
               </div>
             </div>
 
-            {/* KPI Strip */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {/* KPI Strip -- real per-platform reach + real search interest.
+                Replaces Total Revenue/Tickets Sold (2026-09-29): this app has
+                no real recorded revenue/ticket data for almost any concert,
+                so those two always read "₹0"/"0" -- these five are real and
+                well-covered for every artist. Google Trends is the same
+                self-relative-to-own-history score the Popularity formula
+                uses (see mad_analytics/popularity/calculator.py) -- honestly
+                "—" (never a fabricated 0) when pytrends has no reading yet. */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               {[
-                { label: 'Spotify Monthly Listeners', value: formatNumber(spotifyMonthlyListeners), icon: Users, color: 'var(--accent-indigo)' },
-                { label: 'Top Platform', value: Object.entries(followers).sort((a, b) => b[1] - a[1])[0][0] || 'N/A', icon: TrendingUp, color: 'var(--accent-gold)' },
-                { label: 'Total Revenue', value: formatCurrency(totalRevenue), icon: DollarSign, color: 'var(--accent-green)' },
-                { label: 'Tickets Sold', value: formatNumber(totalTickets), icon: Ticket, color: 'var(--accent-red)' },
+                { label: 'Spotify Monthly Listeners', value: formatNumber(spotifyMonthlyListeners), icon: Users, color: PLATFORM_META.spotify.color },
+                { label: 'Instagram Followers', value: formatNumber(followers.instagram), icon: Instagram, color: PLATFORM_META.instagram.color },
+                { label: 'YouTube Subscribers', value: formatNumber(followers.youtube), icon: Youtube, color: PLATFORM_META.youtube.color },
+                { label: 'Facebook Followers', value: formatNumber(followers.facebook), icon: Facebook, color: PLATFORM_META.facebook.color },
+                { label: 'Google Trends Score', value: artistScore.data?.latest?.trendsScore != null ? artistScore.data.latest.trendsScore.toFixed(0) : '—', icon: Search, color: 'var(--accent-gold)' },
               ].map((stat, i) => (
                 <div key={i} className="rounded-xl p-3"
                   style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
