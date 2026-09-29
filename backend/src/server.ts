@@ -13,7 +13,7 @@ import compression from 'compression';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
-import { errorHandler } from './middleware/errorHandler';
+import { errorHandler, ApiError } from './middleware/errorHandler';
 import authRoutes from './routes/auth.routes';
 import artistRoutes from './routes/artist.routes';
 import concertRoutes from './routes/concert.routes';
@@ -37,20 +37,45 @@ app.set('trust proxy', 1);
 app.use(helmet());
 
 // CORS
+// The real production frontend (verified 2026-09-29 by logging in and
+// exercising it live) is hardcoded here as a safety net, not just read from
+// CORS_ORIGIN -- this repo's own backend/.env has CORS_ORIGIN set to
+// "artist-metrics.vercel.app" with no scheme, which could never match a real
+// browser Origin header (always sent as "https://artist-metrics.vercel.app")
+// anyway. A misconfigured or missing env var on any deployment must never
+// either lock out the real frontend or (as below) fall back to allowing
+// every origin.
+const PRODUCTION_FRONTEND_ORIGIN = 'https://artist-metrics.vercel.app';
+const configuredOrigin = process.env.CORS_ORIGIN?.trim();
+const allowedOrigins = [
+  PRODUCTION_FRONTEND_ORIGIN,
+  // Also live and serving the same build as of 2026-09-29 (likely a second
+  // domain on the same Vercel project) -- kept allowed so it isn't broken,
+  // but PRODUCTION_FRONTEND_ORIGIN above is the one to treat as canonical.
+  'https://artist-metrics-dasboard.vercel.app',
+  ...(configuredOrigin && /^https?:\/\//.test(configuredOrigin) ? [configuredOrigin] : []),
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'https://artist-dashboard-three.vercel.app', // old parallel stack frontend; kept, not this fix's concern
+];
+
 app.use(cors({
   origin: function(origin, callback) {
-    const allowedOrigins = [
-      process.env.CORS_ORIGIN || 'http://localhost:5173',
-      'http://localhost:5173',
-      'http://localhost:5174',
-      'https://artist-dashboard-three.vercel.app',
-    ];
-    // Allow requests with no origin (mobile apps, curl, etc.)
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(null, true); // Allow all origins in development
-    }
+    // Requests with no Origin header (server-to-server calls, curl, mobile
+    // apps) aren't subject to the browser's CORS model in the first place --
+    // nothing here to check them against, so let them through.
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    // Previously, this branch ALSO called callback(null, true) -- silently
+    // allowing every origin regardless of the allowlist above, combined with
+    // credentials: true below. Any website could make authenticated requests
+    // against this API using a leaked or stolen token. Reject anything not
+    // explicitly listed, in every environment (the explicit localhost
+    // entries above already cover normal local development).
+    const corsError: ApiError = new Error(`CORS: origin "${origin}" is not allowed`);
+    corsError.statusCode = 403;
+    corsError.code = 'CORS_NOT_ALLOWED';
+    callback(corsError);
   },
   credentials: true,
 }));
