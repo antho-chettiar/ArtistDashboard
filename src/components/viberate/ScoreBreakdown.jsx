@@ -1,13 +1,24 @@
-import { Gauge, Search } from 'lucide-react'
+import { Gauge, Search, Ticket } from 'lucide-react'
 import EmptyState from '../ui/EmptyState'
 import { useArtistScore } from '../../hooks/useViberate'
 
 /**
- * ScoreBreakdown — canonical Popularity score card (mad_analytics, Blueprint v2.0).
+ * ScoreBreakdown — canonical Popularity score card (mad_analytics, Formula
+ * Blueprint v2.3, 2026-09-29).
  *
- * Popularity = BaseEntropy×0.80 + GoogleTrends×0.20, weights renormalized
- * over whichever components are available for this artist (see
- * mad_analytics/popularity/calculator.py's WEIGHT_BASE/WEIGHT_GOOGLE_TRENDS).
+ * Popularity = Reach×0.40 + GoogleTrends×0.20 + RevealedDemand×0.40, weights
+ * renormalized over whichever components are available for this artist (see
+ * mad_analytics/popularity/calculator.py's module docstring for the full
+ * formula, the incident that produced it, and its methodology).
+ *
+ * Replaces the earlier Base×0.80 + GoogleTrends×0.20 formula, whose
+ * cohort-relative normalization crushed every "big enough" artist toward the
+ * same ~90-100 band and produced a real, publicly indefensible ranking (an
+ * artist with a much smaller real footprint outranked several artists any
+ * follower of the genre would know are bigger) -- see calculator.py's
+ * module docstring for the full incident and the empirical methodology
+ * (CRITIC method, PCA, bootstrap CI) behind the new platform weights and the
+ * new Revealed Demand component below.
  *
  * This card previously showed the ArtistPopularityV2 (Viberate) breakdown
  * (Reach / Engagement / Trends); that system was retired in favor of a single
@@ -76,8 +87,9 @@ function ScoreBreakdown({ artistId }) {
 
   const snap = data.latest
   const finalScore = Number(snap.finalScore)
-  const hasBase = snap.baseScore != null
+  const hasReach = snap.reachScore != null
   const hasTrends = snap.trendsScore != null
+  const hasRevealedDemand = snap.revealedDemandScore != null
 
   return (
     <div className="glass-card p-5 animate-fade-up relative overflow-hidden max-w-xl"
@@ -116,10 +128,16 @@ function ScoreBreakdown({ artistId }) {
         </div>
 
         {/* Component breakdown */}
-        <LayerRow icon={Gauge} label="Base (Entropy-weighted followers)"
-          display={hasBase ? snap.baseScore.toFixed(1) : '—'}
-          barPct={hasBase ? snap.baseScore : 0}
+        <LayerRow icon={Gauge} label="Reach (weighted platform followers)"
+          display={hasReach ? snap.reachScore.toFixed(1) : '—'}
+          barPct={hasReach ? snap.reachScore : 0}
           color="var(--accent-indigo)" />
+
+        <LayerRow icon={Ticket} label="Revealed Demand (real, verified venues)"
+          display={hasRevealedDemand ? snap.revealedDemandScore.toFixed(1) : '—'}
+          barPct={hasRevealedDemand ? snap.revealedDemandScore : 0}
+          color="var(--accent-gold)"
+          note={hasRevealedDemand ? undefined : 'No verified real venue history yet for this artist — dropped from the blend'} />
 
         <LayerRow icon={Search} label="Google Trends"
           display={hasTrends ? snap.trendsScore.toFixed(1) : '—'}
@@ -128,8 +146,10 @@ function ScoreBreakdown({ artistId }) {
           note={hasTrends ? undefined : 'No Trends data yet — dropped from the blend'} />
 
         <p className="text-xs pt-3" style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--border)' }}>
-          Popularity = Base×0.80 + Google Trends×0.20 (weights renormalized
-          over whichever components are available).
+          Popularity = Reach×0.40 + Google Trends×0.20 + Revealed Demand×0.40
+          (weights renormalized over whichever components are available).
+          Search interest is a supporting signal, not a guarantee of ticket
+          sales — real touring history is weighted higher for this reason.
         </p>
       </div>
     </div>

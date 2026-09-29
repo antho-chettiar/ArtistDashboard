@@ -850,8 +850,10 @@ class TestRevenueInputRobustness:
 
 
 class TestArtistPopularity:
-    # Base entropy score is ALWAYS cohort-relative now (see calculate()'s
-    # docstring) — every test in this class exercises the single-artist path
+    # Reach is scaled against a fixed external anchor, not a cohort- or
+    # self-relative max (Formula Blueprint v2.3, 2026-09-29 — see
+    # calculator.py's module docstring) — every test in this class exercises
+    # the single-artist path
     # against a mocked fetch_artist_snapshots() cohort, never a real DB.
 
     def _two_artist_cohort(self, target_values: dict) -> list[dict]:
@@ -884,10 +886,12 @@ class TestArtistPopularity:
         assert set(out.platform_weights) == set(out.platform_contributions)
 
     def test_larger_cohort_relative_reach_increases_score(self, monkeypatch):
-        """An artist with a bigger footprint relative to the same cohort peer
-        must score at least as high as a smaller one. Base score is always
-        cohort-relative (never driven by a caller-supplied platform_metrics
-        time series — see calculate()'s docstring)."""
+        """An artist with a bigger real footprint must score at least as high
+        as a smaller one. Reach is scaled against a fixed external anchor
+        (Formula Blueprint v2.3, 2026-09-29), not a cohort- or self-relative
+        max, but "bigger real numbers -> equal-or-higher score" still must
+        hold under fixed-anchor scaling too (never driven by a caller-
+        supplied platform_metrics time series — see calculate()'s docstring)."""
         small_rows = self._two_artist_cohort({
             "spotifyMonthlyListeners": 5000,
             "youtubeSubscribers": 2000,
@@ -916,11 +920,16 @@ class TestArtistPopularity:
         /popularity returned exactly 100.0: a caller-supplied platform_metrics
         time series that is monotonically increasing (so the artist's latest
         value equals its own historical max on every platform) must NOT force
-        the score to ~100 purely because of that self-relative shape. The
-        score must reflect the artist's current snapshot value relative to
-        the active-artist cohort, exactly like /popularity/all — a modest
-        artist dwarfed by a much larger cohort peer must score well below 100
-        even though its own history only ever went up.
+        the score to ~100 purely because of that self-relative shape.
+
+        Formula Blueprint v2.3 (2026-09-29) update: Reach is now scaled
+        against a FIXED external anchor (PLATFORM_ANCHORS), not a cohort- or
+        self-relative max, so this failure mode can no longer occur by
+        construction -- there's no "cohort peer" or "own history max" for the
+        score to be relative TO any more. The modest-artist-vs-superstar-peer
+        setup below is kept because it's still a good, concrete way to prove
+        a small artist scores low regardless of who else is in the roster,
+        just not for the original cohort-relative reason.
         """
         snapshot_rows = self._two_artist_cohort({
             "spotifyMonthlyListeners": 10000,
@@ -929,7 +938,9 @@ class TestArtistPopularity:
             "facebookFollowers": 2000,
             "twitterFollowers": 1000,
         })
-        # Override the peer to be a much larger superstar for this test.
+        # A much larger peer is present but, unlike the old cohort-relative
+        # design, has no bearing on the target artist's own Reach score below
+        # -- kept to prove that explicitly.
         snapshot_rows[1] = {
             "artist_id": "artist_002",
             "artistName": "Superstar Peer",
@@ -953,9 +964,10 @@ class TestArtistPopularity:
         out = popularity_calc(payload)
 
         assert out.artist_id == "artist_001"
-        # log1p compresses the 10K-vs-50M gap, so this isn't near-zero — the
-        # point is it's nowhere near the ~100 the old self-normalizing branch
-        # would have produced for this same monotonic time series.
+        # log1p compresses a 10K-follower artist against an 80M-follower
+        # fixed anchor, so this isn't near-zero — the point is it's nowhere
+        # near the ~100 the old self-normalizing branch would have produced
+        # for this same monotonic time series.
         assert out.popularity_score < 90
 
     def test_snapshot_artist_popularity_with_db_fetch(self, monkeypatch):

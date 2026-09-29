@@ -1,44 +1,94 @@
 """
-Popularity model — Formula Blueprint v2.2 (Google Trends weight reduced, 2026-09):
+Popularity model — Formula Blueprint v2.3 (Reach / Revealed-Demand redesign, 2026-09-29):
 
-    Popularity = BaseEntropy * 0.80 + GoogleTrends * 0.20
+    Popularity = Reach * 0.40 + GoogleTrends * 0.20 + RevealedDemand * 0.40
+  (weights renormalized over whichever components are actually available)
 
-  - 80% Base entropy score (Spotify, YouTube, Instagram, Facebook follower counts)
-  - 20% Google Trends score (real-time public search interest)
+  - Reach (40%): platform follower/listener counts (Spotify, YouTube,
+    Instagram, Facebook), each scaled against a FIXED external anchor (NOT
+    the current roster's own biggest artist) and weighted by platform using
+    the CRITIC method (see PLATFORM_WEIGHTS below).
+  - Google Trends (20%): real-time public search interest. None (never a
+    fabricated 0) when unavailable for this artist -- renormalizes onto the
+    other two components. Search interest is a supporting signal, not a
+    guarantee of ticket sales (see "Known limitation" below), which is why
+    it stays a minority weight even when the data pipeline is fixed.
+  - Revealed Demand (40%): recency-weighted peak REAL, VERIFIED venue
+    capacity from this artist's own logged concert history (see
+    REVEALED_DEMAND_ANCHOR / REVEALED_DEMAND_HALF_LIFE_YEARS below). None
+    (never fabricated) when this artist has no verified show at all --
+    renormalizes onto the other two rather than treating a data/import gap
+    as evidence of low demand.
 
-The base entropy model uses information-entropy weighting across artist platform
-snapshots to compute relative popularity from follower/listener counts.
+INCIDENT that prompted this redesign (2026-09-29): the prior formula
+(Base*0.80 + Trends*0.20, Base computed via cohort-relative max-normalization
+and entropy weights with a Spotify>=45%/Instagram>=25% floor) produced a
+real, publicly indefensible result live in production: Armaan Malik ranked
+#1 in the roster, ahead of Shreya Ghoshal, Diljit Dosanjh, and Arijit Singh
+-- artists any follower of Indian music would immediately know are bigger.
+Root cause, diagnosed against this app's own real data, not theory:
+  1. log1p + cohort-relative max-normalization compresses every "big enough"
+     artist toward the same ~90-100 band (verified: the 4 most-followed
+     artists in the roster landed within a 4-point Base-score spread),
+     leaving the ranking to be decided by near-noise rather than real
+     differences in fame. No amount of reweighting fixes this -- it's the
+     normalization method itself that destroys the ranking's discriminating
+     power among top-tier artists.
+  2. The Spotify/Instagram weight floors were asserted, never empirically
+     validated. Checked against this roster's own real, verified touring
+     history (see RevealedDemand below): Instagram tracks real ticket-
+     selling success far better than Spotify does in this roster -- the
+     opposite of what the floors assumed.
+  3. Armaan Malik's own real evidence: his one verified large-venue booking
+     (55,000 capacity) is from 2017; Shreya/Arijit/Diljit all have verified
+     large-venue bookings within the last 1-3 years. A follower-count-only
+     formula has no way to see this; RevealedDemand does, via its recency
+     weighting.
 
-Momentum (cross_platform_score from the growth/RoG module) was dropped as an
-input by product decision — Growth/RoG has been archived (see
-mad_analytics/legacy/growth_calculator.py) because the business decided it
-added complexity without a proportional accuracy gain for V1. Its 20% weight
-was originally redistributed to Base (60% -> 75%) and Google Trends (20% -> 25%).
+METHODOLOGY behind PLATFORM_WEIGHTS: cross-referenced every artist's real
+logged concerts against this app's own curated/verified venue-capacity list
+(mad_analytics/venue_capacity/known_venues.py -- the same strict bar already
+used for the Venue Capacity stat; deliberately NOT the looser "capacity
+column is non-null" bar touring_history/scorer.py's _biggest_verified_show
+uses for its own, separate purpose -- that column also holds un-curated
+heuristic-estimated placeholder values, see Analysis.jsx's
+KNOWN_CAPACITY_PLACEHOLDER fix from this same day), built a recency-weighted
+"real peak demand" per artist (N=8 usable artists after excluding actor-
+first artists whose Instagram/real-venue draw is plausibly film-fame-driven,
+not music-fame-driven), then applied the CRITIC method (Diakoulaki, Mavrotas
+& Papayannakis, 1995 -- an established multi-criteria weighting technique
+that, unlike a raw correlation-to-outcome, penalizes redundancy between
+correlated indicators instead of rewarding it). Cross-checked with PCA (the
+4 platforms load ~63% onto one shared "general fame" factor -- they are not
+4 independent signals), a joint ridge regression, and a bootstrap confidence
+interval. The one finding robust across every method: Instagram outweighs
+Spotify for this roster. The exact Spotify/YouTube/Facebook split is NOT
+reliably resolvable from N=8 and should be recomputed as more verified
+concert data accumulates -- PLATFORM_WEIGHTS is a V1 snapshot, not a
+permanent constant.
 
-> **Changed again (2026-09):** a real incident showed Google Trends at 25%
-> weight is too easily distorted — an actor-singer's live search interest
-> spiked hard for reasons unrelated to music (most likely a film promotion),
-> maxed out Google Trends at 100, and that alone was enough to briefly
-> outrank artists who are far more established musicians. Two changes
-> together address this: (1) the Trends lookback window widened from 3 to 12
-> months (see trends/google_trends.py's fetch_trends_scores docstring) so a
-> short-lived spike gets diluted by a full year of baseline interest instead
-> of dominating a 3-month window outright; (2) Trends' weight reduced 25% ->
-> 20%, with that 5% moved to Base, as a second layer of protection so even a
-> spike that survives the wider window swings the final score less. Base is
-> now 80% (was 75%).
+Known limitation, stated honestly rather than buried in a weight: Google
+Trends' correlation with real verified touring success in this roster is
+positive but moderate (r=+0.45) and weaker/less reliable than Instagram's
+(r=+0.74) -- e.g. SONU NIGAM has meaningful Trends presence but the LOWEST
+real verified touring success in the roster; Vishal Mishra has almost no
+Trends presence but strong real touring success. High search interest does
+not reliably translate into ticket sales for this roster; real touring
+history does more reliably, which is why RevealedDemand outweighs Trends
+2-to-1 in the blend above.
 
-Missing components are renormalized out: if Google Trends (pytrends not yet run)
-is unavailable for an artist, the full weight falls on the base entropy score so
-the score is never silently zeroed and no value is fabricated.
+Momentum (cross_platform_score from the growth/RoG module) remains dropped
+as an input by prior product decision -- see
+mad_analytics/legacy/growth_calculator.py.
 
-The base entropy platform weights are also tilted per-artist by a curated
-genre-style tag (Phase 3, Day 6 — see feature_engineering.ARTIST_GENRE_STYLE):
-a regional/folk artist's real fanbase shows up more on YouTube than Spotify,
-so treating every artist under the same weights under- or over-counts them.
+The Reach platform weights are further tilted per-artist by a curated
+genre-style tag (Phase 3, Day 6 -- see feature_engineering.ARTIST_GENRE_STYLE),
+unchanged by this redesign: a regional/folk artist's real fanbase shows up
+more on YouTube than Spotify, so treating every artist under the same
+weights under- or over-counts them.
 """
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date as date_cls
 import logging
 from typing import Optional
 
@@ -54,18 +104,14 @@ from ..utils.feature_engineering import (
 logger = logging.getLogger(__name__)
 
 # ── Weight Configuration ───────────────────────────────────────────────────────
+# Formula Blueprint v2.3 -- see module docstring for the incident and
+# methodology behind these numbers. Weights are renormalized over whichever
+# components are actually available for a given artist (see _blend_popularity).
+WEIGHT_REACH = 0.40             # Platform follower/listener counts
+WEIGHT_GOOGLE_TRENDS = 0.20     # Google Trends search interest
+WEIGHT_REVEALED_DEMAND = 0.40   # Recency-weighted real, verified venue capacity
 
-# Final blended formula weights — Formula Blueprint v2.2 (Popularity):
-#   Popularity = BaseEntropy * 0.80 + GoogleTrends * 0.20
-# Google Trends' weight was reduced from 0.25 (moved to Base) after a live
-# incident where a 25%-weighted, un-widened-window Trends spike (unrelated to
-# music) briefly outranked more established musicians — see module docstring.
-# Weights are renormalized over whichever components are actually available
-# (see _blend_popularity).
-WEIGHT_BASE = 0.80           # Entropy-weighted platform followers
-WEIGHT_GOOGLE_TRENDS = 0.20  # Google Trends search interest
-
-# Base model platforms
+# Reach model platforms
 SNAPSHOT_PLATFORMS = [
     "spotifyMonthlyListeners",
     "youtubeSubscribers",
@@ -80,116 +126,83 @@ PLATFORM_LABELS = {
     "facebookFollowers": "facebook",
 }
 
+# CRITIC-method-derived platform weights (Diakoulaki, Mavrotas & Papayannakis,
+# 1995) -- see module docstring for full derivation and the incident that
+# prompted it. Replaces the old ad hoc "Spotify >= 45%, Instagram >= 25%"
+# floors, which had no empirical basis. V1 snapshot from N=8 verified
+# artists -- confident that Instagram ranks highest, low confidence on the
+# exact split beyond that. Revisit as more verified concert data accumulates.
+PLATFORM_WEIGHTS: dict[str, float] = {
+    "instagram": 0.305,
+    "facebook": 0.269,
+    "youtube": 0.259,
+    "spotify": 0.168,
+}
 
-# ── Base Entropy Model (unchanged core logic) ─────────────────────────────────
+# Fixed, EXTERNAL anchors -- what does a "100" mean in absolute terms,
+# independent of who else is currently in the roster. Replaces cohort-
+# relative max-normalization, which reshuffled every artist's score whenever
+# the roster changed and crushed every "big enough" artist toward the same
+# ~90-100 band (see incident in module docstring). Chosen as a realistic
+# ceiling for this roster's own genre/market (mainstream + regional Indian
+# music), not a global-pop ceiling that would flatten everyone in THIS
+# roster near zero.
+PLATFORM_ANCHORS: dict[str, float] = {
+    "spotifyMonthlyListeners": 80_000_000,
+    "youtubeSubscribers": 30_000_000,
+    "instagramFollowers": 80_000_000,
+    "facebookFollowers": 80_000_000,
+}
 
-def _build_platform_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a dense platform × time matrix of each platform's primary metric."""
-    platforms = sorted({p for p in df["platform"].unique() if p})
-    if not platforms:
-        return pd.DataFrame()
-
-    rows: dict[str, pd.Series] = {}
-    for platform in platforms:
-        series = platform_series(df, platform)
-        rows[platform] = series
-
-    matrix = pd.DataFrame(rows).fillna(0.0)
-    matrix = matrix.sort_index()
-    return matrix
-
-
-def _build_snapshot_matrix(rows: list[dict[str, object]]) -> pd.DataFrame:
-    """Build a cross-sectional snapshot matrix from artist-level fields."""
-    if not rows:
-        return pd.DataFrame()
-
-    data = {
-        PLATFORM_LABELS[platform]: [
-            float(row.get(platform) or 0.0) for row in rows
-        ]
-        for platform in SNAPSHOT_PLATFORMS
-    }
-    return pd.DataFrame(data)
+# Revealed Demand: a real show's evidentiary weight halves every this many
+# years -- an old sold-out show fades, a recent one counts fully. See
+# incident in module docstring (Armaan Malik's only verified large show is
+# from 2017; this is the mechanism that stops a decade-old show from
+# counting the same as a recent one for Shreya/Arijit/Diljit).
+REVEALED_DEMAND_HALF_LIFE_YEARS = 3.0
+# ~India's biggest real stadiums -- Narendra Modi Stadium (132,000 capacity)
+# is itself one of this roster's own verified data points.
+REVEALED_DEMAND_ANCHOR = 150_000.0
 
 
-def _entropy_weights(matrix: pd.DataFrame) -> dict[str, float]:
-    """Compute entropy-based weights with Spotify priority.
+def _scale_to_anchor(value: float, anchor: float) -> float:
+    """log-compressed 0.0-1.0 scale against a FIXED external anchor -- see
+    module docstring for why cohort-relative normalization was replaced."""
+    if value <= 0 or anchor <= 0:
+        return 0.0
+    return float(min(1.0, np.log1p(value) / np.log1p(anchor)))
 
-    Modifications from pure entropy:
-    - Spotify gets a minimum floor of 45% (it's the core music metric)
-    - Instagram gets a minimum floor of 25%
-    - Remaining weight distributed by entropy among other platforms
+
+# ── Reach (platform follower/listener counts) ──────────────────────────────────
+
+def _reach_score_for_artist(artist_row: dict) -> tuple[float, dict[str, float], dict[str, float]]:
+    """Reach score (0-100) for one artist: each platform's raw value scaled
+    against its own FIXED anchor (PLATFORM_ANCHORS), weighted by the
+    CRITIC-derived PLATFORM_WEIGHTS, tilted per-artist by genre style.
+
+    Needs only THIS artist's own snapshot row -- no cohort/matrix required.
+    This is also what makes a single-artist call agree with the full-roster
+    batch call by construction (both call the same function with the same
+    per-artist inputs), rather than by careful parallel maintenance of two
+    code paths computing a cohort-relative value.
     """
-    if matrix.empty:
-        return {}
+    genre_style = genre_style_for_artist_name(artist_row.get("artistName"))
+    tilted_weights = apply_genre_tilt(PLATFORM_WEIGHTS, genre_style)
 
-    n_rows = len(matrix)
-    entropy_factor = 1.0 / np.log(n_rows) if n_rows > 1 else 0.0
-    transformed = np.log1p(matrix)
-    diversifications: dict[str, float] = {}
+    contributions: dict[str, float] = {}
+    weights_out: dict[str, float] = {}
+    for db_field, label in PLATFORM_LABELS.items():
+        value = float(artist_row.get(db_field) or 0.0)
+        scaled = _scale_to_anchor(value, PLATFORM_ANCHORS[db_field])
+        w = tilted_weights.get(label, 0.0)
+        contributions[label] = round(scaled * w, 4)
+        weights_out[label] = round(w, 4)
 
-    for platform in transformed.columns:
-        column = transformed[platform].astype(float)
-        column_sum = float(column.sum())
-        if column_sum <= 0 or entropy_factor == 0:
-            diversifications[platform] = 0.0
-            continue
-
-        probabilities = column / column_sum
-        entropy = -entropy_factor * np.nansum(
-            np.where(probabilities > 0, probabilities * np.log(probabilities), 0.0)
-        )
-        diversifications[platform] = float(max(0.0, 1.0 - entropy))
-
-    total = sum(diversifications.values())
-    if total <= 0:
-        equal_weight = 1.0 / max(1, len(transformed.columns))
-        return {platform: equal_weight for platform in transformed.columns}
-
-    # Raw entropy weights
-    raw_weights = {platform: value / total for platform, value in diversifications.items()}
-
-    # Apply constraints: platform minimum floors
-    SPOTIFY_FLOOR = 0.45
-    INSTAGRAM_FLOOR = 0.25
-    adjusted = raw_weights.copy()
-
-    spotify_key = next((k for k in adjusted if "spotify" in k.lower()), None)
-    if spotify_key and adjusted[spotify_key] < SPOTIFY_FLOOR:
-        deficit_for_floor = SPOTIFY_FLOOR - adjusted[spotify_key]
-        adjusted[spotify_key] = SPOTIFY_FLOOR
-
-        other_keys = [k for k in adjusted if k != spotify_key]
-        other_total = sum(adjusted[k] for k in other_keys)
-        if other_total > 0:
-            for k in other_keys:
-                adjusted[k] -= deficit_for_floor * (adjusted[k] / other_total)
-
-    instagram_key = next((k for k in adjusted if "instagram" in k.lower()), None)
-    if instagram_key and adjusted[instagram_key] < INSTAGRAM_FLOOR:
-        deficit = INSTAGRAM_FLOOR - adjusted[instagram_key]
-        adjusted[instagram_key] = INSTAGRAM_FLOOR
-        other_keys = [k for k in adjusted if k != instagram_key]
-        other_total = sum(adjusted[k] for k in other_keys)
-        if other_total > 0:
-            for k in other_keys:
-                adjusted[k] -= deficit * (adjusted[k] / other_total)
-
-    # Normalize to sum to 1.0
-    final_total = sum(adjusted.values())
-    if final_total > 0:
-        adjusted = {k: v / final_total for k, v in adjusted.items()}
-
-    return adjusted
+    score = round(min(100.0, max(0.0, 5.0 + 95.0 * sum(contributions.values()))), 2)
+    return score, weights_out, contributions
 
 
-def _normalize_vector(series: pd.Series) -> pd.Series:
-    max_by_platform = series.max(axis=0).replace(0.0, np.nan)
-    return (series / max_by_platform).fillna(0.0)
-
-
-# ── Google Trends Integration ─────────────────────────────────────────────────
+# ── Google Trends Integration (unchanged by this redesign) ─────────────────────
 
 def _fetch_google_trends_scores(artist_names: list[str]) -> dict[str, float]:
     """
@@ -224,7 +237,6 @@ def _fetch_google_trends_scores(artist_names: list[str]) -> dict[str, float]:
 
 def _fetch_stored_trends_scores() -> dict[str, float]:
     """Read previously stored Google Trends scores from the artists table."""
-    import os
     try:
         from sqlalchemy import text as sql_text
         engine = get_engine()
@@ -239,17 +251,100 @@ def _fetch_stored_trends_scores() -> dict[str, float]:
         return {}
 
 
-# ── Instagram Engagement Rate Integration ─────────────────────────────────────
+# ── Revealed Demand (real, verified touring evidence) ──────────────────────────
+
+def _fetch_verified_concert_history(artist_id: str) -> list[dict]:
+    """This artist's own real concerts whose venue+city matches the curated,
+    cross-checked known-venues table (mad_analytics/venue_capacity/known_venues.py)
+    -- the same strict bar already used for the Analysis page's Venue Capacity
+    stat. Deliberately NOT the looser "capacity column is non-null" bar
+    touring_history/scorer.py's _biggest_verified_show uses for its own,
+    separate purpose -- that column also holds un-curated heuristic-estimated
+    placeholder values (see Analysis.jsx's KNOWN_CAPACITY_PLACEHOLDER fix,
+    2026-09-29), which would silently re-contaminate this signal with the
+    exact bug already found and fixed elsewhere in this product.
+
+    Returns [] (never raises) on any DB failure -- this signal renormalizes
+    out of the blend when unavailable, same discipline as Google Trends.
+    """
+    try:
+        from ..venue_capacity.known_venues import lookup_known_capacity
+        from sqlalchemy import text as sql_text
+        engine = get_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                sql_text(
+                    'SELECT "venueName", city, "concertDate" FROM concerts '
+                    'WHERE "artistId" = :aid AND "venueName" IS NOT NULL '
+                    'AND city IS NOT NULL AND "concertDate" IS NOT NULL '
+                    'AND "concertDate" <= CURRENT_DATE'
+                ),
+                {"aid": artist_id},
+            ).mappings().all()
+    except Exception as e:
+        logger.warning(f"[Popularity] Revealed-demand concert fetch failed for {artist_id}: {e}")
+        return []
+
+    verified: list[dict] = []
+    for r in rows:
+        capacity = lookup_known_capacity(r["venueName"] or "", r["city"] or "")
+        if not capacity:
+            continue
+        verified.append({"capacity": float(capacity), "date": r["concertDate"]})
+    return verified
+
+
+def _as_utc_datetime(value) -> Optional[datetime]:
+    """Concert.concertDate can come back as either a date or a datetime,
+    depending on the driver -- normalize to a tz-aware datetime so it can be
+    subtracted from datetime.now(timezone.utc)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, date_cls):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    return None
+
+
+def _revealed_demand_score(artist_id: str) -> Optional[float]:
+    """Recency-weighted peak REAL, VERIFIED venue capacity, log-scaled
+    against REVEALED_DEMAND_ANCHOR. None (never a fabricated 0) when this
+    artist has no verified show at all -- the score renormalizes onto
+    Reach/Trends instead of penalizing what might just be an import gap,
+    not real evidence of low demand."""
+    hits = _fetch_verified_concert_history(artist_id)
+    if not hits:
+        return None
+
+    now = datetime.now(timezone.utc)
+    best_weighted = 0.0
+    for hit in hits:
+        show_date = _as_utc_datetime(hit["date"])
+        if show_date is None:
+            continue
+        years_ago = max(0.0, (now - show_date).days / 365.25)
+        decay = 0.5 ** (years_ago / REVEALED_DEMAND_HALF_LIFE_YEARS)
+        best_weighted = max(best_weighted, hit["capacity"] * decay)
+
+    if best_weighted <= 0:
+        return None
+    return round(100.0 * _scale_to_anchor(best_weighted, REVEALED_DEMAND_ANCHOR), 2)
+
+
+# ── Instagram Engagement Rate Integration (unused by calculate()/calculate_all(),
+# kept for a future engagement-rate signal -- see engagement/scorer.py for the
+# currently-wired engagement rate consumer) ────────────────────────────────────
 
 def _fetch_engagement_rates(artist_ids: list[str]) -> dict[str, float]:
     """
     Fetch Instagram engagement rates for artists from platform_metrics.
-    
+
     Engagement Rate = (avg_likes + avg_comments) / followers × 100
-    
+
     The Instagram scraper stores avg_likes in 'likes' column and avg_comments
     in 'comments' column of platform_metrics (INSTAGRAM platform).
-    
+
     Returns dict: artist_id → engagement_rate (raw percentage, e.g. 2.5 means 2.5%)
     """
     import os
@@ -292,7 +387,7 @@ def _fetch_engagement_rates(artist_ids: list[str]) -> dict[str, float]:
 def _normalize_engagement_scores(rates: dict[str, float]) -> dict[str, float]:
     """
     Normalize engagement rates to 0–100 scale.
-    
+
     Typical celebrity ER is 0.5%–5%. We use a logarithmic scale so that:
     - ER ≥ 5% → 100
     - ER ~2.5% → ~75
@@ -316,7 +411,9 @@ def _normalize_engagement_scores(rates: dict[str, float]) -> dict[str, float]:
     return normalized
 
 
-# ── Rate of Growth Integration ─────────────────────────────────────────────────
+# ── Rate of Growth Integration (unused by calculate()/calculate_all() --
+# Momentum was archived, see module docstring; kept for the same reason as
+# the engagement-rate functions above) ─────────────────────────────────────────
 
 def _fetch_rog_scores() -> dict[str, float]:
     """Fetch average daily RoG per artist from platform_metrics (last 90 days).
@@ -332,7 +429,6 @@ def _fetch_rog_scores() -> dict[str, float]:
             return {}
         normalized = db_url.replace("postgres://", "postgresql://", 1) if db_url.startswith("postgres://") else db_url
         engine = create_engine(normalized)
-        ninety_days_ago = datetime.now(timezone.utc).isoformat()  # We'll filter in SQL
         with engine.connect() as conn:
             rows = conn.execute(sql_text("""
                 SELECT "artistId", AVG("rogDaily") as avg_rog
@@ -378,32 +474,31 @@ def _normalize_rog_scores(raw_rog: dict[str, float]) -> dict[str, float]:
 
 
 # ── Blended score with renormalization ────────────────────────────────────────
-# NOTE: Momentum (Growth/RoG's cross_platform_score) used to be computed here via
-# a _compute_momentum_scores() helper that re-ran the growth module over each
-# artist's recent metrics. That helper was removed when Growth/RoG was archived
-# as a product decision (see module docstring) — the preserved implementation
-# lives in mad_analytics/legacy/growth_calculator.py if it's ever needed again.
 
 def _blend_popularity(
-    base_score: float,
+    reach_score: float,
     trends: Optional[float],
+    revealed_demand: Optional[float],
 ) -> tuple[float, dict[str, float]]:
-    """Apply Popularity = base*0.80 + trends*0.20, renormalizing
-    over whichever components are actually available.
+    """Apply Popularity = Reach*0.40 + Trends*0.20 + RevealedDemand*0.40,
+    renormalizing over whichever components are actually available.
 
-    base_score is always present. trends is None when unavailable (pytrends not
-    yet run for this artist).
-    Returns (final_score_0_100, effective_weights) where effective_weights are the
-    renormalized weights actually used (for transparency in the response).
+    reach_score is always present. trends/revealed_demand are None when
+    unavailable for this artist (pytrends not yet run / no verified show
+    logged) -- never a fabricated 0.
+    Returns (final_score_0_100, effective_weights) where effective_weights are
+    the renormalized weights actually used (for transparency in the response).
     """
-    components: list[tuple[str, float, float]] = [("base", base_score, WEIGHT_BASE)]
+    components: list[tuple[str, float, float]] = [("reach", reach_score, WEIGHT_REACH)]
     if trends is not None:
         components.append(("google_trends", trends, WEIGHT_GOOGLE_TRENDS))
+    if revealed_demand is not None:
+        components.append(("revealed_demand", revealed_demand, WEIGHT_REVEALED_DEMAND))
 
     total_w = sum(w for _, _, w in components)
     effective = {name: round(w / total_w, 4) for name, _, w in components} if total_w > 0 else {}
     if total_w <= 0:
-        return round(min(100.0, max(0.0, base_score)), 2), effective
+        return round(min(100.0, max(0.0, reach_score)), 2), effective
 
     blended = sum(value * w for _, value, w in components) / total_w
     return round(min(100.0, max(0.0, blended)), 2), effective
@@ -411,142 +506,80 @@ def _blend_popularity(
 
 # ── Main Calculation ──────────────────────────────────────────────────────────
 
-def _calculate_base_entropy_score(artist_id: str, artists: list[dict], matrix: pd.DataFrame, weights: dict[str, float]) -> tuple[float, dict[str, float], dict[str, float]]:
-    """Calculate the base entropy-weighted score for a single artist.
+def _build_popularity_output(
+    artist_id: str,
+    artist_row: dict,
+    trend_score: Optional[float],
+) -> PopularityOutput:
+    """Shared by calculate() and calculate_all() -- computes Reach and
+    Revealed Demand for one artist and blends them with the given (already
+    fetched) Trends score. Both entry points calling this one function is
+    what GUARANTEES single-artist and full-roster results agree, rather than
+    relying on two separate code paths being kept in sync by hand."""
+    reach_score, platform_weights_dict, platform_contributions = _reach_score_for_artist(artist_row)
+    revealed_demand_score = _revealed_demand_score(artist_id)
 
-    The target artist is normalized RELATIVE TO THE COHORT — the same
-    cohort-normalized matrix that calculate_all() iterates — i.e. each platform
-    value is divided by the cohort max. Previously the target was normalized
-    against itself (a 1-row frame whose per-column max is the artist's own
-    value), which forced every present platform to 1.0 and made every
-    single-artist /popularity call return ~100. Reusing the cohort row makes the
-    single /popularity endpoint agree with /popularity/all.
+    final_score, effective_weights = _blend_popularity(reach_score, trend_score, revealed_demand_score)
 
-    `weights` (the cohort's shared entropy weights) are tilted per-artist by
-    genre style (Phase 3, Day 6 — see feature_engineering.apply_genre_tilt)
-    before use, so a regional/folk artist's YouTube-heavy real fanbase isn't
-    scored under the same platform weighting as a mainstream Bollywood artist.
-    """
-    if matrix.empty:
-        return 5.0, {}, {}
+    reach_w = effective_weights.get("reach", 0.0)
+    all_contributions = {k: round(v * reach_w, 4) for k, v in platform_contributions.items()}
+    all_weights = {k: round(v * reach_w, 4) for k, v in platform_weights_dict.items()}
+    if trend_score is not None:
+        all_contributions["google_trends"] = round(trend_score * effective_weights.get("google_trends", 0.0) / 100.0, 4)
+        all_weights["google_trends"] = effective_weights.get("google_trends", 0.0)
+    if revealed_demand_score is not None:
+        all_contributions["revealed_demand"] = round(revealed_demand_score * effective_weights.get("revealed_demand", 0.0) / 100.0, 4)
+        all_weights["revealed_demand"] = effective_weights.get("revealed_demand", 0.0)
 
-    transformed = np.log1p(matrix)
-    normalized = _normalize_vector(transformed)
-
-    # matrix/normalized rows are built in `artists` order by _build_snapshot_matrix,
-    # so the target's positional index into `artists` indexes its cohort-normalized row.
-    target_index = next(
-        (i for i, row in enumerate(artists) if row["artist_id"] == artist_id),
-        None,
+    return PopularityOutput(
+        artist_id=artist_id,
+        popularity_score=final_score,
+        platform_weights=all_weights,
+        platform_contributions=all_contributions,
+        computed_at=datetime.now(timezone.utc).isoformat(),
+        reach_score=reach_score,
+        revealed_demand_score=revealed_demand_score,
+        trends_score=trend_score,
     )
-    if target_index is None or target_index >= len(normalized):
-        return 5.0, {}, {}
-
-    target_normalized = normalized.iloc[target_index]
-    genre_style = genre_style_for_artist_name(artists[target_index].get("artistName"))
-    tilted_weights = apply_genre_tilt(weights, genre_style)
-
-    platform_contributions = {
-        platform: round(float(target_normalized.get(platform, 0.0) * tilted_weights.get(platform, 0.0)), 4)
-        for platform in matrix.columns
-    }
-    platform_weights = {platform: round(tilted_weights.get(platform, 0.0), 4) for platform in matrix.columns}
-    score = round(min(100.0, max(0.0, 5.0 + 95.0 * sum(platform_contributions.values()))), 2)
-
-    return score, platform_weights, platform_contributions
 
 
 def calculate_all() -> list[PopularityOutput]:
     """
-    Compute popularity scores for all active artists using the blended formula:
-      Popularity = base × 0.80 + google_trends × 0.20
-    (weights renormalized over available components).
+    Compute popularity scores for all active artists using the blended
+    formula: Popularity = Reach*0.40 + GoogleTrends*0.20 + RevealedDemand*0.40
+    (weights renormalized over available components) -- see module docstring
+    for the full formula, the incident that produced it, and its methodology.
     """
     artists = fetch_artist_snapshots()
     if not artists:
         return []
 
-    matrix = _build_snapshot_matrix(artists)
-    if matrix.empty:
-        return []
-
-    weights = _entropy_weights(matrix)
-    transformed = np.log1p(matrix)
-    normalized = _normalize_vector(transformed)
-
-    # Fetch Google Trends scores (by artist name)
     artist_names = [a["artistName"] for a in artists]
     trends_scores = _fetch_google_trends_scores(artist_names)
 
-    outputs: list[PopularityOutput] = []
-    for idx, row in normalized.iterrows():
-        artist = artists[idx]
-        artist_id = artist["artist_id"]
-        artist_name = artist["artistName"]
-
-        # Genre-style platform tilt (Phase 3, Day 6) — same tilt logic
-        # _calculate_base_entropy_score uses for the single-artist path, so
-        # /popularity and /popularity/all always agree for the same artist.
-        genre_style = genre_style_for_artist_name(artist_name)
-        tilted_weights = apply_genre_tilt(weights, genre_style)
-
-        # Base entropy score (0–100)
-        platform_contributions = {
-            platform: round(float(row.get(platform, 0.0) * tilted_weights.get(platform, 0.0)), 4)
-            for platform in matrix.columns
-        }
-        platform_weights_dict = {platform: round(tilted_weights.get(platform, 0.0), 4) for platform in matrix.columns}
-        base_score = round(min(100.0, max(0.0, 5.0 + 95.0 * sum(platform_contributions.values()))), 2)
-
-        # Google Trends (0–100) — None if not present in DB (pytrends not yet run)
-        trend_score = trends_scores.get(artist_name)
-
-        # Blended final score, renormalized over available components
-        final_score, effective_weights = _blend_popularity(base_score, trend_score)
-
-        # Transparency: platform breakdown scaled by the (effective) base weight,
-        # plus trends at its effective weight when present.
-        base_w = effective_weights.get("base", 0.0)
-        all_contributions = {k: round(v * base_w, 4) for k, v in platform_contributions.items()}
-        all_weights = {k: round(v * base_w, 4) for k, v in platform_weights_dict.items()}
-        if trend_score is not None:
-            all_contributions["google_trends"] = round(trend_score * effective_weights.get("google_trends", 0.0) / 100.0, 4)
-            all_weights["google_trends"] = effective_weights.get("google_trends", 0.0)
-
-        outputs.append(PopularityOutput(
-            artist_id=artist_id,
-            popularity_score=final_score,
-            platform_weights=all_weights,
-            platform_contributions=all_contributions,
-            computed_at=datetime.now(timezone.utc).isoformat(),
-        ))
-
-    return outputs
+    return [
+        _build_popularity_output(artist["artist_id"], artist, trends_scores.get(artist["artistName"]))
+        for artist in artists
+    ]
 
 
 def calculate(payload: PopularityInput) -> PopularityOutput:
     """
-    Compute an artist popularity score using the blended formula.
-
-    Base entropy score is ALWAYS computed cohort-relatively, via the same
-    _calculate_base_entropy_score() basis calculate_all() uses (each active
-    artist's platform value normalized against the cohort's max), so a
-    single-artist /popularity call agrees with /popularity/all for the same
-    artist.
+    Compute one artist's popularity score using the same blended formula and
+    the same per-artist computation calculate_all() uses for every artist
+    (see _build_popularity_output) -- guaranteeing single-artist and
+    full-roster results agree, by construction rather than by convention.
 
     NOTE: `payload.platform_metrics` (a caller-supplied time series) is
-    intentionally NOT used for the base score, even when provided. Normalizing
-    an artist's latest value against their own historical max makes
-    latest_relative == 1.0 for every platform whenever the artist's counts are
-    non-decreasing (true for almost any real artist), which forced base_score
-    to ~100 regardless of true relative popularity — this was the root cause
-    of single-artist /popularity calls returning ~100 for artists with real
-    history.
-
-    Google Trends is always fetched from stored/live data.
+    intentionally NOT used for Reach, even when provided -- Reach is scaled
+    against a fixed external anchor from the artist's current snapshot, not
+    any self-relative history, so there is no "monotonic history forces the
+    score to 100" failure mode to guard against here (that was the old
+    cohort-relative design's bug; fixed-anchor scaling doesn't have it).
     """
     artists = fetch_artist_snapshots()
-    if not artists:
+    artist_row = next((a for a in artists if a["artist_id"] == payload.artist_id), None)
+    if artist_row is None:
         return PopularityOutput(
             artist_id=payload.artist_id,
             popularity_score=5.0,
@@ -554,62 +587,26 @@ def calculate(payload: PopularityInput) -> PopularityOutput:
             platform_contributions={},
             computed_at=datetime.now(timezone.utc).isoformat(),
         )
-
-    matrix = _build_snapshot_matrix(artists)
-    if matrix.empty:
-        return PopularityOutput(
-            artist_id=payload.artist_id,
-            popularity_score=5.0,
-            platform_weights={},
-            platform_contributions={},
-            computed_at=datetime.now(timezone.utc).isoformat(),
-        )
-
-    weights = _entropy_weights(matrix)
-    base_score, platform_weights_dict, platform_contributions = _calculate_base_entropy_score(
-        payload.artist_id, artists, matrix, weights
-    )
-
-    # Get artist name for Google Trends lookup
-    artist_name = _get_artist_name(payload.artist_id)
 
     # Google Trends score — None if not present (pytrends not yet run).
     # Fetch across the FULL active-artist cohort — the same population and call
     # that calculate_all() uses — so the target's trend value is cohort-normalized
     # identically. Querying a single name would make that lone artist both the
     # reference AND the max in fetch_trends_scores, self-normalizing it to 100.
-    # Same data source, same normalization, same formula/weights.
+    artist_name = artist_row.get("artistName")
     trend_score = None
     if artist_name:
-        cohort_names = [a["artistName"] for a in fetch_artist_snapshots()]
+        cohort_names = [a["artistName"] for a in artists]
         if artist_name not in cohort_names:
             cohort_names.append(artist_name)
         trends_scores = _fetch_google_trends_scores(cohort_names)
         trend_score = trends_scores.get(artist_name)
 
-    # Blended final score, renormalized over available components
-    final_score, effective_weights = _blend_popularity(base_score, trend_score)
-
-    # Merge all contributions at their effective (renormalized) weights
-    base_w = effective_weights.get("base", 0.0)
-    all_contributions = {k: round(v * base_w, 4) for k, v in platform_contributions.items()}
-    all_weights = {k: round(v * base_w, 4) for k, v in platform_weights_dict.items()}
-    if trend_score is not None:
-        all_contributions["google_trends"] = round(trend_score * effective_weights.get("google_trends", 0.0) / 100.0, 4)
-        all_weights["google_trends"] = effective_weights.get("google_trends", 0.0)
-
-    return PopularityOutput(
-        artist_id=payload.artist_id,
-        popularity_score=final_score,
-        platform_weights=all_weights,
-        platform_contributions=all_contributions,
-        computed_at=datetime.now(timezone.utc).isoformat(),
-    )
+    return _build_popularity_output(payload.artist_id, artist_row, trend_score)
 
 
 def _get_artist_name(artist_id: str) -> Optional[str]:
     """Lookup artist name from ID via DB."""
-    import os
     try:
         from sqlalchemy import text as sql_text
         engine = get_engine()

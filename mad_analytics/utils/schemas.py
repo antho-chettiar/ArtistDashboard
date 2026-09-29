@@ -272,6 +272,17 @@ class PopularityOutput(BaseModel):
     platform_weights: dict[str, float]
     platform_contributions: dict[str, float]
     computed_at: str
+    # Raw, pre-blend subscores (Formula Blueprint v2.3, 2026-09-29) -- kept
+    # alongside the existing platform_weights/platform_contributions
+    # transparency fields rather than replacing them, so a caller can see
+    # both "how was Reach itself built" (platform_weights/contributions) and
+    # "how did the three top-level components compare" (these three).
+    # revealed_demand_score/trends_score are None (never fabricated) when
+    # that signal is unavailable for this artist -- see
+    # popularity/calculator.py's module docstring for why.
+    reach_score: Optional[float] = None
+    revealed_demand_score: Optional[float] = None
+    trends_score: Optional[float] = None
 
 
 # ── LLM Predictor (Ticket Prices & Sales) ─────────────────────────────────────

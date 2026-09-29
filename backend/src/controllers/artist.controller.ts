@@ -415,18 +415,24 @@ export const artistController = {
   // "leaderboard" endpoint anymore since it existed only to rank that score.
 
   // GET /api/v1/artists/:id/score
-  // Popularity breakdown for one artist: BaseEntropy / GoogleTrends, derived
-  // from the same weighted-contribution values mad_analytics returns for
-  // /popularity (Popularity = base*0.80 + trends*0.20, renormalized over
-  // available components — see mad_analytics/popularity/calculator.py's
-  // WEIGHT_BASE/WEIGHT_GOOGLE_TRENDS). Momentum was part of an earlier
-  // version of this formula and was retired as a product decision (folded
-  // into Base/Demand elsewhere); this endpoint used to still read a
-  // `platform_weights.momentum` key expecting it, which mad_analytics has
-  // never returned since that retirement -- so momentumScore was always
-  // null for every artist, permanently, misleadingly labeled as a per-artist
-  // data gap rather than a removed component. Removed rather than patched:
-  // Momentum isn't coming back, so there is nothing to display here.
+  // Popularity breakdown for one artist: Reach / GoogleTrends / RevealedDemand,
+  // derived from the same weighted-contribution values mad_analytics returns
+  // for /popularity (Popularity = Reach*0.40 + Trends*0.20 + RevealedDemand*0.40,
+  // renormalized over available components — see
+  // mad_analytics/popularity/calculator.py's module docstring for the full
+  // formula, the incident that produced it, and its methodology). Formula
+  // Blueprint v2.3, 2026-09-29 -- replaces the old Base*0.80 + Trends*0.20
+  // formula, whose cohort-relative normalization crushed every "big enough"
+  // artist toward the same ~90-100 band and produced a real, publicly
+  // indefensible ranking (see calculator.py's docstring for specifics).
+  //
+  // Also fixed here: BASE_KEYS previously listed the raw DB column names
+  // ('spotifyMonthlyListeners', ...), but mad_analytics has only ever
+  // returned platform_weights/platform_contributions keyed by the SHORT
+  // labels ('spotify', ...) -- see calculator.py's PLATFORM_LABELS. That
+  // mismatch meant reachWeight/reachScore below were always computed as 0/null
+  // for every artist, on top of (and independent from) the separate,
+  // already-fixed momentum-key bug this endpoint used to have.
   getScore: async (req: any, res: Response) => {
     try {
       const { id: artistId } = req.params;
@@ -445,26 +451,24 @@ export const artistController = {
       }
 
       const result = await madAnalyticsService.getPopularityScore(artistId);
-      const { popularity_score, platform_weights, platform_contributions, computed_at } =
-        result as {
-          popularity_score: number;
-          platform_weights: Record<string, number>;
-          platform_contributions: Record<string, number>;
-          computed_at: string;
-        };
+      const {
+        popularity_score, platform_weights, platform_contributions, computed_at,
+        reach_score, revealed_demand_score, trends_score,
+      } = result as {
+        popularity_score: number;
+        platform_weights: Record<string, number>;
+        platform_contributions: Record<string, number>;
+        computed_at: string;
+        reach_score?: number | null;
+        revealed_demand_score?: number | null;
+        trends_score?: number | null;
+      };
 
-      const BASE_KEYS = ['spotifyMonthlyListeners', 'youtubeSubscribers', 'instagramFollowers', 'facebookFollowers'];
-      const baseWeight = BASE_KEYS.reduce((sum, key) => sum + (platform_weights?.[key] || 0), 0);
-      const baseContribution = BASE_KEYS.reduce((sum, key) => sum + (platform_contributions?.[key] || 0), 0);
-      // Invert the same math calculate() applies (base_w * (5 + 95*Σcontrib_raw)):
-      // contribution stored is already scaled by base_w, so dividing it back out
-      // recovers the 0–100 base entropy score.
-      const baseScore = baseWeight > 0 ? Math.round((5 + 95 * (baseContribution / baseWeight)) * 100) / 100 : null;
+      const REACH_KEYS = ['spotify', 'youtube', 'instagram', 'facebook'];
+      const reachWeight = REACH_KEYS.reduce((sum, key) => sum + (platform_weights?.[key] || 0), 0);
 
-      const trendsWeight = platform_weights?.google_trends;
-      const trendsScore = trendsWeight
-        ? Math.round(((platform_contributions.google_trends / trendsWeight) * 100) * 100) / 100
-        : null;
+      const trendsWeight = platform_weights?.google_trends ?? null;
+      const revealedDemandWeight = platform_weights?.revealed_demand ?? null;
 
       return res.status(200).json({
         success: true,
@@ -473,10 +477,18 @@ export const artistController = {
           artistName: artist.artistName,
           latest: {
             finalScore: popularity_score,
-            baseScore,
-            baseWeight: Math.round(baseWeight * 10000) / 10000,
-            trendsScore,
-            trendsWeight: trendsWeight ?? null,
+            // reach_score/revealed_demand_score/trends_score are the raw,
+            // pre-blend subscores mad_analytics already computed (see
+            // PopularityOutput) -- reading those directly instead of
+            // re-deriving them from platform_weights/platform_contributions
+            // avoids a second place this exact "wrong key" class of bug
+            // could recur.
+            reachScore: reach_score ?? null,
+            reachWeight: Math.round(reachWeight * 10000) / 10000,
+            trendsScore: trends_score ?? null,
+            trendsWeight,
+            revealedDemandScore: revealed_demand_score ?? null,
+            revealedDemandWeight,
             platformWeights: platform_weights,
             platformContributions: platform_contributions,
             computedAt: computed_at,
