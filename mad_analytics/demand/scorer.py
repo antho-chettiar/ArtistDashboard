@@ -5,7 +5,9 @@ Composite 0–100 demand score for an artist in a given city on a given date
 
 Components
 ----------
-- platform_size (55%) — cohort-relative social/streaming reach (Step 2)
+- platform_size (55%) — social/streaming reach vs. a FIXED external anchor
+  (Step 2; see "Platform Size" section below for why this is no longer
+  cohort-relative)
 - google_trends (30%) — real-time public search interest
 - city_affinity (15%) — city tier × market activity (Step 3)
 
@@ -38,16 +40,26 @@ from ..utils.feature_engineering import genre_style_for_artist_name, apply_genre
 
 from ..utils.schemas import DemandInput, DemandOutput
 from ..utils.db import fetch_artist_snapshots
+from ..popularity.calculator import _scale_to_anchor, PLATFORM_ANCHORS
 
 
-# ── Platform Size Score (Formula Blueprint v2.0 — Step 2) ─────────────────────
+# ── Platform Size Score (Formula Blueprint v2.2 — fixed-anchor, 2026-09-29) ────
 #
 #   PlatformSize = 0.40·Spotify + 0.25·YouTube + 0.25·Instagram + 0.10·Facebook
 #
-# where each platform value is min-max normalized across the active-artist cohort:
-#   norm(x) = (x - cohort_min) / (cohort_max - cohort_min)  clamped to [0, 1]
-# Output is a 0–100 score. "Spotify" uses spotifyMonthlyListeners (the frontend's
-# monthlyStreams); the other three use the artist snapshot follower columns.
+# Each platform value is scaled against a FIXED external anchor (the same
+# PLATFORM_ANCHORS Popularity's Reach component uses — see
+# popularity/calculator.py's module docstring for the full incident), NOT the
+# active-artist cohort's own min/max. The original cohort-relative version had
+# the same defect Popularity's Reach and Google Trends components were both
+# found to have on 2026-09-29: adding, removing, or updating any OTHER
+# artist's followers would silently reshuffle every artist's Demand score,
+# and a genuinely huge artist and a merely-large one could both get crushed
+# toward the cohort's own max. Reusing Popularity's exact anchors (rather than
+# deriving separate ones for Demand) also means the same absolute follower
+# count means the same thing in both scores. Output is a 0–100 score.
+# "Spotify" uses spotifyMonthlyListeners (the frontend's monthlyStreams); the
+# other three use the artist snapshot follower columns.
 
 PLATFORM_SIZE_WEIGHTS = {
     "spotify":   0.40,
@@ -65,20 +77,13 @@ PLATFORM_SIZE_FIELD = {
 }
 
 
-def _minmax(value: float, lo: float, hi: float) -> float:
-    """Min-max normalize to [0, 1]. Degenerate cohort (hi <= lo) -> 0.0."""
-    if hi <= lo:
-        return 0.0
-    return max(0.0, min(1.0, (value - lo) / (hi - lo)))
-
-
 def compute_platform_size(
     artist_values: dict[str, float],
-    cohort_min: dict[str, float],
-    cohort_max: dict[str, float],
     genre_style: Optional[str] = None,
 ) -> float:
-    """Platform Size Score (0–100) for one artist given the cohort min/max.
+    """Platform Size Score (0–100) for one artist, scaled against Popularity's
+    fixed PLATFORM_ANCHORS -- no cohort/roster needed, so this artist's score
+    cannot be moved by any other artist's data (see module docstring).
 
     `genre_style` (Phase 3, Day 6) tilts PLATFORM_SIZE_WEIGHTS per-artist
     before use — see feature_engineering.apply_genre_tilt. None (the default)
@@ -89,12 +94,10 @@ def compute_platform_size(
     weights = apply_genre_tilt(PLATFORM_SIZE_WEIGHTS, genre_style)
     total = 0.0
     for platform, weight in weights.items():
-        norm = _minmax(
-            float(artist_values.get(platform, 0.0) or 0.0),
-            float(cohort_min.get(platform, 0.0) or 0.0),
-            float(cohort_max.get(platform, 0.0) or 0.0),
-        )
-        total += weight * norm
+        db_field = PLATFORM_SIZE_FIELD[platform]
+        value = float(artist_values.get(platform, 0.0) or 0.0)
+        scaled = _scale_to_anchor(value, PLATFORM_ANCHORS[db_field])
+        total += weight * scaled
     return round(min(100.0, max(0.0, total * 100.0)), 2)
 
 
@@ -112,26 +115,13 @@ def platform_size_scores() -> dict[str, float]:
     if not artists:
         return {}
 
-    cohort_values: dict[str, list[float]] = {p: [] for p in PLATFORM_SIZE_WEIGHTS}
-    per_artist: dict[str, dict[str, float]] = {}
-    per_artist_genre: dict[str, Optional[str]] = {}
+    result: dict[str, float] = {}
     for row in artists:
-        values: dict[str, float] = {}
-        for platform, field in PLATFORM_SIZE_FIELD.items():
-            v = float(row.get(field) or 0.0)
-            values[platform] = v
-            cohort_values[platform].append(v)
+        values = {platform: float(row.get(field) or 0.0) for platform, field in PLATFORM_SIZE_FIELD.items()}
         artist_id = str(row["artist_id"])
-        per_artist[artist_id] = values
-        per_artist_genre[artist_id] = genre_style_for_artist_name(row.get("artistName"))
-
-    cohort_min = {p: (min(vs) if vs else 0.0) for p, vs in cohort_values.items()}
-    cohort_max = {p: (max(vs) if vs else 0.0) for p, vs in cohort_values.items()}
-
-    return {
-        artist_id: compute_platform_size(values, cohort_min, cohort_max, per_artist_genre[artist_id])
-        for artist_id, values in per_artist.items()
-    }
+        genre_style = genre_style_for_artist_name(row.get("artistName"))
+        result[artist_id] = compute_platform_size(values, genre_style)
+    return result
 
 
 # ── City Affinity Score (Formula Blueprint v2.0 — Step 3) ─────────────────────

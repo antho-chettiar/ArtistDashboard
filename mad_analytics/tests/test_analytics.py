@@ -302,12 +302,9 @@ class TestDemandGenreTilt:
         assert tagged["artist_002"] == untagged["artist_002"]  # peer is untagged in both runs
 
     def test_untagged_artist_unaffected(self):
-        weights = demand_scorer.PLATFORM_SIZE_WEIGHTS
         artist_values = {"spotify": 10000.0, "youtube": 20000.0, "instagram": 5000.0, "facebook": 1000.0}
-        cohort_min = {p: 0.0 for p in weights}
-        cohort_max = {p: v * 2 for p, v in artist_values.items()}
-        assert demand_scorer.compute_platform_size(artist_values, cohort_min, cohort_max, genre_style=None) == \
-            demand_scorer.compute_platform_size(artist_values, cohort_min, cohort_max)
+        assert demand_scorer.compute_platform_size(artist_values, genre_style=None) == \
+            demand_scorer.compute_platform_size(artist_values)
 
 
 # ── Revenue module ─────────────────────────────────────────────────────────────
