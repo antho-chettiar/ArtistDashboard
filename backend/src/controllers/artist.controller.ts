@@ -415,10 +415,18 @@ export const artistController = {
   // "leaderboard" endpoint anymore since it existed only to rank that score.
 
   // GET /api/v1/artists/:id/score
-  // Popularity breakdown for one artist: BaseEntropy / Momentum / GoogleTrends,
-  // derived from the same weighted-contribution values mad_analytics returns
-  // for /popularity (Popularity = base*0.60 + momentum*0.20 + trends*0.20,
-  // renormalized over available components).
+  // Popularity breakdown for one artist: BaseEntropy / GoogleTrends, derived
+  // from the same weighted-contribution values mad_analytics returns for
+  // /popularity (Popularity = base*0.80 + trends*0.20, renormalized over
+  // available components — see mad_analytics/popularity/calculator.py's
+  // WEIGHT_BASE/WEIGHT_GOOGLE_TRENDS). Momentum was part of an earlier
+  // version of this formula and was retired as a product decision (folded
+  // into Base/Demand elsewhere); this endpoint used to still read a
+  // `platform_weights.momentum` key expecting it, which mad_analytics has
+  // never returned since that retirement -- so momentumScore was always
+  // null for every artist, permanently, misleadingly labeled as a per-artist
+  // data gap rather than a removed component. Removed rather than patched:
+  // Momentum isn't coming back, so there is nothing to display here.
   getScore: async (req: any, res: Response) => {
     try {
       const { id: artistId } = req.params;
@@ -453,11 +461,6 @@ export const artistController = {
       // recovers the 0–100 base entropy score.
       const baseScore = baseWeight > 0 ? Math.round((5 + 95 * (baseContribution / baseWeight)) * 100) / 100 : null;
 
-      const momentumWeight = platform_weights?.momentum;
-      const momentumScore = momentumWeight
-        ? Math.round(((platform_contributions.momentum / momentumWeight) * 100) * 100) / 100
-        : null;
-
       const trendsWeight = platform_weights?.google_trends;
       const trendsScore = trendsWeight
         ? Math.round(((platform_contributions.google_trends / trendsWeight) * 100) * 100) / 100
@@ -472,8 +475,6 @@ export const artistController = {
             finalScore: popularity_score,
             baseScore,
             baseWeight: Math.round(baseWeight * 10000) / 10000,
-            momentumScore,
-            momentumWeight: momentumWeight ?? null,
             trendsScore,
             trendsWeight: trendsWeight ?? null,
             platformWeights: platform_weights,

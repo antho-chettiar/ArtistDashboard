@@ -1,18 +1,25 @@
-import { Gauge, TrendingUp, Search } from 'lucide-react'
+import { Gauge, Search } from 'lucide-react'
 import EmptyState from '../ui/EmptyState'
 import { useArtistScore } from '../../hooks/useViberate'
 
 /**
  * ScoreBreakdown — canonical Popularity score card (mad_analytics, Blueprint v2.0).
  *
- * Popularity = BaseEntropy×0.60 + Momentum×0.20 + GoogleTrends×0.20, weights
- * renormalized over whichever components are available for this artist.
+ * Popularity = BaseEntropy×0.80 + GoogleTrends×0.20, weights renormalized
+ * over whichever components are available for this artist (see
+ * mad_analytics/popularity/calculator.py's WEIGHT_BASE/WEIGHT_GOOGLE_TRENDS).
  *
  * This card previously showed the ArtistPopularityV2 (Viberate) breakdown
  * (Reach / Engagement / Trends); that system was retired in favor of a single
  * canonical Popularity formula everywhere (FORMULA_DECISIONS.md §2). There is
  * no historical trend chart here anymore — the canonical engine keeps only
  * the latest score per artist, not a dated snapshot history.
+ *
+ * A Momentum row used to live here too, for an earlier version of this
+ * formula that included a Momentum component -- removed (not just hidden)
+ * once Momentum was retired product-wide, since the backend genuinely never
+ * returns a momentum value any more (see artist.controller.ts's getScore),
+ * not merely a per-artist gap worth showing as "no data yet".
  */
 
 function LayerRow({ icon: Icon, label, display, barPct, color, note }) {
@@ -70,14 +77,13 @@ function ScoreBreakdown({ artistId }) {
   const snap = data.latest
   const finalScore = Number(snap.finalScore)
   const hasBase = snap.baseScore != null
-  const hasMomentum = snap.momentumScore != null
   const hasTrends = snap.trendsScore != null
 
   return (
     <div className="glass-card p-5 animate-fade-up relative overflow-hidden max-w-xl"
       style={{ animationFillMode: 'both', opacity: 0 }}>
       <div className="absolute inset-0 pointer-events-none"
-        style={{ background: 'radial-gradient(circle at 100% 0%, rgba(99,102,241,0.06), transparent 60%)' }} />
+        style={{ background: 'radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--accent-indigo) 6%, transparent), transparent 60%)' }} />
 
       <div className="relative z-10">
         <div className="flex items-start justify-between mb-5">
@@ -90,7 +96,7 @@ function ScoreBreakdown({ artistId }) {
             </p>
           </div>
           <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-            style={{ background: 'rgba(99,102,241,0.12)', color: 'var(--accent-indigo)' }}>
+            style={{ background: 'color-mix(in srgb, var(--accent-indigo) 12%, transparent)', color: 'var(--accent-indigo)' }}>
             5–100 scale
           </span>
         </div>
@@ -104,7 +110,7 @@ function ScoreBreakdown({ artistId }) {
             <div className="h-full rounded-full"
               style={{
                 width: `${((finalScore - 5) / 95) * 100}%`,
-                background: 'linear-gradient(135deg, #6366F1, #818CF8)',
+                background: 'linear-gradient(135deg, var(--accent-indigo), var(--accent-indigo))',
               }} />
           </div>
         </div>
@@ -113,23 +119,17 @@ function ScoreBreakdown({ artistId }) {
         <LayerRow icon={Gauge} label="Base (Entropy-weighted followers)"
           display={hasBase ? snap.baseScore.toFixed(1) : '—'}
           barPct={hasBase ? snap.baseScore : 0}
-          color="#818CF8" />
-
-        <LayerRow icon={TrendingUp} label="Momentum"
-          display={hasMomentum ? snap.momentumScore.toFixed(1) : '—'}
-          barPct={hasMomentum ? snap.momentumScore : 0}
-          color="#FBBF24"
-          note={hasMomentum ? undefined : 'No platform time series yet — dropped from the blend'} />
+          color="var(--accent-indigo)" />
 
         <LayerRow icon={Search} label="Google Trends"
           display={hasTrends ? snap.trendsScore.toFixed(1) : '—'}
           barPct={hasTrends ? snap.trendsScore : 0}
-          color="#34D399"
+          color="var(--accent-green)"
           note={hasTrends ? undefined : 'No Trends data yet — dropped from the blend'} />
 
         <p className="text-xs pt-3" style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--border)' }}>
-          Popularity = Base×0.60 + Momentum×0.20 + Google Trends×0.20 (weights
-          renormalized over whichever components are available).
+          Popularity = Base×0.80 + Google Trends×0.20 (weights renormalized
+          over whichever components are available).
         </p>
       </div>
     </div>
