@@ -732,7 +732,11 @@ function ArtistComparison({ artists, concerts }) {
           >
             <option value="">Choose artist A...</option>
             {artists.map(x => (
-              <option key={x.id} value={x.id}>{x.name}</option>
+              // Disabled, not filtered out entirely, when already picked as
+              // Artist B -- comparing an artist against themselves ties on
+              // every metric and isn't a real comparison; the roster still
+              // stays visible either way, just not double-selectable.
+              <option key={x.id} value={x.id} disabled={x.id === artistB}>{x.name}</option>
             ))}
           </select>
           {a && (
@@ -740,7 +744,7 @@ function ArtistComparison({ artists, concerts }) {
               <img src={a.photo} alt={a.name} className="w-10 h-10 rounded-xl object-cover" />
               <div>
                 <p className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>{a.name}</p>
-                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{a.genre} Â· {a.nationality}</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{a.genre} · {a.nationality}</p>
               </div>
             </div>
           )}
@@ -760,7 +764,7 @@ function ArtistComparison({ artists, concerts }) {
           >
             <option value="">Choose artist B...</option>
             {artists.map(x => (
-              <option key={x.id} value={x.id}>{x.name}</option>
+              <option key={x.id} value={x.id} disabled={x.id === artistA}>{x.name}</option>
             ))}
           </select>
           {b && (
