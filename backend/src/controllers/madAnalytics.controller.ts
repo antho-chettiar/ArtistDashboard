@@ -236,6 +236,21 @@ export const madAnalyticsController = {
       } catch { /* best-effort */ }
       return res.status(200).json({ success: true, data: result });
     } catch (error) {
+      // A timeout here means OUR wait gave up -- the Python job has no way
+      // to know its caller disconnected, and (verified live, 2026-09-29)
+      // keeps running and writes artists.popularity regardless. Without
+      // this, a refresh that merely took longer than our timeout would
+      // leave the Dashboard showing stale numbers for up to an hour even
+      // though the database is already correct. Only for 'timeout' -- a
+      // genuine 'status'/'network' failure means nothing actually changed,
+      // so clearing the cache then would just force a pointless recompute.
+      if (error instanceof AnalyticsUnavailableError && error.reason === 'timeout') {
+        try {
+          await redis.del(POPULARITY_ALL_CACHE_KEY);
+          const dashboardKeys = await redis.keys('dashboard:topArtists:*');
+          if (dashboardKeys.length) await redis.del(...dashboardKeys);
+        } catch { /* best-effort */ }
+      }
       return handleAnalyticsError(res, error, 'refreshAllPopularityScores');
     }
   },
