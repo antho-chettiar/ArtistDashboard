@@ -1,40 +1,12 @@
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import client from '../api/client'
 
-export function useAutoPredict(artistId, city, capacity, enabled, options = {}) {
-  return useQuery({
-    queryKey: ['autoPredict', artistId, city, capacity, options],
-    queryFn: async () => {
-      if (!artistId || !city) return null
-      const payload = {
-        artist_id: artistId,
-        artist_name: options.artistName,
-        city,
-        country: options.country || 'India',
-        avg_ticket_price: options.avgTicketPrice,
-        event_date: options.eventDate,
-        venue_name: options.venueName,
-        venue_type: options.venueType,
-      }
-      if (capacity) payload.capacity = capacity
-      // Pass through a Demand score the page already fetched (e.g. Analysis' own
-      // useMadDemand call for the same artist/city) so the backend's revenue
-      // predictor reuses it instead of recomputing Demand itself from scratch.
-      if (options.demandScore != null) payload.demand_score = options.demandScore
-      // Pass through a Popularity score the page already fetched so Revenue's
-      // Tier 2 feasibility softening (see revenue/predictor.py) has a real
-      // value to check -- omitted entirely (never a guessed/default value)
-      // when the caller hasn't fetched Popularity for this artist.
-      if (options.popularityScore != null) payload.popularity_score = options.popularityScore
-
-      const { data } = await client.post('/analytics/ml/revenue', payload)
-      return data.data
-    },
-    enabled: enabled,
-    staleTime: Infinity,
-    retry: false,
-  })
-}
+// useAutoPredict (called POST /analytics/ml/revenue) removed (2026-09-29):
+// it was the only caller of mad_analytics/revenue/predictor.py, an
+// unvalidated heuristic (no real ticket-sales data backs any of its
+// constants) that product decided was out of scope for this version -- see
+// Analysis.jsx's TABS comment for the full removal note. The Python module
+// and its Node route are left in place, just unreachable from the UI now.
 
 export function useMadGrowth(artistId, enabled) {
   return useQuery({

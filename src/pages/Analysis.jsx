@@ -10,14 +10,9 @@ import BarChart from '../components/charts/BarChart'
 import DivergingBarChart from '../components/charts/DivergingBarChart'
 import LineChart from '../components/charts/LineChart'
 import { formatNumber, formatCurrency } from '../utils/formatters'
-import { citiesMatch } from '../utils/cityAlias'
 import { useArtists } from '../hooks/useArtists'
 import { useConcerts } from '../hooks/useConcerts'
 import {
-  useAutoPredict,
-  useMadDemand,
-  useMadPopularity,
-  useMadRegionalTrend,
   useFeasibilityForCities,
 } from '../hooks/usePredictions'
 // NOTE: useMadGrowth (Growth/RoG) is intentionally no longer imported here — the
@@ -25,7 +20,13 @@ import {
 // archived, not deleted; see mad_analytics/legacy/growth_calculator.py). The
 // hook itself is left intact in usePredictions.js in case it's needed again.
 
-const TABS = ['Profitability Predictor', 'Artist Comparison', 'Where To Tour Next']
+// Profitability Predictor tab removed (2026-09-29): it surfaced
+// mad_analytics/revenue/predictor.py, an unvalidated heuristic (no real
+// ticket-sales data backs any of its constants) that product decided was
+// out of scope for this version. The Python module and its /ml/revenue
+// route are left in place, unlinked, for when a real, data-backed revenue
+// model is built -- only the UI surface is removed here.
+const TABS = ['Artist Comparison', 'Where To Tour Next']
 
 const CITIES = [
   { name: 'Mumbai', multiplier: 1.4, demand: 92, population: 20700000 },
@@ -38,118 +39,6 @@ const CITIES = [
   { name: 'Ahmedabad', multiplier: 0.9, demand: 68, population: 8400000 },
 ]
 
-// Predict revenue for an artist at a city based on historical concert data
-function predictRevenue(artist, city, artistConcerts = [], venueCapacity = 0) {
-  if (!artist || !city) return null
-
-  let avgTicketsSold = 15000
-  let avgAtp = 2000
-  if (artistConcerts.length > 0) {
-    const totalTix = artistConcerts.reduce((s, c) => s + (c.ticketsSold || 0), 0)
-    const totalRev = artistConcerts.reduce((s, c) => s + (c.totalRevenue || 0), 0)
-    const totalAtp = artistConcerts.reduce((s, c) => s + (c.avgTicketPrice || 0), 0)
-
-    avgTicketsSold = Math.floor(totalTix / artistConcerts.length) || 15000
-    avgAtp = (totalAtp / artistConcerts.length) || (totalRev / totalTix) || 2000
-  }
-
-  const defaultCapacity = Math.floor(avgTicketsSold * 1.2 * city.multiplier)
-  const capacity = venueCapacity > 0 ? venueCapacity : defaultCapacity
-  const ticketsSold = capacity > 0
-    ? Math.min(capacity, Math.floor(avgTicketsSold * city.multiplier))
-    : Math.floor(avgTicketsSold * city.multiplier)
-  const sellThrough = capacity > 0 ? Math.min(ticketsSold / capacity, 0.99) : 0
-
-  const atp = avgAtp * city.multiplier
-  const ticketRevenue = ticketsSold * atp
-  const sponsorRevenue = ticketRevenue * 0.18 * (city.demand / 100)
-  const totalRevenue = ticketRevenue + sponsorRevenue
-
-  const popularityScore = Math.min(Math.round(city.demand * 0.6 + (ticketsSold / 50000) * 40), 99)
-
-  return {
-    adjustedCap: capacity,
-    ticketsSold, atp,
-    ticketRevenue, sponsorRevenue, totalRevenue,
-    sellThrough: sellThrough * 100, popularityScore,
-    demandScore: city.demand,
-  }
-}
-
-function predictionDate() {
-  const date = new Date()
-  date.setDate(date.getDate() + 30)
-  return date.toISOString().slice(0, 10)
-}
-
-function applyModelPrediction(fallback, model, realPopularityScore) {
-  // `!= null` (not truthiness) so a genuinely valid $0 heuristic prediction
-  // is used rather than silently discarded in favour of the client-side
-  // fallback estimate.
-  if (!fallback || model?.predicted_revenue == null) return fallback
-
-  const capacity = Number(model.inputs?.venue_capacity || fallback.adjustedCap || 0)
-  const atp = Number(model.inputs?.avg_ticket_price || fallback.atp || 0)
-  const totalRevenue = Number(model.predicted_revenue || 0)
-  const ticketsSold = capacity > 0 && atp > 0
-    ? Math.min(capacity, Math.round(totalRevenue / atp))
-    : fallback.ticketsSold
-  const sellThrough = capacity > 0 ? (ticketsSold / capacity) * 100 : fallback.sellThrough
-
-  return {
-    ...fallback,
-    adjustedCap: capacity || fallback.adjustedCap,
-    ticketsSold,
-    atp: atp || fallback.atp,
-    ticketRevenue: totalRevenue,
-    sponsorRevenue: 0,
-    totalRevenue,
-    sellThrough,
-    // Real Popularity (entropy-weighted platform reach), NOT the Demand score
-    // reused a second time -- see demandScore below for that. Falls back to
-    // the client-side estimate only when the real score hasn't loaded.
-    popularityScore: Math.min(99, Math.round(Number(realPopularityScore ?? fallback.popularityScore))),
-    demandScore: Math.round(Number(model.demand_score_used || fallback.demandScore)),
-    confidence: Math.round(Number(model.confidence || 0) * 100),
-    lowerBound: Number(model.lower_bound || 0),
-    upperBound: Number(model.upper_bound || 0),
-    modelSource: model.model_source || 'mad_analytics',
-    currency: model.currency || 'INR',
-    totalRevenueUsd: Number(model.predicted_revenue_usd || 0),
-    exchangeRate: Number(model.exchange_rate || 1),
-    // Input provenance — never displayed as if this were historical/actual
-    // revenue; used only to label the estimate appropriately (see the
-    // "Revenue Potential" card below).
-    dataQuality: model.data_quality || 'estimated',
-    capacityIsEstimated: Boolean(model.capacity_is_estimated),
-    ticketPriceIsEstimated: Boolean(model.ticket_price_is_estimated),
-    // Where the capacity actually came from ("event_specific" | "known_venue" |
-    // "venue_database" | "default_estimate") — used to label the Venue
-    // Capacity stat with its real provenance instead of the resolver's own
-    // independent "validated"/"estimated" status (see the Venue Capacity
-    // StatBox below, which no longer makes its own separate resolver call).
-    capacitySource: model.capacity_source || null,
-  }
-}
-
-// Score bar component
-function ScoreBar({ label, value, max = 100, color }) {
-  return (
-    <div>
-      <div className="flex justify-between mb-1">
-        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{label}</span>
-        <span className="text-xs font-bold" style={{ color }}>{value}{max === 100 ? '%' : ''}</span>
-      </div>
-      <div className="h-2 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
-        <div
-          className="h-full rounded-full transition-all duration-1000"
-          style={{ width: `${(value / max) * 100}%`, background: `linear-gradient(90deg, ${color}88, ${color})` }}
-        />
-      </div>
-    </div>
-  )
-}
-
 // Stat box
 function StatBox({ label, value, sub, color, delay = 0, badge }) {
   return (
@@ -161,435 +50,6 @@ function StatBox({ label, value, sub, color, delay = 0, badge }) {
       </div>
       <p className="font-display font-bold text-xl" style={{ color: color || 'var(--text-primary)' }}>{value}</p>
       {sub && <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{sub}</p>}
-    </div>
-  )
-}
-
-// Provenance badge — verified (real/event-specific) vs. estimated, matching
-// the exact visual language Venues.jsx already uses for its capacity
-// verified/estimated badges (same rgba backgrounds + colors), so "verified"
-// vs. "estimated" reads identically everywhere in the app.
-function ProvenanceBadge({ verified, label }) {
-  return (
-    <span className="text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0"
-      style={{
-        background: verified ? 'color-mix(in srgb, var(--accent-green) 12%, transparent)' : 'color-mix(in srgb, var(--text-muted) 12%, transparent)',
-        color: verified ? 'var(--accent-green)' : 'var(--text-muted)',
-      }}>
-      {label || (verified ? 'Verified' : 'Estimated')}
-    </span>
-  )
-}
-
-// ── PROFITABILITY PREDICTOR ──
-function ProfitabilityPredictor({ artists, concerts }) {
-  const [selectedArtist, setArtist] = useState('')
-  const [selectedCity, setCity] = useState('')
-  const [selectedVenue, setVenue] = useState('')
-
-  const artist = artists.find(a => a.id === selectedArtist)
-  const city = CITIES.find(c => c.name === selectedCity)
-
-  // Real concerts use inconsistent spellings for the same real city (e.g.
-  // "Bangalore" vs "Bengaluru", "Delhi" vs "New Delhi") -- matching by alias
-  // instead of exact string so picking "Delhi" doesn't silently miss every
-  // concert logged under "New Delhi". See src/utils/cityAlias.js.
-  const venueOptions = selectedCity
-    ? Array.from(new Set(concerts
-      .filter(c => citiesMatch(c.city, selectedCity) && c.venue)
-      .map(c => c.venue))).sort()
-    : []
-
-  const selectedVenueData = selectedVenue
-    ? concerts.find(c => citiesMatch(c.city, selectedCity) && c.venue === selectedVenue)
-    : null
-
-  const artistConcerts = concerts.filter(c => c.artistId === selectedArtist)
-  const fallbackPred = predictRevenue(artist, city, artistConcerts, selectedVenueData?.capacity)
-  const venueName = selectedVenue || (city ? `${city.name} Arena` : '')
-  // Real, event-specific values ONLY — fallbackPred.adjustedCap/atp are this
-  // component's own synthetic local guesses (see predictRevenue() above) and
-  // must never be sent to the canonical revenue model as if they were real
-  // historical data. When there's no genuinely real value, send nothing and
-  // let the backend's own resolver (known venue / venues database / default
-  // estimate) fill the gap and mark the result as an estimate.
-  //
-  // KNOWN_CAPACITY_PLACEHOLDER is excluded even when concerts.capacity is
-  // set: 5,000 is the exact fallback value baked into this codebase's own
-  // capacity resolution everywhere it defaults to "we don't know" (the
-  // heuristic estimator's base case, the batch backfill script, the
-  // ml_engine defaults) -- 45 of this app's 233 concerts share this identical
-  // number across venue types as different as university lawns and cafes,
-  // which only happens if it's a placeholder, not a measurement. Trusting it
-  // as real would badge a guess "Verified"; excluding it lets the live
-  // resolver produce an honest estimate instead.
-  const KNOWN_CAPACITY_PLACEHOLDER = 5000
-  const realVenueCapacity = selectedVenueData?.capacity > 0 && selectedVenueData.capacity !== KNOWN_CAPACITY_PLACEHOLDER
-    ? selectedVenueData.capacity
-    : undefined
-  const realAvgTicketPrice = selectedVenueData?.avgTicketPrice > 0 ? selectedVenueData.avgTicketPrice : undefined
-
-  // Fetched before useAutoPredict (and gated on below) so the revenue call can
-  // reuse this Demand score instead of the backend computing Demand a second
-  // time internally -- the same live computation, done once instead of twice.
-  const demand = useMadDemand(selectedArtist, selectedCity, Boolean(selectedArtist && selectedCity), { country: 'India', targetDate: predictionDate() })
-  // Also fetched before useAutoPredict (and gated on below) so Revenue's
-  // Tier 2 feasibility softening (see revenue/predictor.py's
-  // POPULARITY_BROAD_REACH_THRESHOLD) has a real Popularity score to check --
-  // without this, Tier 2 never activates and every language mismatch silently
-  // falls through to the flat Tier 3 heuristic even for broad-reach artists.
-  const popularity = useMadPopularity(selectedArtist, Boolean(selectedArtist))
-  const modelPrediction = useAutoPredict(selectedArtist, selectedCity, realVenueCapacity, Boolean(selectedArtist && selectedCity && !demand.isLoading && !popularity.isLoading), {
-    artistName: artist?.name,
-    country: 'India',
-    avgTicketPrice: realAvgTicketPrice,
-    eventDate: predictionDate(),
-    venueName,
-    venueType: 'arena',
-    demandScore: demand.data?.score,
-    popularityScore: popularity.data?.popularity_score,
-  })
-  const pred = applyModelPrediction(fallbackPred, modelPrediction.data, popularity.data?.popularity_score)
-  // Heuristic Revenue Model is the canonical/primary predictor (the backend
-  // always computes and returns it first — see mad_analytics/revenue/predictor.py).
-  // `!= null` (not truthiness) so a genuinely valid $0 prediction still counts
-  // as present. fallbackPred/predictRevenue are kept for safety but never
-  // displayed when a real prediction is absent (no fabricated revenue shown).
-  const hasModel = modelPrediction.data?.predicted_revenue != null
-  const revenueLoading = modelPrediction.isFetching
-  // Plain-language note about which inputs are assumed rather than real,
-  // so the estimate is never mistaken for historical/actual revenue.
-  const estimatedInputsNote = (() => {
-    if (!hasModel || pred.dataQuality === 'full') return null
-    const parts = []
-    if (pred.capacityIsEstimated) parts.push('venue capacity')
-    if (pred.ticketPriceIsEstimated) parts.push('ticket pricing')
-    if (!parts.length) return null
-    return `Assumed ${parts.join(' and ')} used — not historical/actual data for this concert.`
-  })()
-  // State-level (NOT city-level) Google Trends interest -- previously only
-  // consumed internally by the revenue predictor's Tier 2 language-affinity
-  // softening; surfaced here next to Popularity so it's no longer invisible.
-  // Keyed by artist NAME (regional_trend_score's own signature), not id.
-  const regionalTrend = useMadRegionalTrend(artist?.name, selectedCity, Boolean(artist?.name && selectedCity))
-  // NOTE: the "Venue Capacity" stat below is sourced from `pred` (the same
-  // canonical revenue call above), not a separate resolver call — a separate
-  // useMadVenueCapacity call here previously passed the client-side synthetic
-  // fallback (venueCapacityValue) as if it were a real supplied capacity,
-  // which the resolver then validated as "validated" even though the number
-  // was never real. Removing the redundant call also removes an unnecessary
-  // concurrent request against the shared analytics service.
-
-  // NOTE: Risk was removed from the active dashboard by product decision
-  // (see mad_analytics/legacy/risk_score.py for the preserved implementation).
-  // Confidence still comes straight from the demand engine (demand.data.confidence).
-
-  // The backend explicitly labels which model produced the primary result
-  // (always "heuristic" today — the Heuristic Revenue Model is canonical/
-  // primary; the ML model is optional/secondary and never overrides it).
-  const revenueIsHeuristic = hasModel && modelPrediction.data?.model_type === 'heuristic'
-
-  // Verdict banner input -- NOT an ROI/profitability figure. The old verdict
-  // read pred.roi, which was computed as (revenue - 0.45*revenue) / (0.45*revenue)
-  // -- algebraically constant at 122.2% for any positive revenue, since "cost"
-  // was never anything but a fixed 45% of that same revenue number, so the
-  // verdict could never say anything but "Highly Profitable". There is no real
-  // cost or margin data anywhere in this system to build an honest ROI from, so
-  // the verdict is reframed around two signals that DO independently vary and
-  // are already computed for the Score Bars above: how much of the venue we
-  // expect to fill (Sell-Through) and how much real demand exists for this
-  // artist in this city (Demand Score).
-  const marketFitScore = hasModel ? Math.round(((pred.sellThrough || 0) + (pred.demandScore || 0)) / 2) : 0
-
-  return (
-    <div>
-      {/* Selector */}
-      <div className="glass-card p-5 mb-6 animate-fade-up">
-        <h3 className="font-display font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
-          Configure Prediction
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-widest block mb-2"
-              style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
-              Select Artist
-            </label>
-            <select
-              value={selectedArtist}
-              onChange={e => setArtist(e.target.value)}
-              className="w-full rounded-xl px-4 py-3 text-sm outline-none transition-all duration-200"
-              style={{
-                background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-                color: 'var(--text-primary)', fontFamily: 'Satoshi'
-              }}
-            >
-              <option value="">Choose an artist...</option>
-              {artists.map(a => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-widest block mb-2"
-              style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
-              Select City
-            </label>
-            <select
-              value={selectedCity}
-              onChange={e => {
-                setCity(e.target.value)
-                setVenue('')
-              }}
-              className="w-full rounded-xl px-4 py-3 text-sm outline-none transition-all duration-200"
-              style={{
-                background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-                color: 'var(--text-primary)', fontFamily: 'Satoshi'
-              }}
-            >
-              <option value="">Choose a city...</option>
-              {CITIES.map(c => (
-                <option key={c.name} value={c.name}>{c.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-xs font-semibold uppercase tracking-widest block mb-2"
-              style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
-              Select Venue
-            </label>
-            <select
-              value={selectedVenue}
-              onChange={e => setVenue(e.target.value)}
-              disabled={!selectedCity}
-              className="w-full rounded-xl px-4 py-3 text-sm outline-none transition-all duration-200"
-              style={{
-                background: selectedCity ? 'var(--bg-secondary)' : 'color-mix(in srgb, var(--text-muted) 8%, transparent)',
-                border: '1px solid var(--border)',
-                color: 'var(--text-primary)', fontFamily: 'Satoshi'
-              }}
-            >
-              <option value="">{selectedCity ? 'Choose a venue...' : 'Select city first'}</option>
-              {venueOptions.map(venue => (
-                <option key={venue} value={venue}>{venue}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* Empty state */}
-      {!pred && (
-        <div className="glass-card p-16 text-center animate-fade-up">
-          <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center"
-            style={{ background: 'color-mix(in srgb, var(--accent-indigo) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-indigo) 20%, transparent)' }}>
-            <Zap size={28} style={{ color: 'var(--accent-indigo)' }} />
-          </div>
-          <h3 className="font-display font-semibold text-lg mb-2" style={{ color: 'var(--text-primary)' }}>
-            Select an Artist & City
-          </h3>
-          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            Our AI model will predict revenue, ticket demand, and ROI
-          </p>
-        </div>
-      )}
-
-      {/* Results */}
-      {pred && artist && city && (
-        <>
-          {/* Header */}
-          <div className="flex items-center gap-3 mb-4 animate-fade-up">
-            <img src={artist.photo} alt={artist.name}
-              className="w-12 h-12 rounded-xl object-cover"
-              style={{ border: '2px solid var(--border-strong)' }} />
-            <div>
-              <p className="font-display font-bold" style={{ color: 'var(--text-primary)' }}>
-                {artist.name} <span style={{ color: 'var(--text-muted)' }}>in</span> {city.name}{selectedVenue ? ` · ${selectedVenue}` : ''}
-              </p>
-              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Predicted performance analysis
-              </p>
-            </div>
-            <div className="ml-auto flex items-center gap-2 px-3 py-1.5 rounded-xl"
-              style={{ background: 'color-mix(in srgb, var(--accent-indigo) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--accent-indigo) 20%, transparent)' }}>
-              <Zap size={13} style={{ color: 'var(--accent-indigo)' }} />
-              <span className="text-xs font-semibold" style={{ color: 'var(--accent-indigo)' }}>
-                {revenueLoading ? 'Running Model' : hasModel ? (revenueIsHeuristic ? 'MAD Analytics · Heuristic Estimate' : 'MAD Analytics') : 'Analytics Unavailable'}
-              </span>
-            </div>
-          </div>
-
-          {/* Revenue: real model KPIs, a loading state, or an explicit
-              unavailable state — never the fabricated fallback numbers. */}
-          {revenueLoading ? (
-            <div className="glass-card p-6 mb-6 text-center animate-fade-up">
-              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Running revenue model…</p>
-            </div>
-          ) : hasModel ? (
-            /* Success — existing KPI grid, relabeled so a heuristic estimate
-               is never described as historical/actual revenue. */
-            <>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-              <StatBox label="Revenue Potential" value={formatCurrency(pred.totalRevenue, pred.currency)} sub={revenueIsHeuristic ? (pred.dataQuality === 'full' ? 'Heuristic estimate' : 'Heuristic estimate · assumed inputs') : undefined} color="var(--accent-gold)" delay={0} />
-              <StatBox label="Est. Tickets Sold" value={formatNumber(pred.ticketsSold)} color="var(--accent-indigo)" delay={80} />
-              <StatBox
-                label="Avg. Ticket Price"
-                value={formatCurrency(pred.atp, pred.currency)}
-                color="var(--accent-green)"
-                delay={160}
-                badge={<ProvenanceBadge verified={!pred.ticketPriceIsEstimated} />}
-              />
-              <StatBox
-                label="Model Confidence"
-                value={`${pred.confidence}%`}
-                color="var(--accent-green)"
-                delay={240}
-              />
-            </div>
-            {estimatedInputsNote && (
-              <p className="text-xs mb-6 -mt-3" style={{ color: 'var(--text-muted)' }}>
-                {estimatedInputsNote}
-              </p>
-            )}
-            </>
-          ) : (
-            /* Unavailable — no fabricated revenue is shown */
-            <div className="glass-card p-6 mb-6 animate-fade-up"
-              style={{ border: '1px solid color-mix(in srgb, var(--accent-gold) 25%, transparent)', background: 'color-mix(in srgb, var(--accent-gold) 6%, transparent)' }}>
-              <div className="flex items-center gap-2 mb-1">
-                <Zap size={15} style={{ color: 'var(--accent-gold)' }} />
-                <span className="text-sm font-bold" style={{ color: 'var(--accent-gold)' }}>
-                  Revenue prediction unavailable
-                </span>
-              </div>
-              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                The Heuristic Revenue Model couldn’t produce a result — required concert
-                or venue inputs (capacity, ticket price, or demand data) are missing or
-                unavailable. No estimated revenue is shown. Live signals below remain
-                available.
-              </p>
-            </div>
-          )}
-
-          {/* Growth Score tile removed — Growth/RoG was archived by product decision
-              (not deleted; see mad_analytics/legacy/growth_calculator.py). Its weight
-              was folded into Popularity and Demand, so it no longer has its own
-              number to show on this screen. */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mb-6">
-            <StatBox
-              label="Demand Score"
-              value={demand.data ? `${demand.data.score?.toFixed?.(1) ?? demand.data.score}` : '—'}
-              sub={demand.data?.components?.platform_size != null ? `Platform size ${demand.data.components.platform_size.toFixed?.(1) ?? demand.data.components.platform_size}` : 'No demand data'}
-              color="var(--accent-gold)"
-            />
-            <StatBox
-              label="Popularity"
-              value={popularity.data ? `${popularity.data.popularity_score?.toFixed?.(1) ?? popularity.data.popularity_score}` : '—'}
-              sub={popularity.data?.platform_weights ? 'Entropy weighted' : 'No popularity data'}
-              color="var(--accent-green)"
-            />
-            {/* Regional (state-level) Google Trends -- deliberately never
-                mislabelled as city-level; Google Trends' public API doesn't
-                resolve finer than state/region for India (see
-                mad_analytics/trends/regional.py). */}
-            <StatBox
-              label="Regional Search Interest"
-              value={
-                !regionalTrend.data ? '—'
-                  : regionalTrend.data.score != null ? `${regionalTrend.data.score.toFixed?.(1) ?? regionalTrend.data.score}`
-                  : 'Not available'
-              }
-              sub={
-                !regionalTrend.data ? 'No regional trend data'
-                  : regionalTrend.data.score != null
-                    ? `State-level search interest in ${regionalTrend.data.state_name || regionalTrend.data.geo_code}`
-                    // geo_code present but score null = a real state mapping
-                    // exists but the live Google Trends fetch itself failed
-                    // (rate-limited/blocked/network) -- distinct from there
-                    // being no state mapping for this city at all.
-                    : regionalTrend.data.geo_code
-                      ? 'Google Trends unavailable right now'
-                      : `No state-level mapping for ${selectedCity}`
-              }
-              color="var(--accent-indigo)"
-            />
-            {/* Renamed from "Signal Completeness" — same High/Medium/Low logic
-                underneath (compute_confidence in demand/scorer.py), just a label a
-                stakeholder reads more naturally as "how much data backed this score." */}
-            <StatBox
-              label="Data Confidence"
-              value={demand.data?.confidence ?? '—'}
-              sub={demand.data?.confidence ? 'Demand data availability' : 'No confidence data'}
-              color="var(--accent-indigo)"
-            />
-            {/* Without a selected venue, `pred.adjustedCap` is only ever a
-                generic per-city placeholder ("{city} Arena" -- see venueName
-                above), not a real venue's capacity -- showing a number here
-                would look exactly like real venue data while actually being
-                nothing of the sort. Prompt for a venue instead of guessing. */}
-            <StatBox
-              label="Venue Capacity"
-              value={!selectedVenue ? '—' : hasModel ? formatNumber(pred.adjustedCap) : '—'}
-              sub={!selectedVenue
-                ? 'Select a venue above to see its capacity'
-                : hasModel
-                  ? (pred.capacityIsEstimated
-                    ? `Estimated${pred.capacitySource ? ` · ${pred.capacitySource.replace(/_/g, ' ')}` : ''}`
-                    : 'Event-specific')
-                  : 'No venue data'}
-              color="var(--accent-indigo)"
-              badge={selectedVenue && hasModel ? <ProvenanceBadge verified={!pred.capacityIsEstimated} /> : null}
-            />
-          </div>
-
-          {/* Score bars, ROI verdict, revenue breakdown and city comparison are
-              model-derived — rendered only when a REAL revenue prediction exists.
-              (Unchanged success layout; simply gated so no fabricated revenue shows.) */}
-          {hasModel && (
-          <>
-          {/* Score Bars */}
-          <div className="grid grid-cols-1 gap-4 mb-6">
-            <div className="glass-card p-5 animate-fade-up" style={{ animationDelay: '100ms', animationFillMode: 'both', opacity: 0 }}>
-              <h3 className="font-display font-semibold text-sm mb-4" style={{ color: 'var(--text-primary)' }}>
-                Performance Scores
-              </h3>
-              <div className="space-y-4">
-                <ScoreBar label="Popularity Score" value={pred.popularityScore} color="var(--accent-indigo)" />
-                <ScoreBar label="City Demand Index" value={pred.demandScore} color="var(--accent-gold)" />
-                <ScoreBar label="Sell-Through Rate" value={Math.round(pred.sellThrough)} color="var(--accent-green)" />
-                <ScoreBar label="Revenue Confidence" value={Math.round(pred.confidence ?? 0)} color="var(--accent-red)" />
-              </div>
-
-              {/* Verdict -- driven by marketFitScore (Sell-Through + Demand,
-                  both real), not a fabricated ROI/profitability number. See
-                  marketFitScore's definition above for why. */}
-              <div className="mt-5 p-3 rounded-xl"
-                style={{
-                  background: marketFitScore > 60
-                    ? 'color-mix(in srgb, var(--accent-green) 8%, transparent)' : marketFitScore > 30
-                      ? 'color-mix(in srgb, var(--accent-gold) 8%, transparent)' : 'color-mix(in srgb, var(--accent-red) 8%, transparent)',
-                  border: `1px solid ${marketFitScore > 60 ? 'color-mix(in srgb, var(--accent-green) 20%, transparent)' : marketFitScore > 30 ? 'color-mix(in srgb, var(--accent-gold) 20%, transparent)' : 'color-mix(in srgb, var(--accent-red) 20%, transparent)'}`
-                }}>
-                <div className="flex items-center gap-2 mb-1">
-                  <Trophy size={14} style={{ color: marketFitScore > 60 ? 'var(--accent-green)' : marketFitScore > 30 ? 'var(--accent-gold)' : 'var(--accent-red)' }} />
-                  <span className="text-xs font-bold" style={{ color: marketFitScore > 60 ? 'var(--accent-green)' : marketFitScore > 30 ? 'var(--accent-gold)' : 'var(--accent-red)' }}>
-                    {marketFitScore > 60 ? 'Strong Market Fit' : marketFitScore > 30 ? 'Moderate Market Fit' : 'Soft Demand Signals'}
-                  </span>
-                </div>
-                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  {marketFitScore > 60
-                    ? `High predicted sell-through and demand. ${city.name} looks like a strong fit for ${artist.name}.`
-                    : marketFitScore > 30
-                      ? `Decent potential. Consider a mid-size venue to keep sell-through healthy.`
-                      : `Lower demand signals. Consider a smaller venue or a different timing.`}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          </>
-          )}
-        </>
-      )}
     </div>
   )
 }
@@ -1236,7 +696,7 @@ function CityFeasibility({ artists }) {
 
 // ── MAIN PAGE ──
 function Analysis() {
-  const [activeTab, setTab] = useState('Profitability Predictor')
+  const [activeTab, setTab] = useState('Artist Comparison')
 
   const { data: artists, isLoading: loadingArtists, error: errArtists } = useArtists()
   // useConcerts() defaults to limit:50 (one page, no fetchNextPage call on
@@ -1274,7 +734,7 @@ function Analysis() {
 
       <PageHeader
         title="Analysis"
-        subtitle="Revenue prediction and artist comparison engine"
+        subtitle="Artist comparison and touring feasibility engine"
       />
 
       {/* Tabs */}
@@ -1294,12 +754,11 @@ function Analysis() {
               background: 'transparent'
             }}
           >
-            {tab === 'Profitability Predictor' ? '🎯 ' : tab === 'Artist Comparison' ? '⚔️ ' : '🧭 '}{tab}
+            {tab === 'Artist Comparison' ? '⚔️ ' : '🧭 '}{tab}
           </button>
         ))}
       </div>
 
-      {activeTab === 'Profitability Predictor' && <ProfitabilityPredictor artists={safeArtists} concerts={safeConcerts} />}
       {activeTab === 'Artist Comparison' && <ArtistComparison artists={safeArtists} concerts={safeConcerts} />}
       {activeTab === 'Where To Tour Next' && <CityFeasibility artists={safeArtists} />}
     </div>
