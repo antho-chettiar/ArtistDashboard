@@ -526,12 +526,49 @@ def _feature_importances(model, preprocessor, row_df: pd.DataFrame) -> dict[str,
                 sorted(imp.items(), key=lambda x: -x[1])[:10]}
 
 
-def _confidence(lower: float, upper: float, predicted: float) -> float:
-    """Tighter interval → higher confidence (max 0.95)."""
-    if predicted == 0:
-        return 0.5
-    relative_width = (upper - lower) / predicted
-    return round(min(0.95, max(0.1, 1 - relative_width / 2)), 3)
+#: Prediction-interval half-width by data_quality tier, replacing a single
+#: fixed +-30% band that was applied to every prediction regardless of
+#: whether its capacity/ticket-price inputs were real or estimated. Tighter
+#: for real inputs, wider when the formula had to fall back to an estimate --
+#: real venue capacity + ticket price genuinely constrain the outcome more
+#: than a guessed default does.
+_RANGE_HALF_WIDTH_BY_DATA_QUALITY = {"full": 0.15, "partial": 0.30, "estimated": 0.45}
+
+#: Base confidence by the same data_quality tier -- see _revenue_confidence().
+_BASE_CONFIDENCE_BY_DATA_QUALITY = {"full": 0.90, "partial": 0.70, "estimated": 0.50}
+
+
+def _revenue_confidence(
+    data_quality: str,
+    ml_available: bool,
+    ml_predicted_revenue: Optional[float],
+    predicted: float,
+) -> float:
+    """Real confidence, driven by how much of THIS prediction's inputs were
+    real vs. estimated (data_quality — the same honest tri-level signal
+    already used to label the Revenue Potential card "Estimated"/"Assumed
+    inputs" on the frontend), with a small boost when the secondary
+    (optional) ML model independently agrees with the primary heuristic.
+
+    This replaces the previous _confidence(lower, upper, predicted), which
+    computed relative_width = (upper - lower) / predicted -- but lower/upper
+    were themselves always predicted*0.70 / predicted*1.30, fixed multiples
+    of predicted itself. relative_width was therefore ALWAYS exactly 0.60,
+    making confidence ALWAYS exactly 0.70 for every single prediction,
+    regardless of any real input to the model -- the same "fixed fraction of
+    itself" bug class as the profitability verdict's old ROI formula (see
+    Analysis.jsx's marketFitScore). FORMULA_DECISIONS.md previously decided
+    to keep this value "as-is, no change" on the belief it was a legitimate
+    (if simple) varying signal; that decision predates discovering it was a
+    mathematical tautology rather than a real, if crude, estimate, and is
+    superseded by this fix.
+    """
+    base = _BASE_CONFIDENCE_BY_DATA_QUALITY.get(data_quality, 0.50)
+    if ml_available and ml_predicted_revenue is not None and predicted > 0:
+        relative_gap = abs(ml_predicted_revenue - predicted) / predicted
+        if relative_gap <= 0.25:
+            base = min(0.95, base + 0.05)
+    return round(base, 3)
 
 
 def _heuristic_revenue(feature_dict: dict) -> float:
@@ -609,9 +646,22 @@ def calculate(payload: RevenueInput) -> RevenueOutput:
         feature_dict = _build_feature_row(payload)
         row_df = pd.DataFrame([feature_dict])
 
+        # Computed here (not further below, where the rest of input
+        # provenance used to be assembled) because the prediction range's
+        # width now depends on it too -- see _RANGE_HALF_WIDTH_BY_DATA_QUALITY.
+        capacity_is_estimated = feature_dict["capacity_is_estimated"]
+        ticket_price_is_estimated = feature_dict["ticket_price_is_estimated"]
+        if not capacity_is_estimated and not ticket_price_is_estimated:
+            data_quality = "full"
+        elif capacity_is_estimated and ticket_price_is_estimated:
+            data_quality = "estimated"
+        else:
+            data_quality = "partial"
+
         predicted   = _heuristic_revenue(feature_dict)
-        lower       = predicted * 0.70
-        upper       = predicted * 1.30
+        half_width  = _RANGE_HALF_WIDTH_BY_DATA_QUALITY.get(data_quality, 0.30)
+        lower       = predicted * (1 - half_width)
+        upper       = predicted * (1 + half_width)
         importances = {
             "venue_capacity":    0.30,
             "avg_ticket_price":  0.25,
@@ -666,14 +716,9 @@ def calculate(payload: RevenueInput) -> RevenueOutput:
     # Real inputs and fallback/estimated inputs are never conflated: each is
     # labeled with where it came from, so the caller (frontend) can present
     # this as an estimate rather than implying historical/actual revenue.
-    capacity_is_estimated = feature_dict["capacity_is_estimated"]
-    ticket_price_is_estimated = feature_dict["ticket_price_is_estimated"]
-    if not capacity_is_estimated and not ticket_price_is_estimated:
-        data_quality = "full"
-    elif capacity_is_estimated and ticket_price_is_estimated:
-        data_quality = "estimated"
-    else:
-        data_quality = "partial"
+    # (capacity_is_estimated/ticket_price_is_estimated/data_quality were
+    # already computed above, alongside the now data_quality-aware lower/
+    # upper range -- not recomputed here.)
 
     return RevenueOutput(
         concert_id=concert.concert_id,
@@ -681,7 +726,7 @@ def calculate(payload: RevenueInput) -> RevenueOutput:
         predicted_revenue=predicted_local,
         lower_bound=lower_local,
         upper_bound=upper_local,
-        confidence=_confidence(lower, upper, predicted),
+        confidence=_revenue_confidence(data_quality, ml_available, ml_predicted_revenue, predicted),
         demand_score_used=feature_dict["demand_score"],
         feature_importances=importances,
         computed_at=datetime.now(timezone.utc).isoformat(),
