@@ -7,15 +7,12 @@ import {
 import PageHeader from '../components/ui/PageHeader'
 import ChartContainer from '../components/charts/ChartContainer'
 import BarChart from '../components/charts/BarChart'
-import DivergingBarChart from '../components/charts/DivergingBarChart'
 import LineChart from '../components/charts/LineChart'
-import { formatNumber } from '../utils/formatters'
 import { useArtists } from '../hooks/useArtists'
 import { useConcerts } from '../hooks/useConcerts'
 import { useArtistScore } from '../hooks/useViberate'
 import {
   useRepeatVisitRate,
-  useArtistInsights,
   useCityAudiencePresence,
   useFeasibilityForCities,
 } from '../hooks/usePredictions'
@@ -60,7 +57,10 @@ function StatBox({ label, value, sub, color, delay = 0, badge }) {
 
 // ── ARTIST COMPARISON ──
 function ArtistComparison({ artists, concerts }) {
-  const CONCERT_CITIES = ['All Cities', ...Array.from(new Set(concerts.map(c => c.city))).sort()]
+  // India only -- this roster is India-only right now, but a stray non-Indian
+  // concert record (e.g. the one Abu Dhabi show) would otherwise leak into
+  // this dropdown as a selectable "city" with no Indian booking data behind it.
+  const CONCERT_CITIES = ['All Cities', ...Array.from(new Set(concerts.filter(c => c.country === 'India').map(c => c.city))).sort()]
 
   const [artistA, setArtistA] = useState('')
   const [artistB, setArtistB] = useState('')
@@ -89,17 +89,11 @@ function ArtistComparison({ artists, concerts }) {
   const scoreB = useArtistScore(artistB)
   const repeatA = useRepeatVisitRate(artistA, Boolean(artistA))
   const repeatB = useRepeatVisitRate(artistB, Boolean(artistB))
-  const insightsA = useArtistInsights(artistA, Boolean(artistA))
-  const insightsB = useArtistInsights(artistB, Boolean(artistB))
   // City Audience % only makes sense once a specific city is picked -- see
   // audience_city/scorer.py: coverage is real but artist-dependent and can
   // fluctuate, so `available` (not a fabricated 0%) gates display per artist.
   const audienceA = useCityAudiencePresence(artistA, citySelected ? selectedCity : null, Boolean(artistA) && citySelected)
   const audienceB = useCityAudiencePresence(artistB, citySelected ? selectedCity : null, Boolean(artistB) && citySelected)
-
-  const biggestShow = insightsQuery => insightsQuery.data?.insights?.find(i => i.insight_type === 'biggest_show') || null
-  const biggestShowA = biggestShow(insightsA)
-  const biggestShowB = biggestShow(insightsB)
 
   // 'a' | 'b' | 'tie' -- a bare `x > y ? 'a' : 'b'` treats every tie as a B
   // win, which used to fire constantly on this sparse dataset (RoG/Revenue/
@@ -156,28 +150,6 @@ function ArtistComparison({ artists, concerts }) {
   const winsA = contestedRows.filter(r => r.winner === 'a').length
   const winsB = contestedRows.filter(r => r.winner === 'b').length
   const overallWinner = winsA === winsB ? 'tie' : (winsA > winsB ? 'a' : 'b')
-
-  // Platform mix, normalised to each artist's OWN total followers -- the
-  // raw-count version compared whichever artist has more overall reach, not
-  // the platforms themselves (Amaal's Spotify dwarfing Aparshakti's entire
-  // profile said nothing about Instagram vs. Spotify). As a % of each
-  // artist's own reach, both bars share a fair 0-100% scale regardless of
-  // how different their absolute audience sizes are. Shaped for
-  // DivergingBarChart: category + two plain positive numbers.
-  const PLATFORM_LABELS = { instagram: 'Instagram', youtube: 'YouTube', spotify: 'Spotify' }
-  const totalFollowersA = a ? Object.values(a.followers || {}).reduce((s, v) => s + v, 0) : 0
-  const totalFollowersB = b ? Object.values(b.followers || {}).reduce((s, v) => s + v, 0) : 0
-  const platformReachData = a && b
-    ? Object.keys(PLATFORM_LABELS).map(p => {
-      const aFollowers = a.followers?.[p] || 0
-      const bFollowers = b.followers?.[p] || 0
-      return {
-        category: PLATFORM_LABELS[p],
-        left: totalFollowersA > 0 ? Number(((aFollowers / totalFollowersA) * 100).toFixed(1)) : 0,
-        right: totalFollowersB > 0 ? Number(((bFollowers / totalFollowersB) * 100).toFixed(1)) : 0,
-      }
-    })
-    : []
 
   return (
     <div>
@@ -402,35 +374,6 @@ function ArtistComparison({ artists, concerts }) {
             </div>
           </div>
 
-          {/* Biggest verified show -- a concrete real fact per artist, not a
-              contest (a bigger number here doesn't mean "better," just
-              "different real venue"), so no trophy/progress-bar treatment.
-              Absent for an artist with no verified show yet (e.g. only
-              placeholder-capacity concerts on record) -- shown honestly,
-              never fabricated. See touring_history/scorer.py. */}
-          {(biggestShowA || biggestShowB) && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-              <div className="glass-card p-4 animate-fade-up" style={{ borderLeft: '3px solid var(--accent-indigo)' }}>
-                <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: 'var(--accent-indigo)', fontSize: '10px' }}>
-                  {a.name}'s Biggest Verified Show
-                </p>
-                <p className="text-sm" style={{ color: 'var(--text-primary)' }}>
-                  {biggestShowA ? biggestShowA.headline.replace(`${a.name}'s biggest verified show: `, '') : 'No verified show on record yet'}
-                </p>
-                {biggestShowA && <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{biggestShowA.detail}</p>}
-              </div>
-              <div className="glass-card p-4 animate-fade-up" style={{ borderLeft: '3px solid var(--accent-gold)' }}>
-                <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: 'var(--accent-gold)', fontSize: '10px' }}>
-                  {b.name}'s Biggest Verified Show
-                </p>
-                <p className="text-sm" style={{ color: 'var(--text-primary)' }}>
-                  {biggestShowB ? biggestShowB.headline.replace(`${b.name}'s biggest verified show: `, '') : 'No verified show on record yet'}
-                </p>
-                {biggestShowB && <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{biggestShowB.detail}</p>}
-              </div>
-            </div>
-          )}
-
           {/* City Audience % -- only meaningful once a specific city is
               picked (real Spotify/Instagram audience-by-city data, see
               audience_city/scorer.py). `available` gates display per artist
@@ -475,43 +418,6 @@ function ArtistComparison({ artists, concerts }) {
               </div>
             </div>
           )}
-
-          {/* Digital Reach -- Total Followers lives here (it's the sum of
-              the bars below), separate from the touring/commercial metrics
-              in the table above (which now carry their own inline progress
-              bars instead of a repeated chart section). Platform mix is
-              normalised to each artist's own total and plotted as a
-              diverging (butterfly/tornado) chart -- one shared platform
-              axis down the middle, each artist's share extending out to
-              its own side of a 0-line, so the comparison stays between
-              platforms rather than between the artists' overall reach. */}
-          <ChartContainer
-            title="Digital Reach"
-            subtitle="Platform mix per artist, as a % of their own total followers -- comparing platforms, not overall audience size"
-            delay={100}
-          >
-            <div className="flex items-center justify-between mb-4 pb-4" style={{ borderBottom: '1px solid var(--border)' }}>
-              <div>
-                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{a.name}</p>
-                <p className="font-display font-bold text-lg" style={{ color: 'var(--accent-indigo)' }}>{formatNumber(totalFollowersA)}</p>
-                <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Total Followers</p>
-              </div>
-              <div className="text-right">
-                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{b.name}</p>
-                <p className="font-display font-bold text-lg" style={{ color: 'var(--accent-gold)' }}>{formatNumber(totalFollowersB)}</p>
-                <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Total Followers</p>
-              </div>
-            </div>
-            <DivergingBarChart
-              data={platformReachData}
-              leftLabel={a.name}
-              rightLabel={b.name}
-              leftColor="var(--accent-indigo)"
-              rightColor="var(--accent-gold)"
-              valueSuffix="%"
-              height={200}
-            />
-          </ChartContainer>
         </>
       )}
     </div>
