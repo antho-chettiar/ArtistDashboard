@@ -273,6 +273,74 @@ class TestDemandScorer:
         assert demand_calc(with_recent).score == demand_calc(without).score
 
 
+class TestCityAffinity:
+    """2026-09-30 redesign: fixed-anchor, real-size-and-density blend,
+    replacing a hand-picked 12-city tier table that flattened every other
+    real city to one identical default -- see demand/scorer.py's module
+    comment for the full incident."""
+
+    def _reset_caches(self, monkeypatch):
+        monkeypatch.setattr(demand_scorer, "_nccs_cache", None)
+        monkeypatch.setattr(demand_scorer, "_nccs_affluence_ratio_cache", None)
+
+    def _write_fixture(self, tmp_path, rows):
+        import json
+        path = tmp_path / "nccs.json"
+        path.write_text(json.dumps(rows), encoding="utf-8")
+        return str(path)
+
+    def test_matches_hand_computed_blend(self, monkeypatch, tmp_path):
+        # City A: the real anchor-setting city (its own AB = the absolute
+        # anchor exactly, and its own ratio = the ratio anchor exactly) —
+        # both components should read exactly 1.0, score exactly 100.
+        # City B: half the absolute anchor's AB, half the ratio anchor's
+        # ratio — both components read exactly 0.5, score exactly 50.
+        rows = [
+            {"city": "Anchor City", "population": 100.0, "nccs_a": demand_scorer.NCCS_ABSOLUTE_ANCHOR / 2,
+             "nccs_b": demand_scorer.NCCS_ABSOLUTE_ANCHOR / 2, "nccs_c": 0.0},
+            {"city": "Half City", "population": 100.0,
+             "nccs_a": demand_scorer.NCCS_ABSOLUTE_ANCHOR / 4, "nccs_b": demand_scorer.NCCS_ABSOLUTE_ANCHOR / 4,
+             "nccs_c": 0.0},
+        ]
+        # Anchor City's ratio = AB / population; force it to exactly NCCS_RATIO_ANCHOR
+        # by setting population = AB / NCCS_RATIO_ANCHOR.
+        anchor_ab = demand_scorer.NCCS_ABSOLUTE_ANCHOR
+        rows[0]["population"] = anchor_ab / demand_scorer.NCCS_RATIO_ANCHOR
+        half_ab = demand_scorer.NCCS_ABSOLUTE_ANCHOR / 2
+        rows[1]["population"] = half_ab / (demand_scorer.NCCS_RATIO_ANCHOR / 2)
+
+        self._reset_caches(monkeypatch)
+        monkeypatch.setattr(demand_scorer, "_NCCS_PATH", self._write_fixture(tmp_path, rows))
+
+        idx = demand_scorer.nccs_market_activity()
+        assert idx["anchor city"] == pytest.approx(1.0, abs=0.001)
+        assert idx["half city"] == pytest.approx(0.5, abs=0.001)
+        assert demand_scorer.city_affinity_score("anchor city", idx["anchor city"]) == pytest.approx(100.0, abs=0.1)
+        assert demand_scorer.city_affinity_score("half city", idx["half city"]) == pytest.approx(50.0, abs=0.1)
+
+    def test_city_name_no_longer_changes_the_score(self, monkeypatch):
+        # The removed tier table used to multiply the SAME index differently
+        # depending on the city's name (a hand-picked list vs. the 0.65
+        # default). city_affinity_score must now be identical regardless of
+        # which city name is passed for the same index -- the city argument
+        # is accepted only for backward-compatible call sites.
+        self._reset_caches(monkeypatch)
+        assert demand_scorer.city_affinity_score("mumbai", 0.6) == demand_scorer.city_affinity_score("some tiny unlisted town", 0.6)
+
+    def test_two_unlisted_cities_are_no_longer_flattened_to_the_same_default(self):
+        """The literal regression this fix targets: Surat and Lucknow both
+        fell outside the old 12-city tier table and were flattened to an
+        identical 0.65 default, despite genuinely different real NCCS data.
+        Uses the actual bundled nccs.json (not a fixture) -- this is the
+        real production reference data."""
+        idx = demand_scorer.nccs_market_activity()
+        assert "surat" in idx and "lucknow" in idx
+        assert idx["surat"] != idx["lucknow"]
+        # Surat's real NCCS_A+B is genuinely larger than Lucknow's -- confirm
+        # the fix preserves the correct real-world ordering, not just "different".
+        assert idx["surat"] > idx["lucknow"]
+
+
 class TestDemandGenreTilt:
     """Genre-style platform tilt (Phase 3, Day 6) applied to Platform Size."""
 

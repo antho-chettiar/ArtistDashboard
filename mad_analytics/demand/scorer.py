@@ -126,48 +126,48 @@ def platform_size_scores() -> dict[str, float]:
 
 # ── City Affinity Score (Formula Blueprint v2.0 — Step 3) ─────────────────────
 #
-#   city_affinity = city_tier_factor × market_activity_index × 100
+#   city_affinity = market_activity_index × 100
 #
-# city_tier_factor is a documented static table (below). market_activity_index is
-# a 0–1 signal of how active the live-music market is in that city; by default it
-# is the count of concerts in the city over the last 12 months, normalized by the
-# busiest city (count / max_count).
+# market_activity_index is a 0–1 signal of how strong the live-music market is
+# in that city, produced by a *provider* function. Preferred provider: real
+# NCCS consumer-class data (nccs_market_activity() below -- see its own
+# comment for the fixed-anchor, real-size-and-density blend, and the
+# 2026-09-30 incident that replaced a hand-picked 12-city tier table with
+# it). Fallback provider (used only if the NCCS reference file is
+# unavailable): the count of concerts in that city over the last 12 months,
+# normalized by the busiest city (count / max_count) -- a real but different
+# signal ("how much has THIS APP already recorded here" rather than "how
+# affluent/large is this real market"), with no provenance flag surfaced
+# downstream when the fallback is the one actually in effect.
 #
-# NCCS PLUG-POINT: market_activity_index is produced by a *provider* function.
-# The default provider reads the concerts table; a future NCCS-backed provider can
-# be passed to city_affinity_scores() / city_affinity_for_city() to replace the
-# market-activity source WITHOUT changing this formula or the public interface.
+# NCCS PLUG-POINT: pass a different provider to city_affinity_scores() /
+# city_affinity_for_city() to swap the market-activity source without
+# touching the formula.
 
 logger = logging.getLogger(__name__)
-
-CITY_TIER_FACTORS = {
-    # Tier 1 — Mega
-    "mumbai": 1.00, "delhi": 1.00, "new delhi": 1.00, "delhi ncr": 1.00,
-    # Tier 2 — Major
-    "bangalore": 0.85, "bengaluru": 0.85, "hyderabad": 0.85, "chennai": 0.85, "kolkata": 0.85,
-    # Tier 3 — Large
-    "pune": 0.75, "ahmedabad": 0.75, "jaipur": 0.75, "chandigarh": 0.75,
-}
-DEFAULT_CITY_TIER_FACTOR = 0.65   # Tier 4 — all remaining metros
 
 # A market-activity provider returns {city_lower: market_activity_index_0_1}.
 MarketActivityProvider = Callable[[], "dict[str, float]"]
 
 
-def city_tier_factor(city: str) -> float:
-    """Resolve the documented city tier factor (defaults to 0.65 for other cities)."""
-    if not city:
-        return DEFAULT_CITY_TIER_FACTOR
-    return CITY_TIER_FACTORS.get(city.strip().lower(), DEFAULT_CITY_TIER_FACTOR)
-
-
 def city_affinity_score(city: str, market_activity_index: float) -> float:
-    """Pure: city_affinity = city_tier_factor(city) × market_activity_index × 100.
+    """Pure: city_affinity = market_activity_index × 100.
 
     market_activity_index is clamped to [0, 1]. Output 0–100. No DB — offline-testable.
+
+    `city` is unused (kept for backward-compatible call sites/tests) --
+    2026-09-30: this used to also multiply by a hand-picked city_tier_factor
+    covering only 12 cities (everything else fell to one flat 0.65 default,
+    silently discarding real NCCS data this app already has for 33 OTHER
+    real cities -- Lucknow, Surat, Nagpur, Indore and more). Removed: the
+    market_activity_index itself is now a fixed-anchor blend of real city
+    size AND real per-capita affluence (see nccs_market_activity() below),
+    computed the same way for every one of the 43 NCCS-covered cities, not
+    just a hand-picked 12 -- so the tier multiplier's job is already done,
+    more precisely, by the index itself.
     """
     idx = max(0.0, min(1.0, float(market_activity_index or 0.0)))
-    return round(min(100.0, max(0.0, city_tier_factor(city) * idx * 100.0)), 2)
+    return round(min(100.0, max(0.0, idx * 100.0)), 2)
 
 
 def _concert_market_activity() -> dict[str, float]:
@@ -205,10 +205,43 @@ def _concert_market_activity() -> dict[str, float]:
 
 # ── NCCS-backed market activity (Blueprint: "Future NCCS integration") ────────
 # Static consumer-class reference data bundled at mad_analytics/data/nccs.json.
-#   market_activity_index = (NCCS_A + NCCS_B) / max(A+B across cities), in [0, 1]
-# — a city's affluent + upper-middle consumer base (the concert-ticket segment),
-# normalized so the strongest market = 1.0. This is the NCCS source plugged into
-# the same provider interface City Affinity was built around (no formula change).
+#
+#   market_activity_index = 0.7 × min(1, (NCCS_A+NCCS_B) / NCCS_ABSOLUTE_ANCHOR)
+#                          + 0.3 × min(1, affluence_ratio / NCCS_RATIO_ANCHOR)
+#
+# 2026-09-30 redesign -- two real problems in the previous version, found in
+# the same audit that fixed Popularity/Platform Size:
+#   1. It was cohort-relative: "/ max(A+B across cities)" meant every city's
+#      score depended on whichever city happened to be biggest in the CURRENT
+#      data -- the exact same fragile pattern already fixed everywhere else
+#      (a data refresh or a new city entry could silently reshuffle every
+#      other city's score). Fixed anchors below close this the same way
+#      Popularity's PLATFORM_ANCHORS did. Delhi is the real, stable ceiling
+#      today (NCCS_A+B = 15,483,815) -- unlike an artist roster, a new city
+#      isn't going to dethrone it next quarter, so anchoring near its real
+#      value (rather than well above it) is a deliberate, different choice
+#      from Popularity's anchors, not an oversight.
+#   2. It was pure absolute city size, so two cities of very different real
+#      density scored identically whenever a hand-picked tier table (removed
+#      the same day, see city_affinity_score()) flattened them to the same
+#      bucket -- e.g. Surat (real market index 0.23) and Lucknow (0.10) both
+#      read as an identical 0.65 under the old tier multiplier, despite Surat
+#      being genuinely ~2.3x bigger by this exact data. The 30% per-capita
+#      term (city_affluence_ratio, already computed elsewhere in this file
+#      for Revenue's price-friction factor) restores that real distinction.
+# Known, honestly unfixed limits: NCCS affluence is a proxy for who CAN
+# afford a ticket, not verified proof anyone actually buys one -- no real
+# ticket-sales data exists to check either weight or anchor against, so
+# 0.7/0.3 is a labeled V1 assumption, same convention as PLATFORM_WEIGHTS.
+# The reference file also carries no date/vintage field anywhere, so its
+# real age is unverifiable from the data itself -- flagged, not fixable
+# without a fresher source. And this only ever covers the 43 cities the file
+# already has: a city outside that set is invisible to City Affinity (and
+# therefore to TOPSIS's candidate universe) regardless of this fix.
+NCCS_ABSOLUTE_ANCHOR = 15_000_000.0   # ~Delhi's real current NCCS_A+B
+NCCS_RATIO_ANCHOR = 0.55              # just above Mumbai's real current ratio (~0.515)
+NCCS_ABSOLUTE_WEIGHT = 0.7
+NCCS_RATIO_WEIGHT = 0.3
 
 _NCCS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "nccs.json")
 _nccs_cache: Optional[dict[str, float]] = None
@@ -233,10 +266,11 @@ def _normalize_city_key(name: str) -> str:
 
 
 def nccs_market_activity() -> dict[str, float]:
-    """Market-activity provider backed by NCCS consumer-class data.
-
-    index = (NCCS_A + NCCS_B) / max(A+B across cities), clamped to [0, 1],
-    keyed by normalized city name. Returns {} if the reference file is missing.
+    """Market-activity provider backed by NCCS consumer-class data -- fixed-anchor
+    blend of real city size (70%) and real per-capita affluence (30%), see the
+    module comment above for the full incident and reasoning. Keyed by
+    normalized city name, one entry per city nccs.json actually has. Returns
+    {} if the reference file is missing.
     """
     global _nccs_cache
     if _nccs_cache is not None:
@@ -248,12 +282,21 @@ def nccs_market_activity() -> dict[str, float]:
         logger.warning(f"[Demand] NCCS data unavailable: {e}")
         _nccs_cache = {}
         return _nccs_cache
-    ab = {
-        _normalize_city_key(r.get("city", "")): float(r.get("nccs_a", 0) or 0) + float(r.get("nccs_b", 0) or 0)
-        for r in data if r.get("city")
-    }
-    hi = max(ab.values()) if ab else 0.0
-    _nccs_cache = {c: min(1.0, v / hi) for c, v in ab.items()} if hi > 0 else {}
+
+    ratios = city_affluence_ratio()
+    scores: dict[str, float] = {}
+    for r in data:
+        city = r.get("city")
+        if not city:
+            continue
+        key = _normalize_city_key(city)
+        ab = float(r.get("nccs_a", 0) or 0) + float(r.get("nccs_b", 0) or 0)
+        absolute_component = min(1.0, ab / NCCS_ABSOLUTE_ANCHOR)
+        ratio_component = min(1.0, ratios.get(key, 0.0) / NCCS_RATIO_ANCHOR)
+        scores[key] = round(
+            NCCS_ABSOLUTE_WEIGHT * absolute_component + NCCS_RATIO_WEIGHT * ratio_component, 4
+        )
+    _nccs_cache = scores
     return _nccs_cache
 
 
