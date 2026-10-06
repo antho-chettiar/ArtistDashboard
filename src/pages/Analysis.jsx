@@ -8,7 +8,6 @@ import PageHeader from '../components/ui/PageHeader'
 import ChartContainer from '../components/charts/ChartContainer'
 import BarChart from '../components/charts/BarChart'
 import LineChart from '../components/charts/LineChart'
-import { buildDecisionNotes } from '../utils/decisionNotes'
 import { useArtists } from '../hooks/useArtists'
 import { useConcerts } from '../hooks/useConcerts'
 import { useArtistScore } from '../hooks/useViberate'
@@ -437,7 +436,7 @@ function ArtistComparison({ artists, concerts }) {
 // queried here.
 const FEASIBILITY_CITY_NAMES = CITIES.map(c => c.name)
 
-function CityFeasibility({ artists, concerts }) {
+function CityFeasibility({ artists }) {
   const [selectedArtist, setArtist] = useState('')
   const [detailCity, setDetailCity] = useState('')
 
@@ -476,18 +475,6 @@ function CityFeasibility({ artists, concerts }) {
   const active = succeeded.find(r => r.city === detailCity) || succeeded[0] || null
 
   const chartData = succeeded.map(r => ({ name: r.city, value: Math.round(r.score * 1000) / 10 }))
-
-  // Caveats that sit next to the selected city's score -- see
-  // utils/decisionNotes.js for why (the weights are judgment calls, and the
-  // data-dependent caveats only appear when they apply to this artist + city).
-  const decisionNotes = active
-    ? buildDecisionNotes({
-      artistName: artist?.name,
-      city: active.city,
-      components: active.components,
-      artistConcerts: concerts.filter(c => c.artistId === selectedArtist),
-    })
-    : []
 
   return (
     <div>
@@ -650,27 +637,17 @@ function CityFeasibility({ artists, concerts }) {
             </div>
           )}
 
-          {/* Advisory notes: caveats for whoever makes the booking decision.
-              Gold-tinted like this page's other honest-disclosure panels, so
-              it reads as guidance, not as an error. */}
-          {active && decisionNotes.length > 0 && (
-            <div className="glass-card p-5 mt-4 animate-fade-up"
-              style={{ border: '1px solid color-mix(in srgb, var(--accent-gold) 25%, transparent)', background: 'color-mix(in srgb, var(--accent-gold) 6%, transparent)' }}>
-              <div className="flex items-center gap-2 mb-3">
-                <Info size={15} style={{ color: 'var(--accent-gold)' }} />
-                <h3 className="font-display font-semibold text-sm" style={{ color: 'var(--accent-gold)' }}>
-                  For the decision maker — use your discretion
-                </h3>
-              </div>
-              <ul className="space-y-2">
-                {decisionNotes.map(note => (
-                  <li key={note.id} className="text-xs leading-relaxed flex gap-2" style={{ color: 'var(--text-secondary)' }}>
-                    <span aria-hidden="true" style={{ color: 'var(--accent-gold)' }}>•</span>
-                    <span>{note.text}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+          {/* One short, always-on note for the booking decision maker: the
+              weights are judgment calls (not fitted to ticket sales) and the
+              concert log can be incomplete, so the score is guidance. */}
+          {active && (
+            <p className="flex items-start gap-2 mt-4 text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              <Info size={14} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--accent-gold)' }} />
+              <span>
+                <b style={{ color: 'var(--accent-gold)' }}>Use your discretion.</b>{' '}
+                This ranking is a decision aid, not a verdict: its weights are judgment calls and the concert log it relies on may be incomplete.
+              </span>
+            </p>
           )}
         </>
       )}
@@ -744,7 +721,7 @@ function Analysis() {
       </div>
 
       {activeTab === 'Artist Comparison' && <ArtistComparison artists={safeArtists} concerts={safeConcerts} />}
-      {activeTab === 'Where To Tour Next' && <CityFeasibility artists={safeArtists} concerts={safeConcerts} />}
+      {activeTab === 'Where To Tour Next' && <CityFeasibility artists={safeArtists} />}
     </div>
   )
 }
