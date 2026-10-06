@@ -12,6 +12,18 @@ const ANALYTICS_TIMEOUT_MS = Number(process.env.ANALYTICS_TIMEOUT_MS) || 12_000;
 const ANALYTICS_EXTENDED_TIMEOUT_MS = Math.max(ANALYTICS_TIMEOUT_MS, 30_000);
 
 /**
+ * Headers for every call to the analytics service. The service rejects any
+ * request without this shared secret (mad_analytics/utils/api_auth.py), because
+ * its routes can start scrapers and retraining and used to be open to anyone
+ * with the URL. Sent only when configured, so local development without the
+ * variable keeps working against a local, unauthenticated service.
+ */
+export const analyticsHeaders = (base: Record<string, string> = {}): Record<string, string> => {
+  const key = process.env.ANALYTICS_API_KEY?.trim();
+  return key ? { ...base, 'X-Analytics-Key': key } : base;
+};
+
+/**
  * Raised when the Python analytics service (ANALYTICS_URL) cannot produce a
  * result — it is unreachable, timed out, or returned a non-2xx status.
  * Controllers can detect this to return an explicit "analytics unavailable"
@@ -41,7 +53,7 @@ const postAnalytics = async <T = unknown>(path: string, body?: unknown, timeoutM
   try {
     const res = await fetch(`${ANALYTICS_URL}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: analyticsHeaders({ 'Content-Type': 'application/json' }),
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       signal: controller.signal,
     });
@@ -79,7 +91,7 @@ const getAnalytics = async <T = unknown>(path: string, timeoutMs = ANALYTICS_TIM
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${ANALYTICS_URL}${path}`, { method: 'GET', signal: controller.signal });
+    const res = await fetch(`${ANALYTICS_URL}${path}`, { method: 'GET', headers: analyticsHeaders(), signal: controller.signal });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new AnalyticsUnavailableError(

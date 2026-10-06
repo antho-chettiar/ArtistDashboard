@@ -37,6 +37,7 @@ if _env_path.exists():
                 if key and not os.environ.get(key):
                     os.environ[key] = value
 
+from .utils.api_auth import api_key_middleware, configured_key
 from .utils.schemas import (
     GrowthInput,
     DemandInput,
@@ -647,6 +648,16 @@ async def lifespan(app: FastAPI):
 # ── FastAPI App ────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="MAD Analytics", version="1.1.0", lifespan=lifespan)
+
+# Registered BEFORE CORS so CORS ends up outermost and still decorates 401s.
+# See utils/api_auth.py for why every route except /health needs the key.
+app.middleware("http")(api_key_middleware)
+if not configured_key():
+    logger.warning(
+        "[Server] ANALYTICS_API_KEY is not set: only /scheduler/* is locked; every "
+        "other route is publicly callable. Set the same value on this service and "
+        "on the Node backend to close it."
+    )
 
 app.add_middleware(
     CORSMiddleware,
