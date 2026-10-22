@@ -187,7 +187,7 @@ Content-Type: application/json
 }
 ```
 
-- Access token: 15 minutes validity (send in `Authorization: Bearer <token>`)
+- Access token: 1 hour validity (send in `Authorization: Bearer <token>`)
 - Refresh token: Set in HTTP-only cookie automatically
 
 ### Refresh Token

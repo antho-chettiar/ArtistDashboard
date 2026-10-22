@@ -107,7 +107,7 @@ DATABASE_URL=postgresql://user:pass@ep-xxx.neon.tech/neondb?sslmode=require
 REDIS_URL=redis://default:xxx@us1-xxx.upstash.io:6379
 JWT_SECRET=your-production-jwt-secret-min-32-chars
 JWT_REFRESH_SECRET=your-production-refresh-secret-min-32-chars
-JWT_EXPIRES_IN=15m
+JWT_EXPIRES_IN=1h
 JWT_REFRESH_EXPIRES_IN=7d
 PORT=3001
 CORS_ORIGIN=https://your-app.vercel.app

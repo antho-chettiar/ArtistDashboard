@@ -6,7 +6,11 @@ import { loginSchema } from '../validations/zodSchemas';
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '15m';
+// 1h, not 15m: the refresh cookie is SameSite=strict on the API's domain while
+// the app is served from another domain, so the browser never sends it and the
+// silent refresh in src/api/client.js cannot succeed. Until that is fixed, this
+// lifetime IS the session length -- 15m logged everyone out mid-use.
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
 
 if (!JWT_SECRET || !JWT_REFRESH_SECRET) {
