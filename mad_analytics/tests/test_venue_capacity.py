@@ -49,6 +49,11 @@ def test_resolve_estimates_when_no_source_exists():
             country="India",
             venue_type="club",
             artist_tier="rising",
+            # Web search is on by default. With a search key in backend/.env
+            # (which many other tests load as a side effect of importing the
+            # scrapers) this test made a live, billable lookup and got a web
+            # result instead of the heuristic it asserts on.
+            enable_web_search=False,
         )
     )
 
