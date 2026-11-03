@@ -254,6 +254,77 @@ describe('Analytics Controller', () => {
     });
   });
 
+  describe('getTrends (daily window)', () => {
+    // Regression: the window used to be measured back from TODAY, so once the
+    // newest reading was older than the window (data collected in batches, the
+    // last one weeks ago) the 1M chart went blank while 3M still showed data.
+    const day = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
+    const row = (iso: string, followers: number) => ({
+      metricDate: day(iso), followers, streams: 0, artistId: 'artist-1',
+    });
+
+    beforeEach(() => {
+      (redis.get as jest.Mock).mockResolvedValue(null);
+      (redis.setex as jest.Mock).mockResolvedValue('OK');
+    });
+
+    it('anchors the cutoff to the newest reading, not to today', async () => {
+      mockRequest.query = { platform: 'youtube', granularity: 'day', days: '30' };
+      const newest = day('2026-09-17');
+      (prisma.platformMetric.findFirst as jest.Mock).mockResolvedValue({ metricDate: newest });
+      (prisma.platformMetric.findMany as jest.Mock).mockResolvedValue([
+        row('2026-08-20', 100), row('2026-09-17', 110),
+      ]);
+
+      await analyticsController.getTrends(mockRequest as Request, mockResponse as Response);
+
+      const expectedCutoff = new Date(newest);
+      expectedCutoff.setDate(expectedCutoff.getDate() - 40); // 30 days + 10 buffer
+      expect(prisma.platformMetric.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ platform: 'YOUTUBE', metricDate: { gte: expectedCutoff } }),
+        })
+      );
+      const payload = (mockResponse.json as jest.Mock).mock.calls[0][0];
+      expect(payload.data.trends).toHaveLength(2);
+      expect(payload.data.trends[1].followers).toBe(110);
+    });
+
+    it('still returns points for a 30-day window when the newest reading is weeks old', async () => {
+      mockRequest.query = { platform: 'spotify', granularity: 'day', days: '30' };
+      (prisma.platformMetric.findFirst as jest.Mock).mockResolvedValue({ metricDate: day('2026-09-17') });
+      (prisma.platformMetric.findMany as jest.Mock).mockResolvedValue([row('2026-09-16', 5), row('2026-09-17', 6)]);
+
+      await analyticsController.getTrends(mockRequest as Request, mockResponse as Response);
+
+      const payload = (mockResponse.json as jest.Mock).mock.calls[0][0];
+      expect(payload.data.trends.length).toBeGreaterThan(0);
+    });
+
+    it('returns an empty list, without querying history, when a platform has no data at all', async () => {
+      mockRequest.query = { platform: 'instagram', granularity: 'day', days: '30' };
+      (prisma.platformMetric.findFirst as jest.Mock).mockResolvedValue(null);
+
+      await analyticsController.getTrends(mockRequest as Request, mockResponse as Response);
+
+      expect(prisma.platformMetric.findMany).not.toHaveBeenCalled();
+      const payload = (mockResponse.json as jest.Mock).mock.calls[0][0];
+      expect(payload.data.trends).toEqual([]);
+    });
+
+    it('scopes the newest-reading lookup to the requested artist', async () => {
+      mockRequest.query = { platform: 'facebook', granularity: 'day', days: '30', artistId: 'artist-9' };
+      (prisma.platformMetric.findFirst as jest.Mock).mockResolvedValue({ metricDate: day('2026-09-17') });
+      (prisma.platformMetric.findMany as jest.Mock).mockResolvedValue([]);
+
+      await analyticsController.getTrends(mockRequest as Request, mockResponse as Response);
+
+      expect(prisma.platformMetric.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { platform: 'FACEBOOK', artistId: 'artist-9' } })
+      );
+    });
+  });
+
   describe('getGenres', () => {
     it('should return genre popularity metrics', async () => {
       mockRequest.query = {};

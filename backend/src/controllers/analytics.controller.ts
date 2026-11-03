@@ -89,21 +89,40 @@ export const analyticsController = {
         // v2: bumped 2026-09 to invalidate cached trend windows computed
         // before a platform_metrics cleanup (accidental partial-day rows
         // from an unintended local scheduler run were removed).
-        const cacheKey = `trends:day:v3:${platformUpper}:${dayCount}:${artistId || 'all'}`;
+        // v4: bumped 2026-11 -- windows are now anchored to the newest reading,
+        // and the old key may hold an empty 1M window cached while data was stale.
+        const cacheKey = `trends:day:v4:${platformUpper}:${dayCount}:${artistId || 'all'}`;
         const cached = await redis.get(cacheKey);
         if (cached) {
           return res.status(200).json({ success: true, data: { trends: JSON.parse(cached) }, cached: true });
+        }
+
+        const baseWhere: any = { platform: platformUpper };
+        if (artistId) baseWhere.artistId = String(artistId);
+
+        // Anchor the window to this platform's NEWEST reading, not to today.
+        // Data is collected in batches (the last one was weeks ago), so a
+        // window measured back from today matched nothing once the newest
+        // reading was older than the window: the 1M chart went blank while 3M
+        // still showed data. "Last N days that have data" is what the chart
+        // promises, and the axis dates show where the data actually ends.
+        const newest = await prisma.platformMetric.findFirst({
+          where: baseWhere,
+          orderBy: { metricDate: 'desc' },
+          select: { metricDate: true },
+        });
+        if (!newest) {
+          return res.status(200).json({ success: true, data: { trends: [] } });
         }
 
         // + a few days of buffer so trimming an incomplete trailing day (below)
         // never eats into the requested range -- without this filter the query
         // pulled the platform's ENTIRE history on every chart load just to use
         // the last few points of it.
-        const dayCutoff = new Date();
+        const dayCutoff = new Date(newest.metricDate);
         dayCutoff.setDate(dayCutoff.getDate() - (dayCount + 10));
 
-        const where: any = { platform: platformUpper, metricDate: { gte: dayCutoff } };
-        if (artistId) where.artistId = String(artistId);
+        const where: any = { ...baseWhere, metricDate: { gte: dayCutoff } };
 
         const rows = await prisma.platformMetric.findMany({
           where,
