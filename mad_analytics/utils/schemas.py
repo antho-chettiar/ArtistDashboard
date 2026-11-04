@@ -382,6 +382,22 @@ class FeasibilityCriteria(BaseModel):
     city_audience_monthly_listeners_pct: Optional[float] = None
 
 
+class VenueSeats(BaseModel):
+    """One venue in a candidate city with its seat count, for event organisers
+    ("can this city's venues hold the crowd we expect?") -- replaces showing
+    the abstract 0-100 Venue Fit index on screen. `verified` mirrors the
+    Venues page's rule: True only when the capacity is in the curated
+    known-venues list; everything else is an estimate and is labelled as one."""
+    name: str
+    seats: int
+    verified: bool
+    concerts_in_log: int = 0          # shows by ANY artist in our concert log
+    played_by_artist: bool = False    # this artist has performed here before
+    # Where an estimate came from / its range, e.g. "Web research: sources list
+    # 7,500–9,000". None for verified venues and plain concert-log estimates.
+    note: Optional[str] = None
+
+
 class FeasibilityOutput(BaseModel):
     artist_id: str
     city: str
@@ -389,6 +405,10 @@ class FeasibilityOutput(BaseModel):
     rank: int                                   # 1 = most feasible among all compared cities
     total_cities_compared: int
     components: FeasibilityCriteria
+    # Largest venues first. Capped list; venues_total is the full count so the
+    # UI can say "showing 8 of 21".
+    venues: list[VenueSeats] = Field(default_factory=list)
+    venues_total: int = 0
     computed_at: str
 
 

@@ -209,6 +209,39 @@ KNOWN_VENUES: dict[tuple[str, str], int] = {
 }
 
 
+# Web-researched capacities (SerpAPI, 2026-11) -- BETTER than the type/tier
+# estimates in the concert log, but NOT verified: sources are listing pages, not
+# the venue's own confirmed figure, and some disagree. Kept separate from
+# KNOWN_VENUES on purpose so the UI never labels these "verified" (that label is
+# reserved for the curated list above). Format:
+#   (venue_name_lowercase, city_lowercase): (seats, note shown to the organiser)
+# Promote an entry into KNOWN_VENUES only once the venue itself confirms it.
+RESEARCHED_VENUES: dict[tuple[str, str], tuple[int, str]] = {
+    # Two sources: a "7,500-capacity" write-up and a booking site listing 9,000.
+    ("jio world garden", "mumbai"): (7500, "Web research: sources list 7,500–9,000"),
+    # Venue's own information sheet: halls seat 2,000. Hall seating only -- an
+    # outdoor/standing layout could hold more.
+    ("hitex", "hyderabad"): (2000, "Web research: HITEX info sheet lists halls seating 2,000"),
+    # Wedding-venue listings for this lawn: ~1,300 seated, 2,400–4,000 standing.
+    # The previous 25,000 estimate was far too high for a ground this size.
+    ("jvpd grounds", "mumbai"): (3000, "Web research: listings give 2,400–4,000 standing, ~1,300 seated"),
+}
+
+
+def lookup_researched_capacity(venue_name: str, city: str) -> Optional[tuple[int, str]]:
+    """(seats, note) from RESEARCHED_VENUES, or None. Same matching rule as
+    lookup_known_capacity (name contained either way, within the same city)."""
+    if not venue_name:
+        return None
+    venue_lower = venue_name.lower().strip()
+    city_lower = city.lower().strip()
+    for (known_venue, known_city), value in RESEARCHED_VENUES.items():
+        # len >= 4 guard: a tiny name must not match by being a substring of a key.
+        if known_city in city_lower and (known_venue in venue_lower or (len(venue_lower) >= 4 and venue_lower in known_venue)):
+            return value
+    return None
+
+
 # Every city that appears in the "# India" sections above (this file also
 # curates real venues in the USA, UK, Australia, etc. -- it's a general
 # touring-venue reference, not India-only). Used wherever the app needs to

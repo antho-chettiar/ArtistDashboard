@@ -55,6 +55,78 @@ function StatBox({ label, value, sub, color, delay = 0, badge }) {
   )
 }
 
+// Venue seat counts for the selected city -- replaces the old abstract 0-100
+// "Venue Fit" score. WHY: an event organiser deciding whether a city can take
+// an artist needs "which venues, how many seats", not an index. Capacities are
+// either verified (curated list) or an estimate (concert log / venue type);
+// the label on every row says which, so nobody books on a guess unknowingly.
+function VenueSeatsList({ city, venues, total, artistName }) {
+  const list = venues || []
+  const maxSeats = Math.max(1, ...list.map(v => v.seats))
+  return (
+    <div className="mt-5 pt-4" style={{ borderTop: '1px solid var(--border)' }}>
+      <div className="flex items-baseline justify-between mb-3 gap-3">
+        <div>
+          <h4 className="font-display font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+            Venues in {city} — seats
+          </h4>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            Largest first. Seat counts marked “est.” are estimates — confirm with the venue before booking.
+          </p>
+        </div>
+        {total > list.length && (
+          <span className="text-xs flex-shrink-0" style={{ color: 'var(--text-muted)' }}>
+            Showing {list.length} of {total}
+          </span>
+        )}
+      </div>
+
+      {list.length === 0 ? (
+        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          No venue with a known capacity is on record for {city} yet.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {list.map(v => (
+            <li key={v.name} className="rounded-xl px-3 py-2.5"
+              style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{v.name}</p>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {v.played_by_artist
+                      ? `${artistName || 'This artist'} has played here`
+                      : v.concerts_in_log > 0
+                        ? `${v.concerts_in_log} show${v.concerts_in_log > 1 ? 's' : ''} in our log`
+                        : 'No show in our log yet'}
+                    {v.note ? ` · ${v.note}` : ''}
+                  </p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="font-display font-bold text-base" style={{ color: 'var(--text-primary)' }}>
+                    {v.verified ? '' : '~'}{v.seats.toLocaleString('en-IN')} <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>seats</span>
+                  </p>
+                  <span className="text-xs font-semibold"
+                    style={{ color: v.verified ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+                    {v.verified ? 'verified' : 'est.'}
+                  </span>
+                </div>
+              </div>
+              <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ background: 'color-mix(in srgb, var(--text-muted) 15%, transparent)' }}>
+                <div className="h-full rounded-full"
+                  style={{
+                    width: `${Math.max(2, (v.seats / maxSeats) * 100)}%`,
+                    background: v.verified ? 'var(--accent-green)' : 'var(--text-muted)',
+                  }} />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 // ── ARTIST COMPARISON ──
 function ArtistComparison({ artists, concerts }) {
   // India only -- this roster is India-only right now, but a stray non-Indian
@@ -517,8 +589,9 @@ function CityFeasibility({ artists }) {
           </h3>
           <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
             TOPSIS-ranks candidate cities by real touring precedent, city affinity,
-            venue fit, artist power and engagement — see which city this artist is
-            actually most feasible to tour in next.
+            venue capacity, artist power and engagement — and shows the venues and
+            seat counts in each city — see which city this artist is actually most
+            feasible to tour in next.
           </p>
         </div>
       )}
@@ -572,8 +645,8 @@ function CityFeasibility({ artists }) {
             Artist Power and Engagement are the same for {artist?.name} in every city below —
             they measure the artist, not the city, so they mathematically can't move this
             ranking (see topsis.py). Only when comparing different artists against one fixed
-            city would they start to matter. City Affinity, Touring Precedent and Venue Fit are
-            what actually separates these cities here.
+            city would they start to matter. City Affinity, Touring Precedent and venue
+            capacity (listed per city below) are what actually separate these cities here.
           </p>
 
           <ChartContainer
@@ -627,13 +700,14 @@ function CityFeasibility({ artists }) {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <StatBox label="Artist Power" value={active.components.artist_power.toFixed(1)} sub="Popularity · constant here" color="var(--accent-indigo)" />
                 <StatBox label="Engagement" value={`${(active.components.engagement_score * 100).toFixed(2)}%`} sub="Fan-quality ratio · constant here" color="var(--accent-indigo)" />
                 <StatBox label="City Affinity" value={active.components.city_affinity.toFixed(1)} sub="NCCS market activity" color="var(--accent-indigo)" />
                 <StatBox label="Touring Precedent" value={active.components.touring_precedent_visits} sub={active.components.city_audience_monthly_listeners_pct != null ? `+digital audience boost (${active.components.city_audience_monthly_listeners_pct.toFixed(1)}% monthly listeners)` : 'Logged shows in this city'} color="var(--accent-gold)" />
-                <StatBox label="Venue Fit" value={active.components.venue_fit_index.toFixed(1)} sub="Avg. known venue capacity index" color="var(--accent-red)" />
               </div>
+
+              <VenueSeatsList city={active.city} venues={active.venues} total={active.venues_total} artistName={artist?.name} />
             </div>
           )}
 

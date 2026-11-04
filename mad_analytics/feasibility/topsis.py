@@ -70,10 +70,11 @@ only ever affects the TOPSIS ranking math itself.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
-from ..utils.schemas import FeasibilityInput, FeasibilityOutput, FeasibilityCriteria
+from ..utils.schemas import FeasibilityInput, FeasibilityOutput, FeasibilityCriteria, VenueSeats
 
 ARTIST_POWER_WEIGHT = 0.05
 ENGAGEMENT_WEIGHT = 0.05
@@ -188,6 +189,156 @@ def _city_venue_capacity_index(db_url: Optional[str] = None) -> dict[str, float]
     return {k: (v / hi) * 100.0 for k, v in averaged.items()} if hi > 0 else {}
 
 
+# Same physical place, different spellings in our concert log. Added after the
+# 2026-11 review found organisers would see e.g. "Shanmukhananda Hall" (3,500
+# estimate) AND "Shanmukhananda Auditorium" (2,500 verified) as two venues.
+# Keys/values are already-normalised names (see _venue_name_key). Deliberately
+# small and explicit: Jio World GARDEN (outdoor) and Jio World CONVENTION
+# CENTRE (indoor) are different venues with different capacities, so only the
+# genuinely identical spellings are listed here.
+_VENUE_ALIASES = {
+    "jio garden": "jio world garden",
+    "jio world centre": "jio world convention centre",
+    "jio world center": "jio world convention centre",
+}
+
+# A trailing word that only describes the kind of place ("... Hall" vs
+# "... Auditorium", "Aquatica" vs "Aquatica Ground") must not make two spellings
+# of one venue look different.
+_TRAILING_TYPE_WORDS = {"hall", "auditorium", "ground", "grounds", "estate", "lawn", "lawns"}
+
+
+def _venue_name_key(name: str) -> str:
+    """Canonical comparison key for a venue name.
+
+    'Dublin Square, Phoenix Marketcity Kurla' and 'Dublin Square' are one
+    place -- compare on the part before the first comma, letters/digits only,
+    then drop a trailing generic type word and apply the explicit alias list.
+    """
+    key = re.sub(r"[^a-z0-9]+", " ", (name or "").split(",")[0].lower()).strip()
+    words = key.split()
+    if len(words) >= 2 and words[-1] in _TRAILING_TYPE_WORDS:
+        key = " ".join(words[:-1])
+    return _VENUE_ALIASES.get(key, key)
+
+
+def _city_venue_seats(
+    city_key: str,
+    artist_id: str,
+    db_url: Optional[str] = None,
+    limit: int = 8,
+) -> tuple[list[VenueSeats], int]:
+    """Venues in `city_key` with seat counts, largest first -- the organiser-
+    facing replacement for showing the 0-100 Venue Fit index.
+
+    BUSINESS WHY: an organiser deciding whether a city can take an artist
+    needs "which venues, how many seats", not an abstract index. Sources, in
+    order of trust:
+      1. The curated known-venues list  -> verified=True.
+      1b. Web-researched figures (RESEARCHED_VENUES) -> verified=False, with a
+         note saying where the number and its range came from.
+      2. The capacity recorded on our own concert log for that venue (median
+         when several shows disagree) -> verified=False, i.e. an ESTIMATE.
+         Most of these are type/tier estimates from the original import, so
+         they are labelled as estimates rather than presented as facts.
+    Curated venues with no logged show yet are included too (a big stadium
+    nobody in our log has played is still a real option for an organiser).
+    Venues with no capacity at all are omitted -- never zero-filled.
+
+    Returns (top `limit` venues, total venue count for the city).
+    """
+    from sqlalchemy import text
+    from ..utils.db import get_engine
+    from ..demand.scorer import _normalize_city_key
+    from ..venue_capacity.known_venues import (
+        KNOWN_VENUES, KNOWN_INDIA_CITIES, lookup_known_capacity, lookup_researched_capacity,
+    )
+
+    engine = get_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                'SELECT city, "venueName", capacity, "artistId" FROM concerts '
+                'WHERE "venueName" IS NOT NULL AND "venueName" != \'\' '
+                'AND city IS NOT NULL AND city != \'\''
+            )).mappings().all()
+    finally:
+        if db_url is not None:
+            engine.dispose()
+
+    # key -> {"names": Counter-like dict, "caps": [...], "artists": set, "n": int, "city": raw city}
+    groups: dict[str, dict] = {}
+
+    def _find_group(key: str) -> Optional[str]:
+        if key in groups:
+            return key
+        for existing in groups:  # one name being a prefix of the other = same venue
+            if existing.startswith(key + " ") or key.startswith(existing + " "):
+                return existing
+        return None
+
+    for r in rows:
+        if _normalize_city_key(r["city"] or "") != city_key:
+            continue
+        name = (r["venueName"] or "").strip()
+        key = _venue_name_key(name)
+        if not key:
+            continue
+        gkey = _find_group(key)
+        if gkey is None:
+            gkey = key
+            groups[gkey] = {"names": {}, "caps": [], "artists": set(), "n": 0, "city": r["city"]}
+        g = groups[gkey]
+        g["names"][name] = g["names"].get(name, 0) + 1
+        if r["capacity"] and r["capacity"] > 0:
+            g["caps"].append(float(r["capacity"]))
+        g["artists"].add(r["artistId"])
+        g["n"] += 1
+
+    venues: list[VenueSeats] = []
+    for gkey, g in groups.items():
+        # Most-logged spelling; on a tie prefer the longer, more descriptive one.
+        display = max(g["names"], key=lambda n: (g["names"][n], len(n)))
+        known = next(
+            (c for c in (lookup_known_capacity(n, g["city"]) for n in g["names"]) if c),
+            None,
+        )
+        note = None
+        researched = None if known else next(
+            # Also try the canonical key so an aliased spelling ("Jio Garden, BKC")
+            # finds the researched entry filed under "Jio World Garden".
+            (r for r in (lookup_researched_capacity(n, g["city"]) for n in [*g["names"], gkey]) if r),
+            None,
+        )
+        if known:
+            seats, verified = known, True
+        elif researched:
+            seats, note = researched
+            verified = False
+        elif g["caps"]:
+            ordered = sorted(g["caps"])
+            seats, verified = int(round(ordered[len(ordered) // 2])), False
+        else:
+            continue
+        venues.append(VenueSeats(
+            name=display, seats=seats, verified=verified,
+            concerts_in_log=g["n"], played_by_artist=artist_id in g["artists"],
+            note=note,
+        ))
+
+    # Curated venues in this city that no logged concert has used yet.
+    for (kname, kcity), kcap in KNOWN_VENUES.items():
+        if kcity not in KNOWN_INDIA_CITIES or _normalize_city_key(kcity) != city_key:
+            continue
+        if _find_group(_venue_name_key(kname)) is not None:
+            continue
+        pretty = kname.title().replace("`S", "`s").replace("'S", "'s")  # "Roxanne`S" -> "Roxanne`s"
+        venues.append(VenueSeats(name=pretty, seats=kcap, verified=True))
+
+    venues.sort(key=lambda v: (-v.seats, v.name))
+    return venues[:limit], len(venues)
+
+
 def calculate(payload: FeasibilityInput, db_url: Optional[str] = None) -> FeasibilityOutput:
     """Rank payload.city's feasibility for payload.artist_id against every
     other NCCS-covered city, for this same artist. db_url=None (the live
@@ -240,9 +391,13 @@ def calculate(payload: FeasibilityInput, db_url: Optional[str] = None) -> Feasib
     rank = next(i for i, (c, _) in enumerate(ranked, start=1) if c == target_key)
     target_index = city_keys.index(target_key)
 
+    venues, venues_total = _city_venue_seats(target_key, payload.artist_id, db_url=db_url)
+
     return FeasibilityOutput(
         artist_id=payload.artist_id,
         city=payload.city,
+        venues=venues,
+        venues_total=venues_total,
         score=round(scores[target_index], 4),
         rank=rank,
         total_cities_compared=len(city_keys),

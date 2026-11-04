@@ -125,6 +125,131 @@ class TestCityVenueCapacityIndex:
             assert topsis._city_venue_capacity_index(db_url=db_url) == {}
 
 
+class TestCityVenueSeats:
+    """Organiser-facing venue seat list that replaces the on-screen Venue Fit
+    index (the index still feeds the ranking maths; see topsis.py)."""
+
+    @staticmethod
+    def _add_venue_concerts(db_url, rows):
+        """rows: (id, artist_id, city, venue, capacity)"""
+        engine = create_engine(db_url)
+        with engine.begin() as conn:
+            for cid, aid, city, venue, cap in rows:
+                conn.execute(text(
+                    'INSERT INTO concerts (id, "artistId", city, "concertDate", "venueName", capacity) '
+                    'VALUES (:id, :aid, :city, :d, :v, :cap)'
+                ), {"id": cid, "aid": aid, "city": city, "d": "2024-01-01", "v": venue, "cap": cap})
+        engine.dispose()
+
+    def _seats(self, rows, city_key="mumbai", artist="a1"):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/feas.db"
+            _seed_concerts_with_capacity(db_url, [])
+            self._add_venue_concerts(db_url, rows)
+            return topsis._city_venue_seats(city_key, artist, db_url=db_url)
+
+    def test_curated_venue_is_verified_and_logged_one_is_an_estimate(self):
+        venues, total = self._seats([
+            ("c1", "a1", "Mumbai", "DY Patil Stadium", 1),           # curated -> 55,000 wins over the logged value
+            ("c2", "a2", "Mumbai", "Some Garden Lawn", 3000),        # not curated -> estimate
+        ])
+        by_name = {v.name: v for v in venues}
+        assert by_name["DY Patil Stadium"].seats == 55000 and by_name["DY Patil Stadium"].verified is True
+        assert by_name["Some Garden Lawn"].seats == 3000 and by_name["Some Garden Lawn"].verified is False
+        assert [v.name for v in venues][0] == "DY Patil Stadium"  # largest first
+        assert total >= 2
+
+    def test_same_venue_spelled_two_ways_is_one_row(self):
+        venues, _ = self._seats([
+            ("c1", "a1", "Mumbai", "Dublin Square", 5000),
+            ("c2", "a2", "Mumbai", "Dublin Square, Phoenix Marketcity Kurla", 5000),
+        ])
+        assert sum(1 for v in venues if v.name.startswith("Dublin Square")) == 1
+        assert next(v for v in venues if v.name.startswith("Dublin Square")).concerts_in_log == 2
+
+    def test_hall_vs_auditorium_and_garden_aliases_merge_and_verified_wins(self):
+        """Regression for the 2026-11 duplicate review: same physical venue under
+        different names must be one row, and the curated (verified) capacity must
+        beat the unverified logged one."""
+        venues, _ = self._seats([
+            ("c1", "a1", "Mumbai", "Shanmukhananda Hall", 3500),
+            ("c2", "a2", "Mumbai", "Shanmukhananda Hall", 3500),
+            ("c3", "a3", "Mumbai", "Shanmukhananda Auditorium", 2500),
+            ("c4", "a1", "Mumbai", "Jio Garden, BKC", 5000),
+            ("c5", "a2", "Mumbai", "Jio World Garden", 5000),
+            ("c6", "a3", "Mumbai", "Jio World Centre", 3500),
+            ("c7", "a4", "Mumbai", "Jio World Convention Centre", 3500),
+        ])
+        names = [v.name for v in venues]
+        shan = [v for v in venues if v.name.startswith("Shanmukhananda")]
+        assert len(shan) == 1 and shan[0].seats == 2500 and shan[0].verified is True
+        assert sum(1 for n in names if n.startswith("Jio")) == 2  # one Garden + one Convention Centre
+        garden = next(v for v in venues if "Garden" in v.name)
+        assert garden.concerts_in_log == 2
+
+    def test_researched_capacity_overrides_log_estimate_but_is_never_verified(self):
+        venues, _ = self._seats([
+            ("c1", "a1", "Mumbai", "JVPD Grounds, Juhu", 25000),   # stale type-based estimate
+            ("c2", "a2", "Mumbai", "Jio Garden, BKC", 5000),
+        ])
+        jvpd = next(v for v in venues if v.name.startswith("JVPD"))
+        assert jvpd.seats == 3000 and jvpd.verified is False and "Web research" in jvpd.note
+        jio = next(v for v in venues if "Jio" in v.name)
+        assert jio.seats == 7500 and jio.verified is False
+
+    def test_curated_verified_capacity_beats_researched(self):
+        from mad_analytics.venue_capacity import known_venues
+        assert known_venues.lookup_researched_capacity("DY Patil Stadium", "Mumbai") is None
+        venues, _ = self._seats([("c1", "a1", "Mumbai", "DY Patil Stadium", 1)])
+        dy = next(v for v in venues if v.name == "DY Patil Stadium")
+        assert dy.verified is True and dy.note is None
+
+    def test_garden_and_convention_centre_stay_separate_venues(self):
+        venues, _ = self._seats([
+            ("c1", "a1", "Mumbai", "Jio World Garden", 5000),
+            ("c2", "a2", "Mumbai", "Jio World Convention Centre", 3500),
+        ])
+        # Garden uses its researched 7,500; Convention Centre keeps its logged 3,500.
+        assert {v.seats for v in venues if v.name.startswith("Jio")} == {7500, 3500}
+
+    def test_trailing_ground_and_estate_words_merge_spellings(self):
+        venues, _ = self._seats([
+            ("c1", "a1", "Mumbai", "Aquatica", 5000),
+            ("c2", "a2", "Mumbai", "Aquatica Ground", 5000),
+            ("c3", "a1", "Mumbai", "Mayfield Estate", 5000),
+            ("c4", "a2", "Mumbai", "Mayfield Eva Garden", 5000),
+        ])
+        assert sum(1 for v in venues if v.name.startswith("Aquatica")) == 1
+        assert sum(1 for v in venues if v.name.startswith("Mayfield")) == 1
+
+    def test_conflicting_logged_capacities_use_the_median(self):
+        venues, _ = self._seats([
+            ("c1", "a1", "Mumbai", "Mystery Arena Ground", 5000),
+            ("c2", "a2", "Mumbai", "Mystery Arena Ground", 40000),
+            ("c3", "a3", "Mumbai", "Mystery Arena Ground", 5000),
+        ])
+        assert next(v for v in venues if v.name == "Mystery Arena Ground").seats == 5000
+
+    def test_played_by_artist_flag_and_other_cities_excluded(self):
+        venues, _ = self._seats([
+            ("c1", "a1", "Mumbai", "Club Alpha", 800),
+            ("c2", "a2", "Mumbai", "Club Beta", 900),
+            ("c3", "a1", "Pune", "Club Gamma", 700),
+        ])
+        by_name = {v.name: v for v in venues}
+        assert by_name["Club Alpha"].played_by_artist is True
+        assert by_name["Club Beta"].played_by_artist is False
+        assert "Club Gamma" not in by_name
+
+    def test_venue_without_any_capacity_is_omitted_not_zero_filled(self):
+        venues, _ = self._seats([("c1", "a1", "Mumbai", "No Capacity Hall", 0)])
+        assert all(v.name != "No Capacity Hall" for v in venues)
+
+    def test_curated_venue_with_no_logged_show_still_appears(self):
+        venues, _ = self._seats([], city_key="kolkata")
+        assert any(v.name.lower() == "eden gardens" and v.verified and v.concerts_in_log == 0 for v in venues)
+
+
 class TestFeasibilityCalculateIntegration:
     """calculate() orchestration. Popularity is monkeypatched -- it's a live
     Google-Trends-backed lookup already covered by TestArtistPopularity, out

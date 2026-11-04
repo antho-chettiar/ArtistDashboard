@@ -136,9 +136,21 @@ def search_venue_capacity(
     if _is_rate_limited():
         return []
 
-    # Build search query
-    query = f'"{venue_name}" {city} capacity seats'
+    data = fetch_serp_json(build_query(venue_name, city), key)
+    if data is None:
+        return []
+    return parse_serp_response(data, venue_name)
 
+
+def build_query(venue_name: str, city: str) -> str:
+    return f'"{venue_name}" {city} capacity seats'
+
+
+def fetch_serp_json(query: str, key: str) -> Optional[dict]:
+    """One SerpAPI call = one search credit. Split out from parsing so callers
+    (e.g. the one-off backfill script) can cache the raw response on disk and
+    re-run parse_serp_response() as often as needed WITHOUT spending another
+    credit when the extraction rules are tuned."""
     try:
         import urllib.request
         import urllib.parse
@@ -153,20 +165,31 @@ def search_venue_capacity(
         url = f"https://serpapi.com/search.json?{params}"
 
         req = urllib.request.Request(url, headers={"User-Agent": "MAD-Analytics/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as response:
+        # 45s, not 15s: SerpAPI bills a search even when OUR client gives up
+        # waiting (2026-11: three 15s timeouts were all charged), so a short
+        # timeout wastes credits instead of saving them.
+        with urllib.request.urlopen(req, timeout=45) as response:
             data = json.loads(response.read().decode("utf-8"))
 
         _record_search()
+        return data
 
     except Exception as e:
         logger.warning(f"SerpAPI call failed: {e}")
-        return []
+        return None
+
+
+def parse_serp_response(data: dict, venue_name: str) -> list[VenueCapacityCandidate]:
+    """Pure parsing of a SerpAPI response -- no network, no credits."""
+    import json
 
     # Extract from Knowledge Graph (most accurate)
     candidates: list[VenueCapacityCandidate] = []
 
     knowledge_graph = data.get("knowledge_graph", {})
-    if knowledge_graph:
+    # Only trust the panel if it is actually about THIS venue (Google can show
+    # a neighbouring/similarly-named place).
+    if knowledge_graph and _mentions_venue(str(knowledge_graph.get("title", "")), venue_name):
         # SerpAPI often returns capacity directly in knowledge graph
         kg_text = json.dumps(knowledge_graph)
         kg_capacities = _extract_capacities_from_text(kg_text)
@@ -209,6 +232,12 @@ def search_venue_capacity(
         link = item.get("link", "")
         combined_text = f"{title} {snippet}"
 
+        # A snippet that never names this venue (e.g. a banquet-hall listing for
+        # a different "GMR ..." / "... Convention Centre") must not supply a
+        # seat count -- a wrong number is worse than no number for organisers.
+        if not _mentions_venue(f"{title} {snippet} {link}", venue_name):
+            continue
+
         capacities = _extract_capacities_from_text(combined_text)
 
         for capacity in capacities:
@@ -245,6 +274,26 @@ def search_venue_capacity(
     filtered = _filter_by_venue_context(list(seen.values()), venue_name)
 
     return sorted(filtered, key=lambda c: c.confidence, reverse=True)[:3]
+
+
+_NAME_STOPWORDS = {
+    "the", "of", "and", "in", "at", "a", "centre", "center", "complex", "park",
+    "club", "mall", "lawns", "lawn", "ground", "grounds", "hall", "stadium",
+}
+
+
+def _name_tokens(value: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]+", value.lower()) if len(t) >= 2 and t not in _NAME_STOPWORDS}
+
+
+def _mentions_venue(text: str, venue_name: str) -> bool:
+    """True when at least half of the venue name's distinctive words appear in
+    `text` (a title/snippet/URL). Pure string check -- costs no credits."""
+    needed = _name_tokens(venue_name)
+    if not needed:
+        return True
+    found = needed & _name_tokens(text)
+    return len(found) * 2 >= len(needed)
 
 
 def _filter_by_venue_context(
