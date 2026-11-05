@@ -250,6 +250,58 @@ class TestCityVenueSeats:
         assert any(v.name.lower() == "eden gardens" and v.verified and v.concerts_in_log == 0 for v in venues)
 
 
+class TestArtistVenueSeats:
+    """The Venue Fit score translated into approximate seats FOR THE SELECTED
+    ARTIST (the old score was one number per city, identical for every artist)."""
+
+    @staticmethod
+    def _city(*seats_and_shows):
+        from mad_analytics.utils.schemas import VenueSeats
+        return [VenueSeats(name=f"V{i}", seats=s, verified=False, concerts_in_log=n)
+                for i, (s, n) in enumerate(seats_and_shows)]
+
+    def test_uses_the_artists_own_shows_in_that_city(self):
+        shows = [("mumbai", 3000), ("mumbai", 5000), ("mumbai", 4000), ("delhi", 60000)]
+        seats, basis = topsis._artist_venue_seats(shows, "mumbai", self._city((55000, 1)))
+        assert (seats, basis) == (4000, "played_here")  # median of Mumbai shows only; Delhi stadium ignored
+
+    def test_falls_back_to_artists_typical_size_when_never_played_the_city(self):
+        shows = [("delhi", 2000), ("pune", 3000), ("chennai", 4000)]
+        seats, basis = topsis._artist_venue_seats(shows, "mumbai", self._city((55000, 1)))
+        assert (seats, basis) == (3000, "artist_typical")
+
+    def test_artist_habit_is_capped_by_the_citys_largest_venue(self):
+        shows = [("delhi", 60000), ("kolkata", 66000)]
+        seats, basis = topsis._artist_venue_seats(shows, "chennai", self._city((8000, 1), (25000, 1)))
+        assert (seats, basis) == (25000, "artist_typical_capped")
+
+    def test_artist_with_no_shows_gets_the_city_average_flagged_as_such(self):
+        seats, basis = topsis._artist_venue_seats([], "mumbai", self._city((10000, 1), (2000, 3)))
+        assert basis == "city_typical" and seats == 4000  # (10000*1 + 2000*3) / 4 = 4000
+
+    def test_nothing_to_go_on_returns_none(self):
+        assert topsis._artist_venue_seats([], "mumbai", []) == (None, None)
+
+    def test_rounding_is_approximate(self):
+        assert topsis._round_seats(4049) == 4000
+        assert topsis._round_seats(12400) == 12500
+
+    def test_two_artists_get_different_seats_for_the_same_city(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_url = f"sqlite+pysqlite:///{tmpdir}/feas.db"
+            _seed_concerts_with_capacity(db_url, [
+                ("c1", "club-act", "Mumbai", "2024-01-01", 800),
+                ("c2", "club-act", "Mumbai", "2024-02-01", 1000),
+                ("c3", "stadium-act", "Mumbai", "2024-01-01", 40000),
+            ])
+            club = topsis._artist_show_seats("club-act", db_url=db_url)
+            stadium = topsis._artist_show_seats("stadium-act", db_url=db_url)
+            assert [s for _, s in club] == [800, 1000]
+            assert [s for _, s in stadium] == [40000]
+            assert (topsis._artist_venue_seats(club, "mumbai", [])[0]
+                    != topsis._artist_venue_seats(stadium, "mumbai", [])[0])
+
+
 class TestFeasibilityCalculateIntegration:
     """calculate() orchestration. Popularity is monkeypatched -- it's a live
     Google-Trends-backed lookup already covered by TestArtistPopularity, out

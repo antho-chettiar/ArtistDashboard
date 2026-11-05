@@ -222,14 +222,14 @@ def _venue_name_key(name: str) -> str:
     return _VENUE_ALIASES.get(key, key)
 
 
-def _city_venue_seats(
+def _resolve_city_venues(
     city_key: str,
     artist_id: str,
     db_url: Optional[str] = None,
-    limit: int = 8,
-) -> tuple[list[VenueSeats], int]:
-    """Venues in `city_key` with seat counts, largest first -- the organiser-
-    facing replacement for showing the 0-100 Venue Fit index.
+) -> list[VenueSeats]:
+    """ALL venues in `city_key` with resolved seat counts, largest first. Feeds
+    _typical_venue_seats() (the organiser-facing replacement for the 0-100
+    Venue Fit index) and the capped _city_venue_seats() list.
 
     BUSINESS WHY: an organiser deciding whether a city can take an artist
     needs "which venues, how many seats", not an abstract index. Sources, in
@@ -245,7 +245,6 @@ def _city_venue_seats(
     nobody in our log has played is still a real option for an organiser).
     Venues with no capacity at all are omitted -- never zero-filled.
 
-    Returns (top `limit` venues, total venue count for the city).
     """
     from sqlalchemy import text
     from ..utils.db import get_engine
@@ -336,7 +335,125 @@ def _city_venue_seats(
         venues.append(VenueSeats(name=pretty, seats=kcap, verified=True))
 
     venues.sort(key=lambda v: (-v.seats, v.name))
+    return venues
+
+
+def _city_venue_seats(
+    city_key: str,
+    artist_id: str,
+    db_url: Optional[str] = None,
+    limit: int = 8,
+) -> tuple[list[VenueSeats], int]:
+    """(top `limit` venues, total venue count) for the city."""
+    venues = _resolve_city_venues(city_key, artist_id, db_url=db_url)
     return venues[:limit], len(venues)
+
+
+def _typical_venue_seats(venues: list[VenueSeats]) -> Optional[int]:
+    """The Venue Fit score, translated into approximate SEATS.
+
+    BUSINESS WHY: the old 0-100 Venue Fit score meant "this city's average
+    logged-show venue size, relative to the biggest city" -- meaningless to an
+    event organiser. This is the same quantity in real units: the average seat
+    capacity of the venues shows in this city were actually held at, weighted by
+    how many shows each venue hosted (so a venue used six times counts six
+    times, exactly as the score did). Uses the resolved capacities (verified /
+    web-researched / log estimate), and ignores curated venues no logged show
+    has used -- they say nothing about what shows here typically need.
+
+    Rounded because it is an approximation: nearest 100, or nearest 500 from
+    10,000 up. None when the city has no logged show with a known capacity.
+    """
+    weighted = [(v.seats, v.concerts_in_log) for v in venues if v.concerts_in_log > 0 and v.seats > 0]
+    shows = sum(n for _, n in weighted)
+    if shows == 0:
+        return None
+    return _round_seats(sum(s * n for s, n in weighted) / shows)
+
+
+def _round_seats(value: float) -> int:
+    """Approximate on purpose: nearest 100, or nearest 500 from 10,000 up."""
+    step = 500 if value >= 10_000 else 100
+    return int(round(value / step) * step)
+
+
+def _artist_show_seats(artist_id: str, db_url: Optional[str] = None) -> list[tuple[str, int]]:
+    """[(city_key, seats)] -- one entry per logged show of THIS artist that has a
+    known capacity. Capacity precedence matches _resolve_city_venues: curated
+    verified list, then web-researched, then the figure on the concert row."""
+    from sqlalchemy import text
+    from ..utils.db import get_engine
+    from ..demand.scorer import _normalize_city_key
+    from ..venue_capacity.known_venues import lookup_known_capacity, lookup_researched_capacity
+
+    engine = get_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    'SELECT city, "venueName", capacity FROM concerts '
+                    'WHERE "artistId" = :aid AND city IS NOT NULL AND city != \'\''
+                ),
+                {"aid": artist_id},
+            ).mappings().all()
+    finally:
+        if db_url is not None:
+            engine.dispose()
+
+    shows: list[tuple[str, int]] = []
+    for r in rows:
+        name, city = (r["venueName"] or "").strip(), r["city"]
+        seats = None
+        if name:
+            seats = lookup_known_capacity(name, city)
+            if not seats:
+                researched = lookup_researched_capacity(name, city)
+                seats = researched[0] if researched else None
+        if not seats and r["capacity"] and r["capacity"] > 0:
+            seats = int(r["capacity"])
+        if seats:
+            shows.append((_normalize_city_key(city), seats))
+    return shows
+
+
+def _median(values: list[int]) -> float:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    return float(ordered[mid]) if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def _artist_venue_seats(
+    artist_shows: list[tuple[str, int]],
+    city_key: str,
+    city_venues: list[VenueSeats],
+) -> tuple[Optional[int], Optional[str]]:
+    """Approximate seats for THIS ARTIST in THIS CITY, plus how it was reached.
+
+    BUSINESS WHY: the old Venue Fit score was one number per city for every
+    artist, so picking a different artist never changed it. An organiser asks
+    "what size of venue does *this artist* need in *this city*?". Answer, from
+    best to weakest evidence (median, so one stadium show doesn't skew it):
+      played_here           the artist's own past shows in this city
+      artist_typical        no show here -> the artist's typical venue size
+                            across all their logged shows
+      artist_typical_capped ...but never more than the largest venue we know in
+                            this city (a 40,000-seat habit means nothing in a
+                            city whose biggest venue holds 5,000)
+      city_typical          the artist has no logged shows at all -> the city's
+                            average venue size, flagged as such
+    (None, None) when there is nothing to base a figure on.
+    """
+    here = [s for ck, s in artist_shows if ck == city_key]
+    if here:
+        return _round_seats(_median(here)), "played_here"
+    if artist_shows:
+        base = _median([s for _, s in artist_shows])
+        city_max = max((v.seats for v in city_venues), default=None)
+        if city_max and base > city_max:
+            return _round_seats(city_max), "artist_typical_capped"
+        return _round_seats(base), "artist_typical"
+    city_typical = _typical_venue_seats(city_venues)
+    return (city_typical, "city_typical") if city_typical else (None, None)
 
 
 def calculate(payload: FeasibilityInput, db_url: Optional[str] = None) -> FeasibilityOutput:
@@ -391,7 +508,11 @@ def calculate(payload: FeasibilityInput, db_url: Optional[str] = None) -> Feasib
     rank = next(i for i, (c, _) in enumerate(ranked, start=1) if c == target_key)
     target_index = city_keys.index(target_key)
 
-    venues, venues_total = _city_venue_seats(target_key, payload.artist_id, db_url=db_url)
+    all_venues = _resolve_city_venues(target_key, payload.artist_id, db_url=db_url)
+    venues, venues_total = all_venues[:8], len(all_venues)
+    seats, seats_basis = _artist_venue_seats(
+        _artist_show_seats(payload.artist_id, db_url=db_url), target_key, all_venues
+    )
 
     return FeasibilityOutput(
         artist_id=payload.artist_id,
@@ -407,6 +528,8 @@ def calculate(payload: FeasibilityInput, db_url: Optional[str] = None) -> Feasib
             city_affinity=candidate_affinity[target_key],
             touring_precedent_visits=visit_counts.get(target_key, 0),
             venue_fit_index=venue_index.get(target_key, 0.0),
+            venue_fit_seats=seats,
+            venue_fit_seats_basis=seats_basis,
             city_audience_monthly_listeners_pct=audience_index.get(target_key, {}).get(METRIC_MONTHLY_LISTENERS_PCT),
         ),
         computed_at=datetime.now(timezone.utc).isoformat(),

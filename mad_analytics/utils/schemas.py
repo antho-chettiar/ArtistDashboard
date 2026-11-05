@@ -372,7 +372,14 @@ class FeasibilityCriteria(BaseModel):
     engagement_score: float      # mean of available engagement ratios -- see topsis.py's WHY
     city_affinity: float         # 0-100
     touring_precedent_visits: int
-    venue_fit_index: float       # 0-100
+    venue_fit_index: float       # 0-100 (still drives the ranking maths; no longer shown on screen)
+    # The same Venue Fit quantity in real units for organisers: approximate
+    # average seats of the venues this city's logged shows used. None = no
+    # logged show with a known capacity in this city. See _typical_venue_seats().
+    venue_fit_seats: Optional[int] = None
+    # How venue_fit_seats was reached: played_here | artist_typical |
+    # artist_typical_capped | city_typical (see _artist_venue_seats()).
+    venue_fit_seats_basis: Optional[str] = None
     # Not one of the five TOPSIS criteria (it never gets its own weight) --
     # surfaced here purely for transparency, since it silently boosts the
     # touring_precedent_visits value actually fed into the TOPSIS matrix (see
